@@ -1,0 +1,18 @@
+# Aisy harness — local/VPS deployment (ADR-0035).
+# Single-user by design. Secrets come from .env (git-ignored), never the image.
+services:
+  aisy:
+    build: .
+    image: aisy:local
+    env_file: .env            # AISY_PROVIDER_*_KEY, AISY_TELEGRAM_BOT_TOKEN, AISY_TELEGRAM_CHAT_ID, …
+    volumes:
+      - ./data:/data          # memory tree (markdown + SQLite), git-backed
+      # The harness orchestrates sandboxed tool containers on the host Docker
+      # engine. Mounting the socket grants host-root-equivalent power — only do
+      # this on a host you fully trust, never expose it to untrusted input
+      # (ADR-0012 / ADR-0035). gVisor (runsc) runtime is preferred where present.
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    # default-deny posture: no published ports; reachable only via the Telegram
+    # gateway it dials out to (spec 02). Add a reverse proxy only if you add an
+    # IDE/web front-end (v0.3).
