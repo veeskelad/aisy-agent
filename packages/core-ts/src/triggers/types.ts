@@ -35,6 +35,8 @@ export interface TriggerSpec {
   budget: TriggerBudget
   expiresAt?: string
   enabled: boolean
+  /** Due-slot keys already fired — persisted for crash-safe idempotency (AC-14-14). */
+  firedSlots?: string[]
 }
 
 export type Phase1Outcome = 'due' | 'condition-met' | 'no-change' | 'budget-paused' | 'skipped'
