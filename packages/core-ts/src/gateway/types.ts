@@ -46,6 +46,22 @@ export type ApprovalResult =
   | { decision: 'rejected'; reason: string }
 
 /**
+ * Read-only projection of an issued card, for the transport adapter to render
+ * the approval message and build its callback_data. Exposes the minted nonce
+ * and bound action-hash to in-process trusted code only; it confers no
+ * confirmation power (handleCardTap remains the sole confirmer).
+ */
+export interface IssuedCardView {
+  cardId: CardId
+  actionId: string
+  actionHash: string
+  nonce: string                // the single-use nonce minted at issue
+  requiresStepUp: boolean
+  redVariant: boolean          // Tier-3 renders as the distinct red card
+  expiresAt: number            // epoch ms; informational countdown / liveness
+}
+
+/**
  * Opaque raw Telegram update. The Gateway is the sole consumer; downstream
  * components never see this type.
  */
@@ -197,6 +213,14 @@ export interface Gateway {
    * Mint an approval card bound to exactly one pending action.
    */
   issueCard(action: PendingAction): Promise<CardId>
+
+  /**
+   * Read-only view of an issued, not-yet-resolved card — the transport adapter
+   * uses it to render the approval message and embed the nonce in callback_data.
+   * Returns null for an unknown card or one already confirmed/cleared. Never
+   * confirms anything; handleCardTap stays the sole confirmer.
+   */
+  getIssuedCard(cardId: CardId): IssuedCardView | null
 
   /**
    * The ONLY confirmer of a pending action. Deterministic; never a model call.

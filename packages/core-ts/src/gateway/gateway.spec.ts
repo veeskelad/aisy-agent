@@ -160,6 +160,44 @@ it('AC-02-6: streamReply throws OutboundBlocked when Safety reports outbound loc
 })
 
 // ---------------------------------------------------------------------------
+// getIssuedCard: read-only projection for the transport adapter (ADR-0046)
+// ---------------------------------------------------------------------------
+
+it('getIssuedCard returns the minted nonce and bound hash for an issued card', async () => {
+  const gw = makeGateway(makeDeps())
+  const action = makePendingAction({ tier: 3, requiresStepUp: true })
+  const cardId = await gw.issueCard(action)
+
+  const view = gw.getIssuedCard(cardId)
+  expect(view).not.toBeNull()
+  expect(view?.cardId).toBe(cardId)
+  expect(view?.nonce).toBe(MINTED_NONCE)
+  expect(view?.actionHash).toBe(action.actionHash)
+  expect(view?.actionId).toBe(action.actionId)
+  expect(view?.requiresStepUp).toBe(true)
+  expect(view?.redVariant).toBe(true) // tier 3
+  expect(typeof view?.expiresAt).toBe('number')
+})
+
+it('getIssuedCard returns null for an unknown card', () => {
+  const gw = makeGateway(makeDeps())
+  expect(gw.getIssuedCard('never-issued')).toBeNull()
+})
+
+it('getIssuedCard returns null once the card is confirmed and cleared', async () => {
+  const gw = makeGateway(makeDeps())
+  const action = makePendingAction()
+  const cardId = await gw.issueCard(action)
+  await gw.handleCardTap({
+    cardId,
+    nonce: MINTED_NONCE,
+    presentedActionHash: action.actionHash,
+    chatId: 42,
+  })
+  expect(gw.getIssuedCard(cardId)).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
 // AC-02-7: Valid first card tap → confirmed, nonce consumed
 // ---------------------------------------------------------------------------
 

@@ -14,6 +14,7 @@ export type {
   CardId,
   CardTap,
   ApprovalResult,
+  IssuedCardView,
   Provenance,
   Channel,
 } from './gateway/index.js'

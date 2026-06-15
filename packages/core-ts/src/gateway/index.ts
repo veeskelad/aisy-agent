@@ -9,6 +9,7 @@ import type {
   CardId,
   CardTap,
   ApprovalResult,
+  IssuedCardView,
   Channel,
   Provenance,
 } from './types.js'
@@ -22,6 +23,7 @@ export type {
   CardId,
   CardTap,
   ApprovalResult,
+  IssuedCardView,
   Provenance,
   Channel,
 } from './types.js'
@@ -309,6 +311,23 @@ export function makeGateway(deps: GatewayDeps): Gateway {
         expiresAt: now() + (deps.cardTtlMs ?? 15 * 60_000),
       })
       return cardId
+    },
+
+    getIssuedCard(cardId: CardId): IssuedCardView | null {
+      // Read-only projection for the transport adapter. A confirmed card is
+      // deleted from the Map, so this returns null once resolved — exposing the
+      // nonce here grants no confirmation power (handleCardTap still gates).
+      const c = cards.get(cardId)
+      if (!c) return null
+      return {
+        cardId: c.cardId,
+        actionId: c.actionId,
+        actionHash: c.actionHash,
+        nonce: c.mintedNonce,
+        requiresStepUp: c.requiresStepUp,
+        redVariant: c.redVariant,
+        expiresAt: c.expiresAt,
+      }
     },
 
     async handleCardTap(tap: CardTap): Promise<ApprovalResult> {
