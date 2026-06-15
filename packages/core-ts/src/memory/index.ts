@@ -131,6 +131,20 @@ interface DnrRow {
 /** The read/ingestion filter (§5.1 step 1) — applied in the SQL itself. */
 const LIVE_FILTER = `invalid_at IS NULL AND fact_key NOT IN (SELECT fact_key FROM do_not_remember)`
 
+/**
+ * Spec §3 "Events emitted" — the Observability binding vocabulary. Each commit
+ * outcome maps to its declared event name (a fact mutation that did not
+ * supersede/block is `memory.committed`; NOT_FOUND is still a committed-class
+ * no-op outcome). The spec has no `memory.commit`/`memory.forget` event.
+ */
+const EVENT_BY_STATUS: Record<CommitResult['status'], string> = {
+  COMMITTED: 'memory.committed',
+  SUPERSEDED: 'memory.superseded',
+  BLOCKED: 'memory.guard_blocked',
+  ROUTED_TO_REVIEW: 'memory.routed_to_review',
+  NOT_FOUND: 'memory.committed',
+}
+
 // ---------------------------------------------------------------------------
 // makeMemoryStore — the single indexer choke point (§5.1, ADR-0030)
 // ---------------------------------------------------------------------------
@@ -385,7 +399,9 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
 
         // Fail-closed journal binding: if the Observability emit fails, the
         // whole commit rolls back and no searchable fact persists (AC-03-15).
-        await deps.emitEvent('memory.commit', { op: op.op, status: result.status })
+        // Event name comes from the spec §3 "Events emitted" vocabulary,
+        // selected by outcome so the Observability binding is correct.
+        await deps.emitEvent(EVENT_BY_STATUS[result.status], { op: op.op, status: result.status })
         d.exec('COMMIT')
         return result
       } catch (err) {
@@ -404,7 +420,9 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
           invalidate(d, row, humanConfirmed)
           if (humanConfirmed) appendForgetRow(d, row.fact_key, row.key_tokens.split('|'), reason, true)
         }
-        await deps.emitEvent('memory.forget', { factId, humanConfirmed })
+        // forget() is a fact mutation (tombstone + forget-list append) →
+        // the spec §3 vocabulary records it as memory.committed.
+        await deps.emitEvent('memory.committed', { op: 'forget', factId, humanConfirmed })
         d.exec('COMMIT')
       } catch (err) {
         try { d.exec('ROLLBACK') } catch { /* preserve the original error */ }

@@ -576,6 +576,37 @@ describe('Nightly Consolidation', () => {
     expect(reindexed).toHaveLength(0)
   })
 
+  it('AC-10-21 fail-safe: an UNJUDGED staged item (judged:false) is refused at promotion — never committed/reindexed', async () => {
+    const op: MemOp = { kind: 'ADD', factKey: makeFactKey('u'), text: 'unjudged' }
+    const judge: Judge = {
+      // Judge unavailable at consolidation → candidate held unjudged in staging.
+      grade: async () => { throw new Error('judge unavailable') },
+    }
+    const generator: Generator = {
+      proposeMemoryOps: async () => ({ ops: [op], diff: { added: [op], removed: [], updated: [] } }),
+      draftSkills: async () => [],
+    }
+    const reindexed: string[] = []
+    let pushes = 0
+    const runner = makeConsolidationRunner({
+      ...deps,
+      judge,
+      generator,
+      reindex: (id: string) => { reindexed.push(id) },
+      git: { commitAndPush: async () => { pushes++; return { ok: true, commitHash: 'c' } } },
+    })
+    await runner.run(defaultConfig)
+    const staging = await runner.getStagedProposals()
+    expect(staging.memoryPatches).toHaveLength(1)
+    expect(staging.memoryPatches[0]!.judged).toBe(false)
+
+    // The judge gate is a safety control: promotion of an unjudged item must be
+    // held/refused (fail-closed), never auto-accepted (AC-10-21; §7 fail-safe).
+    await expect(runner.approveStagedItem(staging.memoryPatches[0]!.id)).rejects.toThrow(/unjudged|judge|held|fail.closed/i)
+    expect(reindexed).toHaveLength(0)
+    expect(pushes).toBe(0)
+  })
+
   it('AC-10-22: when Memory/resurrection-guard is unavailable, no commit or reindex occurs; fail-closed', async () => {
     const op: MemOp = { kind: 'ADD', factKey: makeFactKey('g'), text: 'g' }
     const generator: Generator = {

@@ -739,6 +739,82 @@ describe('AC-09-13b: judge independence re-checked after within-loop fallback', 
 })
 
 // ---------------------------------------------------------------------------
+// AC-09-19: provider.cost.charged emitted on every successful dispatch
+// (spec 09 §3 event list + §5 cost telemetry, ADR-0036): exactly one event
+// per success, dollars == the RESOLVED provider's charge (after any fallback),
+// independent of whether a TaskBudget is configured.
+// ---------------------------------------------------------------------------
+
+describe('AC-09-19: provider.cost.charged emitted on each successful dispatch', () => {
+  it('AC-09-19: emits exactly one provider.cost.charged with the resolved charge — even with no budget set', async () => {
+    const events: RouterEvent[] = []
+    const adapter = makeFakeProviderAdapter(PROVIDERS.deepseekPro)
+    const router = makeModelRouter({ adapters: [adapter], emitEvent: (e) => events.push(e) })
+
+    adapter.enqueue({ type: 'success', tokens: 250, dollars: 0.042 })
+    const result = await router.dispatch(makeReq({ taskId: 'task-cost', requestId: 'req-cost-1', role: 'generator' }))
+    expect(isError(result)).toBe(false)
+
+    const charged = events.filter(e => e.type === 'provider.cost.charged')
+    expect(charged).toHaveLength(1)
+    const ev = charged[0] as Extract<RouterEvent, { type: 'provider.cost.charged' }>
+    expect(ev.taskId).toBe('task-cost')
+    expect(ev.requestId).toBe('req-cost-1')
+    expect(ev.tier).toBe('reasoning')
+    expect(ev.dollars).toBe(0.042)
+    expect(ev.tokens).toBe(250 + 250)
+  })
+
+  it('AC-09-19: dollars are the RESOLVED provider charge after a within-dispatch fallback', async () => {
+    const events: RouterEvent[] = []
+    const adapters = [
+      makeFakeProviderAdapter(PROVIDERS.deepseekFlash),
+      makeFakeProviderAdapter(PROVIDERS.gpt55),
+    ]
+    const router = makeModelRouter({ adapters, emitEvent: (e) => events.push(e) })
+
+    // Default flash fails twice → escalate to gpt-5.5, which charges 0.5.
+    adapters[0]!.enqueue({ type: 'error', kind: 'server-error' })
+    adapters[0]!.enqueue({ type: 'error', kind: 'server-error' })
+    adapters[1]!.enqueue({ type: 'success', tokens: 120, dollars: 0.5 })
+
+    await router.dispatch(makeReq({ taskId: 'task-cost-fb' }))
+    const second = await router.dispatch(makeReq({ taskId: 'task-cost-fb' }))
+    expect(isError(second)).toBe(false)
+
+    const charged = events.filter(e => e.type === 'provider.cost.charged') as Extract<RouterEvent, { type: 'provider.cost.charged' }>[]
+    // Exactly one success across the two dispatches (first dispatch errored).
+    expect(charged).toHaveLength(1)
+    expect(charged[0]!.dollars).toBe(0.5)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-09-17b: classifier-failure safe default emits route.classified(fallback=true)
+// (spec 09 §7 "Classifier call fails or times out" → "emit
+// route.classified(fallback=true)"; §3 event list declares route.classified)
+// ---------------------------------------------------------------------------
+
+describe('AC-09-17b: classifier failure emits route.classified with fallback=true', () => {
+  it('AC-09-17b: when the tier classifier throws, route() emits route.classified(fallback=true) on the safe-default tier', async () => {
+    const events: RouterEvent[] = []
+    const adapter = makeFakeProviderAdapter(PROVIDERS.claudeOpus)
+    const router = makeModelRouter({ adapters: [adapter], emitEvent: (e) => events.push(e) })
+
+    const brokenReq = makeReq({ taskId: 'task-classify-fb', role: 'bogus-role' as unknown as ModelRequest['role'] })
+
+    const decision = asDecision(await router.route(brokenReq))
+    expect(decision.tier).toBe('critique')
+
+    const classified = events.filter(e => e.type === 'route.classified') as Extract<RouterEvent, { type: 'route.classified' }>[]
+    const fb = classified.find(e => e.fallback === true)
+    expect(fb).toBeDefined()
+    expect(fb!.taskId).toBe('task-classify-fb')
+    expect(fb!.tier).toBe('critique')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // AC-09-15c: queued record is replayable — carries enough to reconstruct
 // the full request, not just body.raw (§4 queue record; Eng-7 resume)
 // ---------------------------------------------------------------------------

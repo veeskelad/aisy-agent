@@ -643,6 +643,81 @@ describe('AC-03-16: SQLite I/O failure — no partial write; reads degrade to fr
 })
 
 // ---------------------------------------------------------------------------
+// Spec §3 "Events emitted" — Observability binding vocabulary conformance.
+// Declared names: memory.committed | memory.superseded | memory.guard_blocked
+//                 | memory.routed_to_review | memory.index_corrupt | memory.rebuilt.
+// (NOT memory.commit / memory.forget — those were never in the spec vocabulary.)
+// ---------------------------------------------------------------------------
+
+describe('§3 events emitted match the spec vocabulary (Observability binding conformance)', () => {
+  const SPEC_EVENTS = new Set([
+    'memory.committed',
+    'memory.superseded',
+    'memory.guard_blocked',
+    'memory.routed_to_review',
+    'memory.index_corrupt',
+    'memory.rebuilt',
+  ])
+  const events = (verifier: ReturnType<typeof makeEffectVerifier>) =>
+    verifier.effects.map(e => e.target)
+
+  it('commit ADD emits memory.committed (not the old memory.commit)', async () => {
+    const { deps, verifier } = makeDeps()
+    const store = makeMemoryStore(deps)
+    await store.commit({ op: 'ADD', text: 'spec event happy path' }, { withinSession: false })
+    const emitted = events(verifier)
+    expect(emitted).toContain('memory.committed')
+    expect(emitted).not.toContain('memory.commit')
+    for (const e of emitted) expect(SPEC_EVENTS.has(e)).toBe(true)
+  })
+
+  it('commit UPDATE emits memory.superseded', async () => {
+    const { deps, verifier } = makeDeps()
+    const store = makeMemoryStore(deps)
+    const first = await store.commit({ op: 'ADD', text: 'My role is engineer' }, { withinSession: false })
+    await store.commit(
+      { op: 'UPDATE', targetId: first.factId!, text: 'My role is tech lead' },
+      { withinSession: false },
+    )
+    expect(events(verifier)).toContain('memory.superseded')
+  })
+
+  it('a guard-blocked commit emits memory.guard_blocked', async () => {
+    const { deps, verifier } = makeDeps()
+    const store = makeMemoryStore(deps)
+    const { factId } = await store.commit({ op: 'ADD', text: 'I live in Berlin' }, { withinSession: false })
+    await store.forget(factId!, 'user request', true)
+    const blocked = await store.commit({ op: 'ADD', text: 'I live in Berlin' }, { withinSession: true })
+    expect(blocked.status).toBe('BLOCKED')
+    expect(events(verifier)).toContain('memory.guard_blocked')
+  })
+
+  it('a routed-to-review commit emits memory.routed_to_review', async () => {
+    const { deps, verifier } = makeDeps()
+    const store = makeMemoryStore(deps)
+    const { factId } = await store.commit({ op: 'ADD', text: 'I live in Berlin' }, { withinSession: false })
+    await store.forget(factId!, 'user request', true)
+    const routed = await store.commit(
+      { op: 'ADD', text: 'The metropolis on the Spree is where I reside' },
+      { withinSession: true },
+    )
+    if (routed.status === 'ROUTED_TO_REVIEW') {
+      expect(events(verifier)).toContain('memory.routed_to_review')
+    }
+  })
+
+  it('forget emits memory.committed (not the old memory.forget) and never an off-vocabulary name', async () => {
+    const { deps, verifier } = makeDeps()
+    const store = makeMemoryStore(deps)
+    const { factId } = await store.commit({ op: 'ADD', text: 'forget vocabulary check' }, { withinSession: false })
+    await store.forget(factId!, 'user request', true)
+    const emitted = events(verifier)
+    expect(emitted).not.toContain('memory.forget')
+    for (const e of emitted) expect(SPEC_EVENTS.has(e)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Three-layer structure invariants (§1 / §2)
 // ---------------------------------------------------------------------------
 

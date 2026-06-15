@@ -514,6 +514,13 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
       const patch = [...memoryPatches, ...skillPatches, ...lintPatches].find((p) => p.id === id)
       if (!patch) throw new NightlyError(`no staged item ${id}`)
 
+      // Judge gate is a safety control: an item that was never judged (e.g. judge
+      // model unavailable → judged:false) must be held, never auto-accepted. Fail
+      // closed before any commit/reindex (AC-10-21; §7 fail-safe degrade).
+      if (!patch.judged) {
+        throw new NightlyError('unjudged staged item — held; fail-closed (judge gate; no commit or reindex)')
+      }
+
       // TOCTOU: the staged body must be byte-identical to the judge-accepted one
       // (hashAtPromote == hashAtAccept), else abort the item (AC-10-13).
       const currentBody = deps.currentBodyForPatch ? deps.currentBodyForPatch(patch.id, patch.body) : patch.body

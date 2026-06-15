@@ -373,7 +373,13 @@ export function makePersonality(deps: PersonalityDeps): Personality {
   // enforceable veto must not exist.
   const constitution = parseConstitution(deps.constitution)
   const soul = parseSoul(deps.soul)
-  assertValid(validateIdentity(constitution, soul), 'constitution.md')
+  const report = validateIdentity(constitution, soul)
+  if (!report.ok) {
+    // §3 "Events emitted": leave an audit trail before failing closed so a
+    // validation failure is not silent (§8 repudiation threat).
+    record({ kind: 'tool-call', target: 'identity.validation_failed', payload: { report } })
+  }
+  assertValid(report, 'constitution.md')
 
   const vetoPrinciple = constitution.principles.find(p => p.veto) as Principle
 

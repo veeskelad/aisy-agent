@@ -377,3 +377,34 @@ Two notes from the wave:
 Remaining deferred after B2: **B1 (~13, incl. seq + personality domain-sep)** and
 **B3 (~12, DRY)**. Suite: **510 green, `tsc` clean, 0 errors**, flake-free over 15
 consecutive runs.
+
+### Update — 2026-06-15 (B1 conformance wave)
+
+B1 split into spec-CONFORMANCE (spec/AC already mandates it → fix TDD) vs genuine
+DESIGN-DECISION (needs an ADR). **Conformance fixed** (5 parallel agents,
+verify-against-spec-first + regression test, central `tsc`+suite gate):
+
+- **provider** — `provider.cost.charged` emitted on every successful dispatch
+  (AC-09-19, §5); `route.classified(fallback:true)` emitted when the tier
+  classifier throws (§7 failure table).
+- **memory** — event vocabulary renamed to the spec §3 set
+  (`memory.committed`/`superseded`/`guard_blocked`/`routed_to_review`); the old
+  `memory.commit`/`memory.forget` would never bind in Observability.
+- **personality** — `identity.validation_failed` emitted before failing closed
+  (§3 events, §8 repudiation).
+- **observability** — `GuardianDeps.tripThreshold` now wired into the cycle
+  detector (was hardcoded 3); trace-linter R3 now also rejects a `file` trace
+  whose target is produced by no step (vacuous "verify a pre-existing path").
+- **nightly** — `approveStagedItem` fail-closed on unjudged (`judged:false`)
+  patches (AC-10-21 / §7 — never promote what the judge never graded).
+
+**Reclassified CONFORMANCE→DECISION:** agent-loop per-session `seq` — the spec's
+`LogEntry` (§4, line 239) has **no `sessionId`**, so adding one + per-session seq
+is a spec deviation, not conformance; and under the single-user design a shared
+seq is harmless. Parked with the other DECISION items.
+
+**Open DECISION items (need an ADR before code):** (3) orchestration full
+budget-precedence chain `AC-11-9`; (6) safety `NightlyCarveout` per-kind
+preconditions `AC-05-23`; (8) personality SHA-256 domain-separator (hash-migration
+plan); (10) agent-loop per-session `seq` + `LogEntry.sessionId`. Suite after this
+wave: **524 green, `tsc` clean, 0 errors.**

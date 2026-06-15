@@ -195,6 +195,7 @@ export type RouterEvent =
   | { type: "route.resolved"; taskId: string; decision: RouteDecision }
   | { type: "route.fallback"; taskId: string; from: ProviderId; to: ProviderId }
   | { type: "route.all_down_queued"; taskId: string; requestId: string }
+  | { type: "provider.cost.charged"; taskId: string; requestId: string; tier: RouteTier; tokens: number; dollars: number }
   | { type: "budget.charged"; taskId: string; requestId: string; dollars: number; tokens: number }
   | { type: "budget.exceeded"; taskId: string; budget: TaskBudget }
   | { type: "judge.collision_held"; taskId: string; candidateId: string }

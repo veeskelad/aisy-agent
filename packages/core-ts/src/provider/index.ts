@@ -117,8 +117,12 @@ export function makeModelRouter(deps: ModelRouterDeps): ModelRouter {
       return classifyRole(req)
     } catch {
       // Fail SAFE: an unclassifiable request gets the critique tier — never a
-      // weaker one (spec 09, Eng).
-      return 'critique'
+      // weaker one (spec 09, Eng). Surface the safe-default classification with
+      // the fallback flag so Observability sees the downgrade-avoidance (spec
+      // 09 §7 "Classifier call fails or times out" → route.classified(fallback=true)).
+      const tier: RouteTier = 'critique'
+      emit({ type: 'route.classified', taskId: req.taskId, tier, fallback: true })
+      return tier
     }
   }
 
@@ -238,6 +242,18 @@ export function makeModelRouter(deps: ModelRouterDeps): ModelRouter {
         try {
           const result = await adapter.call(req)
           recordSuccess(provider)
+          // Cost telemetry (ADR-0036): on EVERY successful dispatch, emit the
+          // per-call charge for the RESOLVED provider (after any fallback) —
+          // independent of whether a TaskBudget is configured (spec 09 §5,
+          // AC-09-19).
+          emit({
+            type: 'provider.cost.charged',
+            taskId: req.taskId,
+            requestId: req.requestId,
+            tier,
+            tokens: result.inputTokens + result.outputTokens,
+            dollars: result.dollarsCharged,
+          })
           if (budget) {
             budget.tokensSpent += result.inputTokens + result.outputTokens
             budget.dollarsSpent += result.dollarsCharged

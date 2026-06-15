@@ -281,6 +281,23 @@ describe('Component 08 — Personality', () => {
     expect(personality.setMode('terse')).toEqual({ ok: true, mode: 'terse' })
   })
 
+  it('AC-08-6b: a failing identity validation emits identity.validation_failed before failing closed (§3, §8 repudiation)', () => {
+    // §3 declares identity.validation_failed in "Events emitted (to Observability 12)".
+    // A fail-closed validation (zero/multiple veto, duplicate precedence, missing soul)
+    // must leave an audit trail before it throws — a silent identity-validation failure
+    // is the repudiation threat in §8. The event fires on the validateIdentity() verdict
+    // failure, carrying the failing ValidationReport.
+    const ev = makeEffectVerifier()
+    expect(() =>
+      makePersonality({ constitution: CONSTITUTION_NO_VETO, soul: SOUL_MD, record: ev.record }),
+    ).toThrow('ConstitutionError')
+    const failed = ev.effects.find(e => e.target === 'identity.validation_failed')
+    expect(failed, 'expected an identity.validation_failed event before fail-closed').toBeDefined()
+    const report = (failed!.payload as { report: { ok: boolean; exactly_one_veto: boolean } }).report
+    expect(report.ok).toBe(false)
+    expect(report.exactly_one_veto).toBe(false)
+  })
+
   it('AC-08-10b: makePersonality() with an initialMode not in the mode registry throws ConstitutionError (fail-closed at construction)', () => {
     // An initialMode that names no registered register would put the personality
     // into a register that does not exist; fail closed at construction, consistent

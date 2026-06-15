@@ -279,6 +279,50 @@ describe('TraceLinter — R3 vacuous', () => {
       }
     }
   })
+
+  it('AC-12-8 (pre-existing target): a file trace whose path is produced by NO step is rejected with R3', () => {
+    // Spec §4.4 R3: a file/sql trace whose target "is not produced by any step
+    // in the plan and already exists before execution" asserts nothing about the
+    // world — verifying something that was already true proves no effect.
+    const linter = makeTraceLinter()
+
+    const result = linter.lint({
+      steps: [
+        {
+          // /etc/hosts is asserted to exist but no step's producesPath creates it.
+          trace: { kind: 'file', path: '/etc/hosts', existsExpected: true },
+          irreversible: false,
+          tools: [],
+          // no producesPath, and no other step produces /etc/hosts
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.rule).toBe('R3')
+      expect(result.stepIndex).toBe(0)
+    }
+  })
+
+  it('AC-12-8 (pre-existing target): a file trace IS sound when some step in the plan produces its path', () => {
+    // Counter-case: the same target path is fine when a plan step declares it as
+    // producesPath — the trace then asserts a real effect the plan created.
+    const linter = makeTraceLinter()
+
+    const result = linter.lint({
+      steps: [
+        {
+          trace: { kind: 'file', path: '/tmp/produced.txt', existsExpected: true },
+          irreversible: false,
+          tools: ['read_file'],
+          producesPath: '/tmp/produced.txt',
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -473,6 +517,38 @@ describe('LoopGuardian — period-1 cycle', () => {
     expect(r1.trip).toBe(false)
     expect(r2.trip).toBe(false)
     expect(r3.trip).toBe(false)
+  })
+})
+
+describe('LoopGuardian — configurable tripThreshold', () => {
+  it('a guardian built with tripThreshold:1 trips after fewer repeats than the default', () => {
+    // Spec §4 / §10: the window and cap are configurable (default cap = 3).
+    // GuardianDeps.tripThreshold must actually drive the cycle detector's
+    // repeat-count threshold; with tripThreshold:1 a period-1 cycle trips after
+    // > 1 repeats (the 2nd call), well before the default > 3 threshold.
+    const journal = makeJournalWithLoadedSecrets()
+    const guardian = makeLoopGuardian({ ...makeGuardianDeps(journal), tripThreshold: 1 })
+    const callA = { name: 'read_file', args: { path: '/tmp/a.txt' } }
+
+    const r1 = guardian.observe(callA) // 1 occurrence — not yet > 1
+    expect(r1.trip).toBe(false)
+
+    const r2 = guardian.observe(callA) // 2 occurrences = period-1 repeating > 1 → trip
+    expect(r2.trip).toBe(true)
+    expect(r2.period).toBe(1)
+  })
+
+  it('a default guardian (no tripThreshold) still requires > 3 repeats to trip', () => {
+    // Regression guard: the injected threshold must FALL BACK to the default
+    // when unset, not lower it.
+    const journal = makeJournalWithLoadedSecrets()
+    const guardian = makeLoopGuardian(makeGuardianDeps(journal))
+    const callA = { name: 'read_file', args: { path: '/tmp/a.txt' } }
+
+    expect(guardian.observe(callA).trip).toBe(false)
+    expect(guardian.observe(callA).trip).toBe(false)
+    expect(guardian.observe(callA).trip).toBe(false)
+    expect(guardian.observe(callA).trip).toBe(true) // 4th — > 3
   })
 })
 

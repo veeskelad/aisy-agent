@@ -183,6 +183,15 @@ function isSelfReferentialPath(path: string): boolean {
 export function makeTraceLinter(): TraceLinter {
   return {
     lint(plan: { steps: LintablePlanStep[] }): LintResult {
+      // Set of paths produced by some step in the plan. A file trace whose
+      // target is in this set asserts a real effect the plan created; a trace
+      // whose target is NOT produced by any step only re-asserts a pre-existing
+      // file, which proves nothing (R3 vacuous, §4.4).
+      const producedPaths = new Set<string>()
+      for (const s of plan.steps) {
+        if (s.producesPath !== undefined) producedPaths.add(s.producesPath)
+      }
+
       for (let i = 0; i < plan.steps.length; i++) {
         const step = plan.steps[i]!
         const trace = step.trace
@@ -210,6 +219,12 @@ export function makeTraceLinter(): TraceLinter {
         if (trace.kind === 'http' && isLoopback(trace.url) && isReadMethod(trace.method)) {
           return { ok: false, rule: 'R3', stepIndex: i }
         }
+        // R3 pre-existing target — a file trace whose path is not produced by any
+        // step in the plan re-asserts a file that already existed; verifying
+        // something already true proves no effect (§4.4).
+        if (trace.kind === 'file' && !producedPaths.has(trace.path)) {
+          return { ok: false, rule: 'R3', stepIndex: i }
+        }
       }
       return { ok: true }
     },
@@ -228,27 +243,30 @@ function isReadMethod(method: string): boolean {
 // Cycle detector (§4 tool-call signature; ADR-0020)
 //
 // Detects a period-1/2/3 cycle in the trailing window. A cycle "trips" only
-// when it repeats strictly more than 3 times — i.e. the trailing run forming
-// a period-p block is at least p*3 + 1 long. Shorter periods win first so
+// when it repeats strictly more than `threshold` times (default 3, configurable
+// per §4/§10 and GuardianDeps.tripThreshold) — i.e. the trailing run forming a
+// period-p block is at least p*threshold + 1 long. Shorter periods win first so
 // A-A-A-A is period 1, not a degenerate period-2/3 reading.
 // ---------------------------------------------------------------------------
 
-export function makeCycleDetector(): CycleDetector {
+const DEFAULT_TRIP_THRESHOLD = 3
+
+export function makeCycleDetector(threshold: number = DEFAULT_TRIP_THRESHOLD): CycleDetector {
   return {
     detect(window: string[]): { period: 1 | 2 | 3 } | null {
       for (const period of [1, 2, 3] as const) {
-        if (matchesPeriod(window, period)) return { period }
+        if (matchesPeriod(window, period, threshold)) return { period }
       }
       return null
     },
   }
 }
 
-/** True when the tail of `window` is a period-`p` cycle repeating > 3 times. */
-function matchesPeriod(window: string[], p: 1 | 2 | 3): boolean {
-  // > 3 repeats of a length-p block means at least p*3 + 1 trailing elements
-  // that are consistent with period p (w[i] === w[i - p]).
-  const needed = p * 3 + 1
+/** True when the tail of `window` is a period-`p` cycle repeating > `threshold` times. */
+function matchesPeriod(window: string[], p: 1 | 2 | 3, threshold: number): boolean {
+  // > `threshold` repeats of a length-p block means at least p*threshold + 1
+  // trailing elements that are consistent with period p (w[i] === w[i - p]).
+  const needed = p * threshold + 1
   if (window.length < needed) return false
   const start = window.length - needed
   for (let i = start + p; i < window.length; i++) {
@@ -279,7 +297,9 @@ function signature(call: ToolCall): string {
 
 export function makeLoopGuardian(deps: GuardianDeps): LoopGuardian {
   const windowSize = deps.windowSize ?? 12
-  const detector = makeCycleDetector()
+  // Wire the injected trip threshold (cap on full cycle repeats) into the
+  // detector; falls back to the default when unset (§4, §10, GuardianDeps).
+  const detector = makeCycleDetector(deps.tripThreshold ?? DEFAULT_TRIP_THRESHOLD)
   let window: string[] = []
   let tripped = false
 
