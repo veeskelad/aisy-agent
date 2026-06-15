@@ -3,11 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "aisy": "./dist/bin/aisy.js"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --project tsconfig.build.json"
+    "build": "tsc --project tsconfig.build.json",
+    "postbuild": "chmod +x dist/bin/aisy.js 2>/dev/null || true"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
