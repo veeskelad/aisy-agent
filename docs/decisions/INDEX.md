@@ -53,6 +53,10 @@ in this index so cross-references stay stable.
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Proposed | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Proposed | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0044 | Accepted  | 2026-06-15 | [Agent-Loop Per-Session Seq — Won't Fix](./2026-06-15-agent-loop-per-session-seq-wont-fix.md) | agent-loop, observability, single-user |
+| ADR-0043 | Proposed  | 2026-06-15 | [Personality SHA-256 Domain-Separator and Hash Migration Plan](./2026-06-15-personality-hash-migration-plan.md) | personality, security, migration |
+| ADR-0042 | Proposed  | 2026-06-15 | [NightlyCarveout Per-Kind Preconditions](./2026-06-15-nightly-carveout-per-kind-preconditions.md) | safety, nightly, maintenance |
+| ADR-0041 | Proposed  | 2026-06-15 | [Budget-Precedence Chain Recording](./2026-06-15-budget-precedence-chain-recording.md) | orchestration, observability, cost |
 | ADR-0040 | Proposed | 2026-06-13 | [Context Engine — Compaction as a View, Not a Destructive Write](./2026-06-13-context-engine-compaction-as-view.md) | context, memory, observability |
 
 <!--
