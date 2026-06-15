@@ -380,6 +380,29 @@ describe('AgentLoop', () => {
     expect(hookGate.preCalls.length).toBe(0)
   })
 
+  it('AC-01-13b: vacuous HTTP trace at loopback (127.0.0.1, localhost, ::1, [::1], 0.0.0.0) is rejected (R3)', async () => {
+    const loopbackUrls = [
+      'http://127.0.0.1:8080/health',
+      'http://localhost:8080/health',
+      'http://[::1]:8080/health',
+      'http://::1:8080/health',
+      'http://0.0.0.0:8080/health',
+    ]
+    for (const url of loopbackUrls) {
+      const hookGate = makeHookGateFake('allow')
+      const plan: Plan = {
+        steps: [stepWith('serve', { trace: { kind: 'http', method: 'GET', url, expectStatus: 200 } })],
+      }
+      const provider = makeProviderFakeWithResponse({ plan })
+      const loop = makeAgentLoop(makeDeps({ hookGate, provider }))
+      const result = await loop.runTurn(makeTurnInput())
+      // §5.3/§7: the model keeps emitting an unlintable (vacuous-loopback) plan → re-plan budget overflows → cap-exceeded.
+      expect(result.state, `url=${url}`).toBe('halted')
+      expect(result.haltReason, `url=${url}`).toBe('cap-exceeded')
+      expect(hookGate.preCalls.length, `url=${url}`).toBe(0)
+    }
+  })
+
   it('AC-01-14: plan step whose file trace path equals PLAN.md/TODO.md is rejected as self-referential (R4)', async () => {
     const plan: Plan = {
       steps: [stepWith('write_plan', { trace: { kind: 'file', path: 'PLAN.md', existsExpected: true } })],

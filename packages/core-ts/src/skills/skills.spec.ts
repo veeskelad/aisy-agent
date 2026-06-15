@@ -141,6 +141,56 @@ function makeDeps(overrides?: Partial<SkillsDeps> & { hasTrace?: boolean }): Ski
 
 describe('Component 06 — Skills', () => {
 
+  // ---- Frontmatter parser regressions (Phase-5) --------------------------
+
+  it('REG-06-A: a frontmatter line beginning with `---` (e.g. `----`) does NOT truncate the fence early', () => {
+    // A YAML value whose line begins with `---` (here a `----` rule on its own
+    // line inside the description block) must not be mistaken for the closing
+    // fence. The closing fence must be exactly `---`, not any `---` prefix.
+    const raw =
+      '---\n' +
+      'name: rule-skill\n' +
+      'description: short desc\n' +
+      '----\n' + // line beginning with --- inside the frontmatter block (not the fence)
+      'version: 1\n' +
+      'provenance: human\n' +
+      'triggers:\n' +
+      '  - do thing\n' +
+      '---\n\n' +
+      '## steps\n1. go.' + VERIFICATION_SECTION
+    const skills = makeSkillRegistry(makeDeps())
+    const result = skills.parse(raw)
+    // Before the fix the fence is truncated at `  ----`, dropping version /
+    // provenance / triggers and producing missing_field errors.
+    expect(result.ok, JSON.stringify(result.ok ? {} : result.errors)).toBe(true)
+    if (result.ok) {
+      expect(result.skill.frontmatter.version).toBe(1)
+      expect(result.skill.frontmatter.provenance).toBe('human')
+      expect(result.skill.frontmatter.triggers).toEqual(['do thing'])
+    }
+  })
+
+  it('REG-06-B: a blank line within the trigger list does not silently truncate later triggers', () => {
+    const raw =
+      '---\n' +
+      'name: multi-trigger\n' +
+      'description: short desc\n' +
+      'version: 1\n' +
+      'provenance: human\n' +
+      'triggers:\n' +
+      '  - first trigger\n' +
+      '\n' + // blank line within the list — must not truncate
+      '  - second trigger\n' +
+      '---\n\n' +
+      '## steps\n1. go.' + VERIFICATION_SECTION
+    const skills = makeSkillRegistry(makeDeps())
+    const result = skills.parse(raw)
+    expect(result.ok, JSON.stringify(result.ok ? {} : result.errors)).toBe(true)
+    if (result.ok) {
+      expect(result.skill.frontmatter.triggers).toEqual(['first trigger', 'second trigger'])
+    }
+  })
+
   // ---- Format contract (ADR-0015) ----------------------------------------
 
   it('AC-06-1: description > 60 chars returns ParseError; candidate not written to staging/', () => {
@@ -434,6 +484,30 @@ describe('Component 06 — Skills', () => {
     const candidate = makeValidParsedSkill({ description: 'Irreversible: wipe all data' })
     const ctx: TriggerContext = { request: 'wipe data', sessionId: 'sess-1' }
     const staged = skills.stage(candidate, ctx)
+    const verdict = makeApprovalVerdict(staged.stageId, staged.artifactHash, { stepUpSatisfied: false })
+    const result = await skills.promote(staged.stageId, verdict)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('stepup_missing')
+    expect(git.commits.length).toBe(0)
+  })
+
+  it('REG-06-C: a benign-titled skill with a destructive BODY still requires step-up (body scanned, not just name/description)', async () => {
+    // Title/description look harmless, but the body performs an irreversible
+    // operation. isIrreversible() must scan the body too (§8 ADR-0029 #5),
+    // otherwise step-up is skipped and a destructive recipe promotes on a plain tap.
+    const git = makeGitPort()
+    const skills = makeSkillRegistry(makeDeps({ git }))
+    const destructiveBody = '## steps\n1. Run `rm -rf /var/data` to reset.' + VERIFICATION_SECTION
+    const candidate = makeValidParsedSkill()
+    const candidateWithDestructiveBody: ParsedSkill = {
+      ...candidate,
+      body: destructiveBody,
+      rawBytes: new TextEncoder().encode(
+        new TextDecoder().decode(candidate.rawBytes).replace(candidate.body, destructiveBody),
+      ),
+    }
+    const ctx: TriggerContext = { request: 'deploy preview', sessionId: 'sess-1' }
+    const staged = skills.stage(candidateWithDestructiveBody, ctx)
     const verdict = makeApprovalVerdict(staged.stageId, staged.artifactHash, { stepUpSatisfied: false })
     const result = await skills.promote(staged.stageId, verdict)
     expect(result.ok).toBe(false)

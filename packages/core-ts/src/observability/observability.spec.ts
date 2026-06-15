@@ -61,10 +61,9 @@ function makeJournalDeps(): AuditLogDeps {
 
 function makeJournalWithLoadedSecrets(): Journal {
   const deps = makeJournalDeps()
-  const journal = makeAuditLog(deps)
   // Load an empty secret set so append() is not fail-closed.
-  // Real impl: deps.secretRedactor.loadVaultValues(new Set())
-  return journal
+  deps.secretRedactor.loadVaultValues(new Set())
+  return makeAuditLog(deps)
 }
 
 function makeGuardianDeps(journal: Journal): GuardianDeps {
@@ -120,6 +119,29 @@ describe('TraceVerifier — sql traces', () => {
 
     const failResult = await runner.verify(trace, makeAbsentProbe()) // rows: 0
     expect(failResult.pass).toBe(false)
+  })
+
+  it('AC-12-3 (bare-number form means EXACTLY n rows, not >= n)', async () => {
+    // The bare-number expectRows is the shorthand for equality (`= n`), mirroring
+    // expectStatus/expectCode which assert an exact value. `>= n` must be spelled
+    // out via { op: ">=", n }. A probe returning MORE rows than the bare number
+    // must therefore FAIL — otherwise the bare form silently aliases `>=`.
+    const runner = makeVerificationRunner()
+    const trace: VerificationTrace = {
+      kind: 'sql',
+      query: 'SELECT id FROM users WHERE active = 1',
+      expectRows: 1,
+    }
+
+    // makePresentProbe returns rows: 3, which is > 1. Under equality semantics
+    // this must NOT pass.
+    const tooManyRows = await runner.verify(trace, makePresentProbe()) // rows: 3
+    expect(tooManyRows.pass).toBe(false)
+
+    // An exact match still passes.
+    const exactProbe: EffectProbe = { ...makePresentProbe(), sql: (_q) => ({ rows: 1 }) }
+    const exactResult = await runner.verify(trace, exactProbe) // rows: 1
+    expect(exactResult.pass).toBe(true)
   })
 })
 
@@ -638,6 +660,35 @@ describe('LoopGuardian — replan epoch', () => {
     const trip = guardian.observe(callA)
 
     expect(trip.trip).toBe(true)
+  })
+
+  it('AC-12-19b: a guardian trip whose best-effort journal write is fail-closed does not leak an unhandled rejection', async () => {
+    // Reproduces the real production path: the vault secret-set is not yet
+    // loaded, so the journal is fail-closed and the best-effort `guardian.tripped`
+    // write rejects. The trip verdict is the gate and must be returned
+    // synchronously; the dropped forensic note must NOT surface as an unhandled
+    // promise rejection (regression for the `void journal.append(...)` leak).
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { rejections.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const journal = makeAuditLog(makeJournalDeps()) // secrets NOT loaded → append() fail-closed
+      const guardian = makeLoopGuardian(makeGuardianDeps(journal))
+
+      const callA = { name: 'read_file', args: { path: '/tmp/a.txt' } }
+      let trip: { trip: boolean; period?: 1 | 2 | 3 } | undefined
+      for (let i = 0; i < 4; i++) trip = guardian.observe(callA)
+
+      expect(trip?.trip).toBe(true) // synchronous gate still halts the loop
+
+      // Let the fire-and-forget append + its rejection handler settle.
+      await new Promise<void>((r) => { setImmediate(r) })
+      await Promise.resolve()
+
+      expect(rejections).toEqual([]) // no leaked unhandled rejection
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })
 

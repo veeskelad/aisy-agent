@@ -315,8 +315,12 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
             if (op.humanConfirmed) {
               appendForgetRow(d, target.fact_key, target.key_tokens.split('|'), op.reason, true)
             }
+            result = { status: 'COMMITTED', factId: op.targetId }
+          } else {
+            // No such fact — the intended (permanent) forget never happened.
+            // Surface that nothing was deleted rather than a misleading COMMITTED.
+            result = { status: 'NOT_FOUND', factId: op.targetId }
           }
-          result = { status: 'COMMITTED', factId: op.targetId }
         } else {
           // ADD / UPDATE share the guarded insert path
           const tokens = keyTokens(op.text)

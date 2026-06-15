@@ -80,12 +80,21 @@ interface RawFrontmatter {
 function splitFrontmatter(raw: string): { fm: string; body: string } | null {
   const text = raw.replace(/\r\n/g, '\n')
   if (!text.startsWith('---\n')) return null
-  const end = text.indexOf('\n---', 4)
-  if (end < 0) return null
-  const fm = text.slice(4, end)
+  // Closing fence must be a line that is EXACTLY `---` (trimmed) — a body line
+  // like `----` or `---yaml` is a `\n---` *prefix* but not the fence, and must
+  // not truncate the frontmatter. Scan line-by-line from after the opener.
+  const lines = text.split('\n')
+  let fenceLine = -1
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === '---') {
+      fenceLine = i
+      break
+    }
+  }
+  if (fenceLine < 0) return null
+  const fm = lines.slice(1, fenceLine).join('\n')
   // body starts after the closing fence line
-  const afterFence = text.indexOf('\n', end + 1)
-  const body = afterFence < 0 ? '' : text.slice(afterFence + 1).replace(/^\n+/, '')
+  const body = lines.slice(fenceLine + 1).join('\n').replace(/^\n+/, '')
   return { fm, body }
 }
 
@@ -104,7 +113,15 @@ function readFrontmatter(fm: string): RawFrontmatter {
     if (key === 'triggers') {
       const items: string[] = []
       for (let j = i + 1; j < lines.length; j++) {
-        const m = /^\s*-\s+(.*)$/.exec(lines[j]!)
+        const lj = lines[j]!
+        // A blank line within the list is skipped, not a terminator — items
+        // listed after it still belong to the trigger list. A non-blank,
+        // non-list line ends the list.
+        if (lj.trim() === '') {
+          i = j
+          continue
+        }
+        const m = /^\s*-\s+(.*)$/.exec(lj)
         if (!m) break
         items.push(m[1]!.trim())
         i = j
@@ -247,14 +264,29 @@ interface PromotedSkill {
   provenance: Provenance
 }
 
+/** Destructive operations in a skill BODY that force step-up (§8 ADR-0029 #5). */
+const DESTRUCTIVE_BODY_PATTERNS: readonly RegExp[] = [
+  /\brm\s+-[a-z]*r[a-z]*f?/i, // rm -rf / rm -fr / rm -r ...
+  /\bdrop\s+(?:table|database|schema)\b/i,
+  /\btruncate\s+table\b/i,
+  /\bgit\s+push\s+(?:--force|-f)\b/i,
+  /\bforce[- ]?push\b/i,
+  /\bgit\s+reset\s+--hard\b/i,
+  /\b(?:mkfs|dd\s+if=|shred)\b/i,
+  /\b(?:drop|wipe|destroy|delete\s+all|format)\b/i,
+]
+
 /**
- * Detect a permanence/irreversible-flagged candidate (§5.3, ADR-0029 #5).
+ * Detect a permanence/irreversible-flagged candidate (§5.3, §8 ADR-0029 #5).
  * Step-up is required to promote one. The flag is derived deterministically
- * from the frontmatter, never from a model-set trust field.
+ * from the frontmatter AND the body, never from a model-set trust field — a
+ * benign-titled skill whose body performs a destructive operation must not
+ * bypass step-up.
  */
-function isIrreversible(fm: SkillFrontmatter): boolean {
+function isIrreversible(fm: SkillFrontmatter, body: string): boolean {
   const hay = `${fm.name} ${fm.description}`.toLowerCase()
-  return /\b(irreversible|permanence|permanent|wipe|destroy|delete\s+all)\b/.test(hay)
+  if (/\b(irreversible|permanence|permanent|wipe|destroy|delete\s+all)\b/.test(hay)) return true
+  return DESTRUCTIVE_BODY_PATTERNS.some((p) => p.test(body))
 }
 
 export function makeSkillRegistry(deps: SkillsDeps): Skills {
@@ -435,7 +467,7 @@ export function makeSkillRegistry(deps: SkillsDeps): Skills {
 
       // Step-up second factor for permanence/irreversible items (ADR-0029 #5,
       // AC-06-19). A plain tap is insufficient for these.
-      if (isIrreversible(record.frontmatter) && !approval.stepUpSatisfied) {
+      if (isIrreversible(record.frontmatter, record.body) && !approval.stepUpSatisfied) {
         return { ok: false, reason: 'stepup_missing' }
       }
 

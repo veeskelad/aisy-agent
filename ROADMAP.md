@@ -35,6 +35,19 @@ These constraints shape every milestone and will not be traded away for speed:
 | ⏳ | Planned |
 | 🧊 | Explicitly deferred (see *Deferred* section) |
 
+## Build progress (snapshot 2026-06-15)
+
+Spec-driven design is **complete**: 15 component specs + 40 ADRs. Implementation
+(`@aisy/core`, TypeScript, test-first) status:
+
+- ✅ **All 15 components implemented** — 01–13 engine + 14 triggers + 15 context-engine. **496 tests green, `tsc` clean, 0 unhandled errors.**
+- ✅ **Phase-5 adversarial pre-merge review** — 32 confirmed defects (that green tests missed) found and fixed, each with a regression test (`docs/reviews/2026-06-13-phase5-review.md`).
+- ✅ **First-class sub-agent delegation (ADR-0039)** — goal-DAG scheduler, AgentCard capability authority, scope composition + pairwise disjointness, hash-chained per-delegation shards with compact observations, checkpoint/resume + cascade-skip (AC-11-16..20). Adversarially reviewed.
+- ✅ **Eval & red-team harness (ADR-0037)** — `pass^k` scoring + golden-trajectory replay/diff (`src/eval/`).
+- ✅ **Medium/low review triage** — 16 of the 59 lower findings resolved (15 fixed TDD + 1 by design); the remaining 43 are bucketed with rationale in the review doc.
+- ✅ **Operational shell (partial)** — `aisy` CLI router (tested), Dockerfile + Compose + install script (ADR-0035), operator guides (`docs/guides/`).
+- 🚧 **Remaining for a runnable v0.1** — wire the `aisy` bin to real node adapters (fs/prereq/provider-ping/Telegram/SQLite/Docker probes).
+
 ---
 
 ## v0.1 — "Full day-one" (target: Q3 2026) 🚧

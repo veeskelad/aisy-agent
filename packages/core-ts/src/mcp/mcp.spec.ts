@@ -437,6 +437,51 @@ describe('MCP component (07)', () => {
     expect(events).toContain('mcp.result_quarantined')
   })
 
+  // ── Robust namespaced-name parsing (fail-closed) ─────────────────────────
+
+  it('AC-07-22: malformed namespaced names (no dot, empty server, empty tool) are rejected fail-closed; no process spawned, no invoke', async () => {
+    const invokeTool = vi.fn(async () => 'leaked')
+    const deps = makeDeps({ invokeTool })
+    const mgr = makeMCPManager(deps)
+
+    // no separator at all
+    await expect(mgr.call('trackersearch', { q: 'x' })).rejects.toThrow(/malformed/i)
+    // leading dot → empty server segment
+    await expect(mgr.call('.search', { q: 'x' })).rejects.toThrow(/malformed/i)
+    // trailing dot → empty tool segment
+    await expect(mgr.call('tracker.', { q: 'x' })).rejects.toThrow(/malformed/i)
+    // dot only → both empty
+    await expect(mgr.call('.', { q: 'x' })).rejects.toThrow(/malformed/i)
+
+    expect(deps.spawnProcess).not.toHaveBeenCalled()
+    expect(invokeTool).not.toHaveBeenCalled()
+  })
+
+  it('AC-07-23: a server whose name contains a dot is resolved against the allowlist, not mis-split on the first dot', async () => {
+    // Server name "a.b" (dot in the namespace prefix) owning tool "x" is
+    // exposed to the model as "a.b.x". A naive indexOf('.') split picks
+    // server="a", tool="b.x" → "a" is not allowlisted → the legitimate call
+    // is silently mis-routed/rejected. The resolver must bind to the server
+    // that actually owns the tool.
+    const serverAB: McpServerEntry = {
+      ...ENTRY_FULL,
+      name: 'a.b',
+      command: ['/usr/bin/ab'],
+      tools: [{ tool: 'x', tier: 0, outboundSink: false, summary: 'AB tool' }],
+    }
+    const resolvedCalls: ResolvedMcpCall[] = []
+    const deps = makeDeps({
+      allowlist: { servers: [serverAB] },
+      onResolved: (c) => resolvedCalls.push(c),
+    })
+    const mgr = makeMCPManager(deps)
+
+    await mgr.call('a.b.x', { q: 'test' })
+    expect(resolvedCalls).toHaveLength(1)
+    expect(resolvedCalls[0]!.server).toBe('a.b')
+    expect(resolvedCalls[0]!.tool).toBe('x')
+  })
+
   // ── Cold start ───────────────────────────────────────────────────────────
 
   it('AC-07-21: before allowlist loads, connect and call_mcp return errors, no menu line, no process spawned', async () => {

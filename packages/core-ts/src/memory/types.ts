@@ -42,7 +42,7 @@ export type GuardVerdict =
   | { decision: 'REVIEW'; reason: 'residual_paraphrase' } // fail-safe; never a silent commit
 
 export interface CommitResult {
-  status: 'COMMITTED' | 'BLOCKED' | 'ROUTED_TO_REVIEW' | 'SUPERSEDED'
+  status: 'COMMITTED' | 'BLOCKED' | 'ROUTED_TO_REVIEW' | 'SUPERSEDED' | 'NOT_FOUND'
   factId?: string
   verdict?: GuardVerdict
 }

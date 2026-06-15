@@ -84,7 +84,8 @@ function lintPlan(plan: Plan): LintResult {
     }
     if (
       trace.kind === 'http' &&
-      /localhost|127\.0\.0\.1/.test(trace.url) &&
+      // loopback / unspecified hosts: IPv4 (127.0.0.1, 0.0.0.0), localhost, IPv6 (::1, [::1]).
+      /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|(?:^|[:/@])::1(?:$|[:/])/.test(trace.url) &&
       ['GET', 'HEAD'].includes(trace.method.toUpperCase())
     ) {
       return { ok: false, rule: 'R3' }

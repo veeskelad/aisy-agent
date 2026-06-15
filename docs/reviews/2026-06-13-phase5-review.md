@@ -207,6 +207,10 @@ Add a companion test for AC-02-6 that starts with `isOutboundLocked: () => false
 
 Not adversarially verified (only critical/high were). Triage in v0.2.
 
+> **Triaged 2026-06-15** — see [§ Triage outcome](#triage-outcome--2026-06-15) at the
+> bottom. 16 of the 59 are now resolved (15 fixed with regression tests + 1
+> closed by design); the remaining 43 are bucketed there with rationale.
+
 
 ### agent-loop
 
@@ -305,3 +309,43 @@ Not adversarially verified (only critical/high were). Triage in v0.2.
 - [medium/bug] TOCTOU window between verifyBinary() and execFileSync(deps.binaryPath) in compress() — `/Users/iam/Work/Projects/aisy-harness/packages/core-ts/src/tools/index.ts:227`
 - [medium/security] verdict.card.reason from untrusted approval cards is interpolated into ContextSafeResult.text without sanitization — `/Users/iam/Work/Projects/aisy-harness/packages/core-ts/src/tools/index.ts:162`
 - [low/reuse] SHA-256 helper duplicated across tools, mcp, memory, and safety components — `/Users/iam/Work/Projects/aisy-harness/packages/core-ts/src/tools/index.ts:118`
+
+---
+
+## Triage outcome — 2026-06-15
+
+Each medium/low finding was re-checked against the live code (the list above was
+*unverified* when written). Every item acted on below was first **confirmed real**
+by reading the code; each fix landed TDD (failing regression test → minimal fix).
+Suite after triage: **496 green, `tsc` clean** (was 459 at the checkpoint; +37 =
+delegation/eval/baseline work + the regression tests below).
+
+### Resolved — 16 (15 fixed + 1 by design)
+
+All fixed with a named regression test, verified green, `tsc` clean:
+
+| Finding | Component | Fix |
+|---|---|---|
+| R3 HTTP loopback only IPv4 (`::1`/`0.0.0.0` bypass) | agent-loop | loopback regex extended to `::1`/`[::1]`/`0.0.0.0` (anchored) |
+| `call()` first-dot split bypasses tool policy | mcp | parse fail-closed; resolve `(entry,policy)` against the allowlist, reject empty/ambiguous |
+| `DELETE` of a non-existent factId returns `COMMITTED` | memory | new `NOT_FOUND` status; `COMMITTED` only when a fact was actually tombstoned |
+| `matchRows` bare-number meant `>=` not `=` | observability | bare number → equality (matches `expectStatus`/`expectCode`) |
+| guardian.tripped fire-and-forget leaked unhandled rejection / lost audit | observability | `.catch()` — fail-closed drop is intentional; trip gate is the synchronous guarantee |
+| faulted worker could keep appending to the journal | orchestration | `appendDecision` fails closed once `faulted.has(workerId)` |
+| `patternsMayOverlap` prefix false-positive (no path boundary) | orchestration | containment only at a `/`-segment boundary |
+| EgressGuard ignored the `methods` allowlist | safety | method not on a host's allowed-methods list → deny |
+| `stripTrustFields` top-level only | safety | recurse into nested objects/arrays |
+| LethalTrifecta concatenated `text+source` (false positives) | safety | newline separator at the join |
+| `secondFactorOk` always `true` when 2FA not required | safety | `true` only when a factor was required *and* validated |
+| `isUnboundedDelete` scanned only `args['sql']` | safety | scan every string-valued arg (fail-closed) |
+| untrusted `card.reason` interpolated unsanitized | tools | `sanitizeControlSequences()` on the ask-path reason (ADR-0037 output-injection class) |
+| `isIrreversible()` ignored the skill body | skills | also scan the body against the destructive-pattern set |
+| frontmatter fence matched `---` as a prefix | skills | require an exact `---` fence line |
+| trigger list truncated at the first blank line | skills | skip blanks within the list |
+
+### Deferred — 43, bucketed
+
+- **B1 · spec decision needed (~12):** provider cost events `AC-09-19`/`route.classified` fallback; gateway slash-command dispatch to Onboarding (`AC-02-21`) + voice file_id-vs-bytes; orchestration full budget-precedence chain `AC-11-9`; memory `emitEvent` vocabulary vs spec; nightly unjudged-promotion block `AC-10-21`; safety `NightlyCarveout` per-kind preconditions `AC-05-23`; personality `identity.validation_failed` never emitted; observability `tripThreshold` ignored + R3 "pre-existing target" branch. *Each needs a spec/ADR call before code — not a silent fix.*
+- **B2 · real bug, lower blast-radius (~16):** agent-loop djb2→sha256 payloadHash + per-session `seq`; gateway expiry-path test gap; mcp `DiffCard` old-vs-new + silent quarantine-on-null; memory scoped-reindex honoured + all-quotes guard; nightly `draftSkills` result discarded + stale closure state; provider budget operator inconsistency + injectable `prefixHashes` + `queueRecord` replayability; safety nested-trifecta separator; onboarding pre-seed redact no-op + `/usage` "day" period + template-only `.env` detection; tools `compress()` sync-in-async + TOCTOU; personality `initialMode`/`principleId` validation. *Scheduled for the v0.2 hardening pass with regression tests.*
+- **B3 · cleanup / DRY (~12):** the duplicated `sha256`/`createHash`/`globToRegExp` helpers across components (consolidate into one shared util); `SECRET_SHAPES` vs `BUILTIN_SECRET_PATTERNS` convergence; inline `LIVE_FILTER`; redundant `checkDegradation` first check; mergeable `scaffoldFile` branches; `validate()` fire-and-forget boilerplate. *Low risk, no behavioural change; batch when the shared-util module lands.*
+- **By design (1):** personality SHA-256 domain-separator was **not** changed in this pass — it would alter persisted identity hashes and risk the anti-degradation/identity tests; it moves to B1 (needs a hash-migration plan), tracked but deliberately untouched here.

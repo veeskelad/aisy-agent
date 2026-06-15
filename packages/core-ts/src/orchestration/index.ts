@@ -3,7 +3,7 @@
 // (ADR-0021), Loop Guardian retry cap (ADR-0020), generations (ADR-0005).
 // See docs/specs/11-orchestration.md.
 
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 
 export type {
   RunId,
@@ -38,6 +38,22 @@ export type {
   GenerationManager,
   OrchestrationEventKind,
   OrchestrationEvent,
+  // Delegation (ADR-0039)
+  DelegationId,
+  DelegationScope,
+  DelegationTask,
+  Dependency,
+  PlanDAG,
+  LinearPlanLike,
+  AgentCard,
+  CapabilityRequest,
+  ShardEntry,
+  DelegationCheckpoint,
+  TaskObservation,
+  DelegationHandle,
+  DelegationDeps,
+  ScheduleResult,
+  DelegationManager,
 } from './types.js'
 
 export { ScopeConflictError, ScopeViolationError } from './types.js'
@@ -63,10 +79,25 @@ import {
   type ReconcileResult,
   type RunId,
   type Task,
+  type TaskClass,
   type WorkerBrief,
   type WorkerHandle,
   type WorkerId,
   type WorkerScope,
+  // Delegation (ADR-0039)
+  type AgentCard,
+  type CapabilityRequest,
+  type DelegationCheckpoint,
+  type DelegationDeps,
+  type DelegationHandle,
+  type DelegationId,
+  type DelegationManager,
+  type DelegationTask,
+  type Dependency,
+  type LinearPlanLike,
+  type PlanDAG,
+  type ScheduleResult,
+  type ShardEntry,
 } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -107,14 +138,20 @@ function globRoot(glob: string): string {
 
 /**
  * Conservative may-overlap test between two scope patterns: equal patterns or
- * one literal root being a prefix of the other are treated as overlapping.
+ * one literal root truly *containing* the other are treated as overlapping.
+ * Containment only counts at a path-segment boundary — the character after the
+ * shorter root in the longer one must be a `/` (or the shorter root already
+ * ends in `/`, or the roots are equal). Otherwise a bare prefix like
+ * 'src/api' would wrongly match the disjoint 'src/apiv2/**'.
  * Used for the pairwise write-disjointness assertion (ADR-0021, AC-11-1).
  */
 function patternsMayOverlap(a: string, b: string): boolean {
   if (a === b) return true
   const ra = globRoot(a)
   const rb = globRoot(b)
-  return ra.startsWith(rb) || rb.startsWith(ra)
+  const [shorter, longer] = ra.length <= rb.length ? [ra, rb] : [rb, ra]
+  if (!longer.startsWith(shorter)) return false
+  return longer.length === shorter.length || shorter.endsWith('/') || longer[shorter.length] === '/'
 }
 
 function overlappingPaths(ownsA: string[], ownsB: string[]): string[] {
@@ -348,6 +385,12 @@ export function makeCoordinator(deps: CoordinatorDeps): Coordinator {
       const handle: WorkerHandle = {
         workerId: brief.workerId,
         appendDecision: (partial): void => {
+          // Fail closed (§7): a worker that already committed a scope violation
+          // is faulted and excluded from the merge — it must not be able to
+          // write any further entries into the shared journal (AC-11-2).
+          if (faulted.has(brief.workerId)) {
+            throw new ScopeViolationError(brief.workerId, partial.touched, 'outside-owns')
+          }
           const violation = checkScope(partial.touched, brief.scope)
           if (violation !== undefined) {
             // Fail closed (§7): reject the append, mark the worker faulted
@@ -474,6 +517,358 @@ export function makeCoordinator(deps: CoordinatorDeps): Coordinator {
     // never emits run.terminated and never blocks a spawn.
     onSkillFailure(skill: string): void {
       nested.skillFailures[skill] = (nested.skillFailures[skill] ?? 0) + 1
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// First-class sub-agent delegation (ADR-0039, spec §5.4/§5.5).
+//
+// A goal-DAG of DelegationTasks, each served by a sub-agent whose capabilities
+// are fixed by an AgentCard (the model cannot self-widen). State hands off
+// without loss: every delegation owns a hash-chained shard; the parent receives
+// only a compact TaskObservation. Reuses the §5.1 scope-disjointness logic, the
+// ADR-0020 Loop Guardian, and ScopeConflictError — nothing here is a new runtime.
+// ---------------------------------------------------------------------------
+
+const SHARD_GENESIS = '0'.repeat(64)
+
+/** Deterministic JSON: object keys sorted recursively (stable hashing input). */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_k, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.keys(v as Record<string, unknown>)
+            .sort()
+            .map(k => [k, (v as Record<string, unknown>)[k]]),
+        )
+      : v,
+  )
+}
+
+/**
+ * Deep clone a shard payload so neither the caller (who keeps a reference to
+ * what it passed to append) nor a post-mortem shard() reader can mutate an
+ * "immutable" audit entry after the fact. structuredClone handles cycles/Dates;
+ * the rare non-cloneable payload (e.g. a function) falls back to the original.
+ */
+function safeClone<T>(v: T): T {
+  try {
+    return structuredClone(v)
+  } catch {
+    return v
+  }
+}
+
+function cloneEntry(e: ShardEntry): ShardEntry {
+  return { ...e, payload: safeClone(e.payload) }
+}
+
+function shardEntryHash(e: Omit<ShardEntry, 'hash'>): string {
+  const payloadHash = createHash('sha256').update(stableStringify(e.payload), 'utf8').digest('hex')
+  return createHash('sha256')
+    .update(
+      stableStringify({
+        delegationId: e.delegationId,
+        seq: e.seq,
+        prevHash: e.prevHash,
+        kind: e.kind,
+        ts: e.ts,
+        payloadHash,
+      }),
+      'utf8',
+    )
+    .digest('hex')
+}
+
+function isPlanDAG(plan: LinearPlanLike | PlanDAG): plan is PlanDAG {
+  return Array.isArray((plan as PlanDAG).nodes)
+}
+
+/**
+ * Normalize a Core (01) linear plan into a degenerate goal-DAG: each step
+ * becomes a node depending on the previous one, preserving sequential order
+ * (AC-11-16). A PlanDAG is returned unchanged. The Core `Plan` shape itself is
+ * never modified — the union lives here, at the orchestration layer.
+ */
+function normalizePlan(plan: LinearPlanLike | PlanDAG): PlanDAG {
+  if (isPlanDAG(plan)) return { nodes: [...plan.nodes], edges: [...plan.edges] }
+  const nodes: DelegationTask[] = plan.steps.map((step, i) => ({
+    taskId: `s${i + 1}`,
+    intent: step.intent ?? '',
+    assignedTo: null,
+    dependsOn: i > 0 ? [`s${i}`] : [],
+    scope: { owns: [], doNotTouch: [], taskClass: 'reasoning' as TaskClass },
+    budgetSlice: { iterations: DEFAULT_WORKER_ITERATIONS, spendUsd: DEFAULT_WORKER_SPEND_USD },
+    outputContract: '',
+    retryPolicy: { maxReplans: 0, maxIterations: DEFAULT_WORKER_ITERATIONS },
+  }))
+  const edges: Dependency[] = nodes.slice(1).map((n, i) => ({ from: `s${i + 1}`, to: n.taskId }))
+  return { nodes, edges }
+}
+
+interface DelegationState {
+  task: DelegationTask
+  card: AgentCard
+  /** Composed writable path set = task.scope.owns ∪ skill-touched (== owns; §5.5). */
+  owns: string[]
+  /** card.mcpAllowlist ∩ MCP-writable. */
+  writableMcp: string[]
+  /** The card's tool set — the capability authority (AC-11-17). */
+  permittedTools: Set<string>
+  entries: ShardEntry[]
+  guardian: LoopGuardian
+  status: 'active' | 'completed' | 'failed' | 'resumed'
+}
+
+export function makeDelegationManager(
+  plan: LinearPlanLike | PlanDAG,
+  deps: DelegationDeps,
+): DelegationManager {
+  const runId: RunId = `r-${randomUUID().slice(0, 8)}`
+  const dagPlan = normalizePlan(plan)
+  const tasksById = new Map(dagPlan.nodes.map(t => [t.taskId, t] as const))
+
+  const completed = new Set<string>()
+  const failed = new Set<string>()
+  const skipped = new Set<string>()
+  const delegations = new Map<DelegationId, DelegationState>()
+  const checkpoints = new Map<DelegationId, DelegationCheckpoint>()
+  const runBudget: IterationCost = { iterations: 0, spendUsd: 0, wallMs: 0 }
+
+  const delegationIdFor = (taskId: string): DelegationId => `d-${taskId}`
+
+  function emit(kind: OrchestrationEventKind, payload?: unknown): void {
+    deps.emit({ kind, runId, ts: new Date().toISOString(), payload })
+  }
+
+  function isTerminal(taskId: string): boolean {
+    return completed.has(taskId) || failed.has(taskId) || skipped.has(taskId)
+  }
+
+  /** Owns of every delegation still holding write scope (active or resumed). */
+  function activeOwns(exceptId?: DelegationId): Array<{ id: DelegationId; owns: string[] }> {
+    const out: Array<{ id: DelegationId; owns: string[] }> = []
+    for (const [id, st] of delegations) {
+      if (id === exceptId) continue
+      if (st.status === 'active' || st.status === 'resumed') out.push({ id, owns: st.owns })
+    }
+    return out
+  }
+
+  function addCost(cost: IterationCost): void {
+    runBudget.iterations += cost.iterations
+    runBudget.spendUsd += cost.spendUsd
+    runBudget.wallMs += cost.wallMs
+  }
+
+  function appendShard(state: DelegationState, delegationId: DelegationId, kind: string, payload: unknown): ShardEntry {
+    const prev = state.entries[state.entries.length - 1]
+    const seq = (prev?.seq ?? 0) + 1
+    const prevHash = prev?.hash ?? SHARD_GENESIS
+    const ts = new Date().toISOString()
+    // Sever the caller's reference: store an independent deep copy so the
+    // append-only shard stays tamper-evident (a circular payload fails fast at
+    // the hash step below, never reaching storage).
+    const stored = safeClone(payload)
+    const base: Omit<ShardEntry, 'hash'> = { delegationId, seq, prevHash, kind, payload: stored, ts }
+    const entry: ShardEntry = { ...base, hash: shardEntryHash(base) }
+    state.entries.push(entry)
+    return cloneEntry(entry)
+  }
+
+  function writeCheckpoint(delegationId: DelegationId, state: DelegationState): void {
+    const last = state.entries[state.entries.length - 1]
+    checkpoints.set(delegationId, {
+      delegationId,
+      taskId: state.task.taskId,
+      scope: state.task.scope,
+      snapshotPrefixHash: last?.hash ?? SHARD_GENESIS,
+      lastSeq: last?.seq ?? 0,
+    })
+  }
+
+  function makeHandle(delegationId: DelegationId, state: DelegationState): DelegationHandle {
+    return {
+      delegationId,
+      taskId: state.task.taskId,
+      card: state.card,
+      owns: [...state.owns],
+      writableMcp: [...state.writableMcp],
+      permitsTool: (name: string) => state.permittedTools.has(name),
+      permitsMcp: (server: string) => state.writableMcp.includes(server),
+      append: (kind: string, payload: unknown) => appendShard(state, delegationId, kind, payload),
+      shard: () => state.entries.map(cloneEntry),
+      get guardian() {
+        return state.guardian
+      },
+      complete: (summary: string, result: unknown, cost: IterationCost) => {
+        state.status = 'completed'
+        completed.add(state.task.taskId)
+        addCost(cost)
+        emit('delegation.completed', { delegationId, taskId: state.task.taskId })
+        return { delegationId, status: 'completed' as const, summary, touched: [...state.owns], result, cost }
+      },
+      fail: (summary: string, cost: IterationCost) => {
+        state.status = 'failed'
+        failed.add(state.task.taskId)
+        addCost(cost)
+        writeCheckpoint(delegationId, state)
+        emit('delegation.failed', { delegationId, taskId: state.task.taskId })
+        return { delegationId, status: 'failed' as const, summary, touched: [...state.owns], result: undefined, cost }
+      },
+    }
+  }
+
+  return {
+    dag(): PlanDAG {
+      return { nodes: [...dagPlan.nodes], edges: [...dagPlan.edges] }
+    },
+
+    readySet(): DelegationTask[] {
+      // Deterministic: input order, a task ready only when every dependency has
+      // COMPLETED and it has not itself run / been spawned (AC-11-16).
+      return dagPlan.nodes.filter(
+        t =>
+          !isTerminal(t.taskId) &&
+          !delegations.has(delegationIdFor(t.taskId)) &&
+          t.dependsOn.every(dep => completed.has(dep)),
+      )
+    },
+
+    spawn(taskId: string, requested?: CapabilityRequest): DelegationHandle {
+      const task = tasksById.get(taskId)
+      if (task === undefined) throw new Error(`unknown delegation task '${taskId}'`)
+      const delegationId = delegationIdFor(taskId)
+      if (delegations.has(delegationId)) {
+        throw new Error(`delegation '${delegationId}' already spawned — use resume()`)
+      }
+      if (failed.has(taskId) || skipped.has(taskId)) {
+        throw new Error(`task '${taskId}' is terminal (failed/cascade-skipped) and not runnable`)
+      }
+      // Deterministic ready-set: refuse a task whose upstream has not completed.
+      const unmet = task.dependsOn.filter(d => !completed.has(d))
+      if (unmet.length > 0) {
+        throw new Error(`task '${taskId}' not ready: unmet dependencies [${unmet.join(', ')}]`)
+      }
+      if (task.assignedTo === null) {
+        throw new Error(`task '${taskId}' has no assigned AgentCard`)
+      }
+      const card = deps.resolveCard(task.assignedTo)
+      if (card === undefined) throw new Error(`AgentCard '${task.assignedTo}' not found`)
+
+      // §5.5 scope composition. The granted lane is owns minus doNotTouch; a
+      // declared skill writing outside it is a ScopeConflictError and no
+      // sub-agent starts. owns = task.scope.owns ∪ skill-touched, which equals
+      // task.scope.owns precisely because skill-touched ⊆ the granted lane.
+      const inGrantedLane = (p: string): boolean =>
+        task.scope.owns.some(g => globMatches(g, p)) &&
+        !task.scope.doNotTouch.some(g => globMatches(g, p))
+      const skillTouched = card.skills.flatMap(s => deps.skillTouchedPaths(s))
+      const outOfLane = skillTouched.filter(p => !inGrantedLane(p))
+      if (outOfLane.length > 0) {
+        emit('scope.violation', { delegationId, taskId, reason: 'skill-outside-lane', paths: outOfLane })
+        throw new ScopeConflictError(delegationId, `card:${card.name}`, outOfLane)
+      }
+      const owns = [...task.scope.owns]
+
+      // Pairwise write-disjointness across ALL active delegations (§5.5).
+      for (const other of activeOwns()) {
+        const overlap = overlappingPaths(owns, other.owns)
+        if (overlap.length > 0) throw new ScopeConflictError(other.id, delegationId, overlap)
+      }
+
+      // Capabilities are the card's; any model-emitted request that exceeds the
+      // card is ignored — the card is the sole authority (AC-11-17).
+      void requested
+      const permittedTools = new Set(Object.keys(card.toolTiers))
+      const writableMcp = card.mcpAllowlist.filter(s => deps.mcpWritable(s))
+
+      const state: DelegationState = {
+        task,
+        card,
+        owns,
+        writableMcp,
+        permittedTools,
+        entries: [],
+        guardian: makeLoopGuardian({}),
+        status: 'active',
+      }
+      delegations.set(delegationId, state)
+      emit('delegation.spawned', { delegationId, taskId, owns, card: card.name })
+      return makeHandle(delegationId, state)
+    },
+
+    resume(delegationId: DelegationId): DelegationHandle {
+      const state = delegations.get(delegationId)
+      if (state === undefined) throw new Error(`cannot resume unknown delegation '${delegationId}'`)
+      const cp = checkpoints.get(delegationId)
+      if (cp === undefined) throw new Error(`no checkpoint for '${delegationId}' — nothing to resume`)
+
+      // Resume from checkpoint.lastSeq: the shard already holds entries up to
+      // lastSeq, so further appends continue the chain. Reset ONLY the local
+      // Loop Guardian; the run-level budget is inherited (no budget-reset
+      // evasion, §8) and downstream cascade state is untouched (AC-11-20).
+      failed.delete(state.task.taskId)
+      state.status = 'resumed'
+      state.guardian = makeLoopGuardian({})
+      emit('delegation.resumed', { delegationId, fromSeq: cp.lastSeq })
+      return makeHandle(delegationId, state)
+    },
+
+    schedule(): ScheduleResult {
+      // Cascade-skip: any non-terminal task with a failed or already-skipped
+      // ancestor is skipped, transitively, with an explicit journal entry — no
+      // silent drop (AC-11-20). Once skipped, a task is terminal and not re-emitted.
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const t of dagPlan.nodes) {
+          if (isTerminal(t.taskId)) continue
+          const blocked = t.dependsOn.some(d => failed.has(d) || skipped.has(d))
+          if (blocked) {
+            skipped.add(t.taskId)
+            emit('cascade-skip', { taskId: t.taskId, reason: 'upstream-failed' })
+            changed = true
+          }
+        }
+      }
+      const ready = dagPlan.nodes
+        .filter(
+          t =>
+            !isTerminal(t.taskId) &&
+            !delegations.has(delegationIdFor(t.taskId)) &&
+            t.dependsOn.every(dep => completed.has(dep)),
+        )
+        .map(t => t.taskId)
+      const cascadeSkipped = dagPlan.nodes.filter(t => skipped.has(t.taskId)).map(t => t.taskId)
+      return { ready, cascadeSkipped }
+    },
+
+    runBudgetSpent(): IterationCost {
+      return { ...runBudget }
+    },
+
+    verifyShardChain(delegationId: DelegationId): boolean {
+      const state = delegations.get(delegationId)
+      if (state === undefined) return false
+      let prev = SHARD_GENESIS
+      for (let i = 0; i < state.entries.length; i++) {
+        const e = state.entries[i]!
+        if (e.seq !== i + 1) return false
+        if (e.prevHash !== prev) return false
+        const recomputed = shardEntryHash({
+          delegationId: e.delegationId,
+          seq: e.seq,
+          prevHash: e.prevHash,
+          kind: e.kind,
+          payload: e.payload,
+          ts: e.ts,
+        })
+        if (recomputed !== e.hash) return false
+        prev = e.hash
+      }
+      return true
     },
   }
 }

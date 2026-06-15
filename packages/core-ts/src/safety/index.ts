@@ -109,10 +109,14 @@ const HARD_DENY: readonly DenyRule[] = [
   { id: 'SECRET_FILE_READ', pattern: /etc\/shadow|etc\/passwd|id_rsa\b|\.aws\/credentials/ },
 ]
 
-/** DELETE without WHERE — checked on the sql arg, not the whole haystack. */
+/** DELETE without WHERE — checked on every string arg (any key), fail-closed. */
 function isUnboundedDelete(call: ToolCall): boolean {
-  const sql = String(call.args['sql'] ?? '').toLowerCase()
-  return /\bdelete\s+from\b/.test(sql) && !/\bwhere\b/.test(sql)
+  for (const v of Object.values(call.args)) {
+    if (typeof v !== 'string') continue
+    const s = v.toLowerCase()
+    if (/\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s)) return true
+  }
+  return false
 }
 
 /** Outbound / side-effecting drop set disabled under narrowing (ADR-0027). */
@@ -331,8 +335,14 @@ export function makeEgressGuard(deps: EgressGuardDeps = {}): EgressGuard {
       const entry = deps.allowlist?.find(e => e.host === req.host)
       if (!entry) return { decision: 'deny', reason: 'host not on egress allowlist' }
 
+      // Method allowlist: only the methods the host entry declares may pass.
+      const method = req.method.toUpperCase()
+      if (!entry.methods.some(m => m.toUpperCase() === method)) {
+        return { decision: 'deny', reason: 'method not on host egress allowlist' }
+      }
+
       // Read-only destination: any write method or body is a deny.
-      const isRead = ['GET', 'HEAD'].includes(req.method.toUpperCase())
+      const isRead = ['GET', 'HEAD'].includes(method)
       if (entry.mode === 'read-only' && (!isRead || req.body !== undefined)) {
         return { decision: 'deny', reason: 'write to read-only destination' }
       }
@@ -379,6 +389,20 @@ export interface ApprovalHandlerDeps {
 
 const TRUST_FIELDS = ['is_human_confirmed', 'permanence', 'trusted', 'human_confirmed']
 
+/** Recursively drop every trust-marker field from objects and array elements. */
+function stripTrustDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripTrustDeep)
+  if (value !== null && typeof value === 'object') {
+    const stripped: Record<string, unknown> = {}
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      if (TRUST_FIELDS.includes(key)) continue
+      stripped[key] = stripTrustDeep(v)
+    }
+    return stripped
+  }
+  return value
+}
+
 export function makeApprovalHandler(deps: ApprovalHandlerDeps = {}): ApprovalHandler {
   const pending = new Map<string, PendingApproval>((deps.pending ?? []).map(p => [p.nonce, p]))
   const consumed = new Set<string>()
@@ -397,8 +421,11 @@ export function makeApprovalHandler(deps: ApprovalHandlerDeps = {}): ApprovalHan
       // TOCTOU: the staged artifact must be byte-identical at promote time.
       const stagedNow = deps.currentStagedHash ? deps.currentStagedHash() : entry.stagedHashAtAccept
       if (stagedNow !== entry.stagedHashAtAccept) return { status: 'rejected-toctou' }
-      // Step-up second factor for Tier-3 / money / permanence.
-      const secondFactorOk = entry.requiresSecondFactor ? (secondFactor !== undefined && verifyFactor(secondFactor)) : true
+      // Step-up second factor for Tier-3 / money / permanence. The record only
+      // asserts a 2FA check when one was actually required AND validated; when
+      // not required, no factor was supplied or verified → false (the approval
+      // is still valid, the field must not claim a check that never happened).
+      const secondFactorOk = entry.requiresSecondFactor && secondFactor !== undefined && verifyFactor(secondFactor)
       if (entry.requiresSecondFactor && !secondFactorOk) return { status: 'rejected-second-factor' }
 
       consumed.add(nonce)
@@ -418,13 +445,10 @@ export function makeApprovalHandler(deps: ApprovalHandlerDeps = {}): ApprovalHan
 
     // Model output can never carry trust: every trust/permanence field is
     // stripped before staging (AC-05-11; the handler is the only setter).
+    // Recurses into nested objects and arrays so a trust field buried at any
+    // depth is also stripped.
     stripTrustFields(output: Record<string, unknown>): Record<string, unknown> {
-      const stripped: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(output)) {
-        if (TRUST_FIELDS.includes(key)) continue
-        stripped[key] = value
-      }
-      return stripped
+      return stripTrustDeep(output) as Record<string, unknown>
     },
   }
 }
@@ -615,7 +639,8 @@ export function makeLethalTrifectaDetector(): LethalTrifectaDetector {
     evaluate(call: ToolCall, ctx: ContextSpan[]): LethalTrifectaResult {
       const hasUntrustedContent = ctx.some(span => span.provenance !== 'operator')
       const hasPrivateData = ctx.some(
-        span => SECRET_SHAPES.some(p => p.test(span.text)) || /api[-_]?key|\.env\b/i.test(span.text + span.source),
+        // A newline separator stops a match from spanning the text/source join.
+        span => SECRET_SHAPES.some(p => p.test(span.text)) || /api[-_]?key|\.env\b/i.test(`${span.text}\n${span.source}`),
       )
       const hasOutboundChannel = isOutboundOrSideEffecting(call)
       const state = { hasUntrustedContent, hasPrivateData, hasOutboundChannel }

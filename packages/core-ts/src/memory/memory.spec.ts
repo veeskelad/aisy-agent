@@ -252,6 +252,24 @@ describe('AC-03-7: recency-governed supersede vs human-confirmed forget-list per
     )
     expect(later.status).toBe('BLOCKED')
   })
+
+  it('AC-03-7c: human-confirmed DELETE of a non-existent factId returns NOT_FOUND (never a misleading COMMITTED) and appends no forget-list row', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    // A caller asking to permanently forget a fact that does not exist must not
+    // be told the forget succeeded — the intended permanent forget never happened.
+    const del = await store.commit(
+      { op: 'DELETE', targetId: 'no-such-fact-id', humanConfirmed: true, reason: 'forget me' },
+      { withinSession: false },
+    )
+    expect(del.status).toBe('NOT_FOUND')
+    expect(del.status).not.toBe('COMMITTED')
+
+    // Nothing was tombstoned/forgotten, so a fresh add with any text still commits.
+    const add = await store.commit({ op: 'ADD', text: 'I live in Berlin' }, { withinSession: false })
+    expect(add.status).toBe('COMMITTED')
+  })
 })
 
 // ---------------------------------------------------------------------------

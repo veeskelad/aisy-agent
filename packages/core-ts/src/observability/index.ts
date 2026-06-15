@@ -141,7 +141,7 @@ export function makeVerificationRunner(): VerificationRunner {
 }
 
 function matchRows(rows: number, expect: number | { op: '=' | '>' | '>='; n: number }): boolean {
-  if (typeof expect === 'number') return rows >= expect
+  if (typeof expect === 'number') return rows === expect
   switch (expect.op) {
     case '=': return rows === expect.n
     case '>': return rows > expect.n
@@ -303,7 +303,13 @@ export function makeLoopGuardian(deps: GuardianDeps): LoopGuardian {
         tripped = true
         // journal `guardian.tripped` with the offending window (best-effort:
         // the journal write is fire-and-forget; the trip verdict is the gate).
-        void deps.journal.append('12', 'guardian.tripped', { window: [...window], period: cycle.period })
+        // Swallow the rejection: when the journal is fail-closed (secret set not
+        // yet loaded) the forensic note is dropped on purpose — the synchronous
+        // trip verdict already halts the loop, and a leaked unhandled rejection
+        // would be worse than a missing best-effort log line.
+        void deps.journal
+          .append('12', 'guardian.tripped', { window: [...window], period: cycle.period })
+          .catch(() => {})
         return { trip: true, period: cycle.period }
       }
       return { trip: false }

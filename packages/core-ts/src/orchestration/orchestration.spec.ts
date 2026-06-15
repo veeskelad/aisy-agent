@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   makeCoordinator,
   makeLoopGuardian,
+  makeDelegationManager,
   ScopeConflictError,
   ScopeViolationError,
   type Coordinator,
@@ -26,6 +27,11 @@ import {
   type Task,
   type BudgetVerdict,
   type LoopStep,
+  type AgentCard,
+  type DelegationTask,
+  type DelegationDeps,
+  type PlanDAG,
+  type LinearPlanLike,
 } from './index.js'
 import { makeEffectVerifier } from '../testing/index.js'
 
@@ -852,6 +858,289 @@ describe('Orchestration — Component 11', () => {
     // The tampered seq must not survive into reconciliation (no spurious gap/dup abort).
     const result = coord.reconcile('r-test')
     expect(result.aborted).toBeUndefined()
+  })
+
+  // REG-5 (§7 / AC-11-2): a faulted worker must be blocked from ANY further
+  // appendDecision (fail closed). Before the fix a worker that committed one
+  // scope violation (→ added to `faulted`, excluded from the merge) could still
+  // call appendDecision again with in-scope paths and write more entries into
+  // the shared journal — defeating the exclusion the violation was meant to enforce.
+  it('REG-5: a faulted worker is blocked from any further appendDecision (fail closed)', async () => {
+    const journal = makeJournalStub()
+    const coord = makeCoordinator(makeDeps({ journal }))
+
+    const brief = makeWorkerBrief({
+      workerId: 'w-fault',
+      scope: { owns: ['src/fault/**'], doNotTouch: ['src/ui/**'], taskClass: 'reasoning', budgetSlice: { iterations: 40, spendUsd: 0.5 } },
+    })
+    const handle = await coord.spawn(brief)
+
+    // First append violates scope → worker is faulted and the append is rejected.
+    expect(() =>
+      handle.appendDecision({
+        seq: 1, decidedFor: 'x', decidedAgainst: '', because: 'oob',
+        touched: ['src/ui/component.tsx'], ts: new Date().toISOString(),
+      } as Parameters<typeof handle.appendDecision>[0]),
+    ).toThrow(ScopeViolationError)
+
+    // A subsequent IN-SCOPE append must also be refused — once faulted, no writes.
+    expect(() =>
+      handle.appendDecision({
+        seq: 2, decidedFor: 'y', decidedAgainst: '', because: 'in-scope-but-faulted',
+        touched: ['src/fault/a.ts'], ts: new Date().toISOString(),
+      } as Parameters<typeof handle.appendDecision>[0]),
+    ).toThrow()
+
+    // No entries from the faulted worker ever reached the journal.
+    expect(journal.read('r-test')).toHaveLength(0)
+  })
+
+  // REG-6 (§5.1 / AC-11-1): patternsMayOverlap must only treat one literal root
+  // as containing the other at a path-segment boundary. Before the fix a bare
+  // root that is a raw string prefix of another (e.g. 'src/api' vs 'src/apiv2/**')
+  // was wrongly reported as overlapping → a spurious ScopeConflictError on two
+  // genuinely-disjoint scopes.
+  it('REG-6: genuinely-disjoint scopes whose roots share a string prefix without a path boundary do not conflict', async () => {
+    const coord: Coordinator = makeCoordinator(makeDeps())
+
+    const briefA = makeWorkerBrief({ workerId: 'w-api', scope: { owns: ['src/api'], doNotTouch: [], taskClass: 'reasoning', budgetSlice: { iterations: 10, spendUsd: 0.1 } } })
+    const briefB = makeWorkerBrief({ workerId: 'w-apiv2', scope: { owns: ['src/apiv2/**'], doNotTouch: [], taskClass: 'reasoning', budgetSlice: { iterations: 10, spendUsd: 0.1 } } })
+
+    await coord.spawn(briefA)
+    // 'src/apiv2/**' is NOT inside 'src/api' — spawning must NOT throw.
+    await expect(coord.spawn(briefB)).resolves.toBeDefined()
+
+    // A genuinely-nested pair (src/ contains src/api) must still conflict.
+    const coord2: Coordinator = makeCoordinator(makeDeps())
+    const briefRoot = makeWorkerBrief({ workerId: 'w-root', scope: { owns: ['src/'], doNotTouch: [], taskClass: 'reasoning', budgetSlice: { iterations: 10, spendUsd: 0.1 } } })
+    const briefNested = makeWorkerBrief({ workerId: 'w-nested', scope: { owns: ['src/api/**'], doNotTouch: [], taskClass: 'reasoning', budgetSlice: { iterations: 10, spendUsd: 0.1 } } })
+    await coord2.spawn(briefRoot)
+    await expect(coord2.spawn(briefNested)).rejects.toThrow(ScopeConflictError)
+  })
+
+})
+
+// ─── Delegation helpers (ADR-0039, spec §5.4/§5.5) ─────────────────────────────
+
+const COST = { iterations: 1, spendUsd: 0.01, wallMs: 10 }
+
+function makeCard(overrides: Partial<AgentCard> = {}): AgentCard {
+  return {
+    name: 'read-only-analysis',
+    skills: ['grep-codebase'],
+    mcpAllowlist: ['tracker'],
+    toolTiers: { read_file: 0, search_memory: 0 },
+    maxIterations: 20,
+    contextStrategy: 'compact',
+    provenance: 'builtin',
+    ...overrides,
+  }
+}
+
+function makeDelegationTask(overrides: Partial<DelegationTask> = {}): DelegationTask {
+  return {
+    taskId: 't1',
+    intent: 'analyze the api module',
+    assignedTo: 'read-only-analysis',
+    dependsOn: [],
+    scope: { owns: ['src/api/**'], doNotTouch: [], taskClass: 'reasoning' },
+    budgetSlice: { iterations: 40, spendUsd: 0.5 },
+    outputContract: 'a summary',
+    retryPolicy: { maxReplans: 2, maxIterations: 20 },
+    ...overrides,
+  }
+}
+
+function makeDelegationDeps(
+  overrides: Partial<DelegationDeps> = {},
+): DelegationDeps & { events: OrchestrationEvent[] } {
+  const events: OrchestrationEvent[] = []
+  const cards = new Map<string, AgentCard>([['read-only-analysis', makeCard()]])
+  return {
+    events,
+    resolveCard: (name: string) => cards.get(name),
+    skillTouchedPaths: (_skill: string) => [],
+    mcpWritable: (_server: string) => true,
+    emit: (e: OrchestrationEvent) => { events.push(e) },
+    ...overrides,
+  }
+}
+
+describe('Orchestration — Component 11 — Delegation (ADR-0039)', () => {
+
+  it('AC-11-16: a linear steps[] plan is accepted as a degenerate goal-DAG (sequential chain)', () => {
+    const linear: LinearPlanLike = { steps: [{ intent: 'a' }, { intent: 'b' }, { intent: 'c' }] }
+    const mgr = makeDelegationManager(linear, makeDelegationDeps())
+
+    expect(mgr.dag().nodes).toHaveLength(3)
+    // Degenerate DAG = linear chain: only the first task is ready at the start.
+    expect(mgr.readySet().map(t => t.taskId)).toHaveLength(1)
+  })
+
+  it('AC-11-16: a PlanDAG with dependsOn edges yields a deterministic ready-set', () => {
+    const dag: PlanDAG = {
+      nodes: [
+        makeDelegationTask({ taskId: 'A', scope: { owns: ['src/a/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+        makeDelegationTask({ taskId: 'B', scope: { owns: ['src/b/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+        makeDelegationTask({ taskId: 'C', dependsOn: ['A', 'B'], scope: { owns: ['src/c/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+      ],
+      edges: [{ from: 'A', to: 'C' }, { from: 'B', to: 'C' }],
+    }
+    const mgr = makeDelegationManager(dag, makeDelegationDeps())
+
+    // C is blocked until both A and B complete; ready-set is input-order deterministic.
+    expect(mgr.readySet().map(t => t.taskId)).toEqual(['A', 'B'])
+
+    mgr.spawn('A').complete('done', {}, COST)
+    expect(mgr.readySet().map(t => t.taskId)).toEqual(['B']) // C still blocked on B
+    mgr.spawn('B').complete('done', {}, COST)
+    expect(mgr.readySet().map(t => t.taskId)).toEqual(['C'])
+  })
+
+  it('AC-11-17: a sub-agent is restricted to its AgentCard; off-card tools/MCP are refused and model-emitted widening is ignored', () => {
+    const deps = makeDelegationDeps()
+    const mgr = makeDelegationManager({ nodes: [makeDelegationTask({ taskId: 't1' })], edges: [] }, deps)
+
+    // The model emits a request that tries to widen beyond the card.
+    const h = mgr.spawn('t1', { tools: ['read_file', 'shell_exec'], mcp: ['tracker', 'github'] })
+
+    expect(h.permitsTool('read_file')).toBe(true)     // on card
+    expect(h.permitsTool('shell_exec')).toBe(false)   // off card → refused
+    expect(h.permitsMcp('tracker')).toBe(true)        // on card + writable
+    expect(h.permitsMcp('github')).toBe(false)        // off card → refused
+    expect(h.card.name).toBe('read-only-analysis')
+  })
+
+  it('AC-11-18: a declared skill that would write outside the task lane throws ScopeConflictError and starts no sub-agent', () => {
+    const deps = makeDelegationDeps({
+      resolveCard: (n: string) =>
+        n === 'writer' ? makeCard({ name: 'writer', skills: ['codegen'] }) : undefined,
+      // The card's skill is known to write a path inside the task's doNotTouch lane.
+      skillTouchedPaths: (s: string) => (s === 'codegen' ? ['src/forbidden/x.ts'] : []),
+    })
+    const task = makeDelegationTask({
+      taskId: 't1',
+      assignedTo: 'writer',
+      scope: { owns: ['src/api/**', 'src/forbidden/**'], doNotTouch: ['src/forbidden/**'], taskClass: 'routine' },
+    })
+    const mgr = makeDelegationManager({ nodes: [task], edges: [] }, deps)
+
+    expect(() => mgr.spawn('t1')).toThrow(ScopeConflictError)
+    // No sub-agent started: the run-level budget is untouched.
+    expect(mgr.runBudgetSpent().iterations).toBe(0)
+  })
+
+  it('AC-11-18: two active delegations cannot hold overlapping write scope (pairwise disjoint across all)', () => {
+    const dag: PlanDAG = {
+      nodes: [
+        makeDelegationTask({ taskId: 'A', scope: { owns: ['src/shared/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+        makeDelegationTask({ taskId: 'B', scope: { owns: ['src/shared/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+      ],
+      edges: [],
+    }
+    const mgr = makeDelegationManager(dag, makeDelegationDeps())
+
+    mgr.spawn('A')
+    expect(() => mgr.spawn('B')).toThrow(ScopeConflictError)
+  })
+
+  it('AC-11-19: the parent gets a compact TaskObservation (no transcript); the child shard is a hash-chained seq', () => {
+    const deps = makeDelegationDeps()
+    const mgr = makeDelegationManager({ nodes: [makeDelegationTask({ taskId: 't1' })], edges: [] }, deps)
+    const h = mgr.spawn('t1')
+
+    const e1 = h.append('reasoning', { thought: 'step 1' })
+    const e2 = h.append('tool-call', { tool: 'read_file' })
+    expect(e1.seq).toBe(1)
+    expect(e2.seq).toBe(2)
+    expect(e2.prevHash).toBe(e1.hash) // chain links forward
+    expect(mgr.verifyShardChain(h.delegationId)).toBe(true)
+
+    const obs = h.complete('analysed api', { findings: 3 }, COST)
+    // Compact + lossless: exactly the 6 fields, NEVER the transcript.
+    expect(Object.keys(obs).sort()).toEqual(
+      ['cost', 'delegationId', 'result', 'status', 'summary', 'touched'],
+    )
+    expect(obs.status).toBe('completed')
+    expect('transcript' in (obs as unknown as Record<string, unknown>)).toBe(false)
+    // touched is the delegation's granted footprint, not an empty placeholder.
+    expect(obs.touched).toEqual(['src/api/**'])
+    // The full shard persists for post-mortem (handoff without loss).
+    expect(h.shard()).toHaveLength(2)
+    // Parent observation carries no shard entries.
+    expect((obs as unknown as Record<string, unknown>)['shard']).toBeUndefined()
+  })
+
+  it('AC-11-19: the shard is tamper-evident — mutating a returned/read payload cannot corrupt the chain', () => {
+    const deps = makeDelegationDeps()
+    const mgr = makeDelegationManager({ nodes: [makeDelegationTask({ taskId: 't1' })], edges: [] }, deps)
+    const h = mgr.spawn('t1')
+
+    const returned = h.append('reasoning', { thought: 'original' })
+    // Mutate the payload handed back by append() ...
+    ;(returned.payload as { thought: string }).thought = 'tampered'
+    // ... and the payload read back via shard().
+    const read = h.shard()[0]!
+    ;(read.payload as { thought: string }).thought = 'tampered-too'
+
+    // The internal append-only entry is independent of both → chain still verifies.
+    expect(mgr.verifyShardChain(h.delegationId)).toBe(true)
+    expect((h.shard()[0]!.payload as { thought: string }).thought).toBe('original')
+  })
+
+  it('AC-11-20: resuming a failed delegation continues the shard from lastSeq and resets only the local guardian, inheriting the run budget', () => {
+    const deps = makeDelegationDeps()
+    const mgr = makeDelegationManager({ nodes: [makeDelegationTask({ taskId: 't1' })], edges: [] }, deps)
+    const h = mgr.spawn('t1')
+    h.append('reasoning', { thought: 'a' }) // seq 1
+    h.append('reasoning', { thought: 'b' }) // seq 2
+
+    // Trip the local Loop Guardian (period-1 cycle > 3 repeats).
+    const step: LoopStep = { actionId: 'loop', seq: 0 }
+    for (let i = 0; i < 8; i++) h.guardian.check(step)
+    expect('stop' in h.guardian.check(step)).toBe(true)
+
+    h.fail('stuck in a loop', COST)
+    const spentAfterFail = mgr.runBudgetSpent()
+    expect(spentAfterFail.iterations).toBeGreaterThan(0)
+
+    const r = mgr.resume(h.delegationId)
+    // Only the LOCAL guardian is reset — the same repeated step now passes.
+    expect(r.guardian.check(step)).toEqual({ pass: true })
+    // Shard continues at checkpoint.lastSeq + 1, chain intact.
+    const e3 = r.append('reasoning', { thought: 'c' })
+    expect(e3.seq).toBe(3)
+    expect(mgr.verifyShardChain(r.delegationId)).toBe(true)
+    // The run-level (global) budget is inherited, NOT reset by resume.
+    expect(mgr.runBudgetSpent()).toEqual(spentAfterFail)
+
+    expect(deps.events.some(e => e.kind === 'delegation.resumed')).toBe(true)
+  })
+
+  it('AC-11-20: a downstream task whose upstream failed is never spawned and emits an explicit cascade-skip', () => {
+    const deps = makeDelegationDeps()
+    const dag: PlanDAG = {
+      nodes: [
+        makeDelegationTask({ taskId: 'A', scope: { owns: ['src/a/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+        makeDelegationTask({ taskId: 'B', dependsOn: ['A'], scope: { owns: ['src/b/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+      ],
+      edges: [{ from: 'A', to: 'B' }],
+    }
+    const mgr = makeDelegationManager(dag, deps)
+
+    mgr.spawn('A').fail('A failed', COST)
+    const result = mgr.schedule()
+
+    expect(result.cascadeSkipped).toContain('B')
+    expect(result.ready).not.toContain('B')
+    // Explicit journal entry — no silent drop.
+    expect(
+      deps.events.some(
+        e => e.kind === 'cascade-skip' && (e.payload as { taskId?: string } | undefined)?.taskId === 'B',
+      ),
+    ).toBe(true)
+    // A cascade-skipped task can never be spawned.
+    expect(() => mgr.spawn('B')).toThrow()
   })
 
 })

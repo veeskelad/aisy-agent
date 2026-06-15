@@ -6,6 +6,7 @@ import type {
   McpManagerDeps,
   McpMenuLine,
   McpServerEntry,
+  McpToolPolicy,
   RawDescriptor,
   ResolvedMcpCall,
   UntrustedResultSpan,
@@ -180,15 +181,33 @@ export function makeMCPManager(deps: McpManagerDeps): McpManager {
       argProvenance: 'operator' | 'untrusted' = 'operator',
     ): Promise<UntrustedResultSpan> {
       if (!deps.allowlist) throw new Error('cold start: MCP allowlist not loaded — call_mcp refused')
+      // The name is the menu's `${server}.${tool}` join. Both server names and
+      // tool names may legitimately contain '.', so a naive indexOf('.') split
+      // is ambiguous and can mis-route to the wrong policy (or fail closed on a
+      // valid call). Resolve authoritatively against the allowlist: find the
+      // (entry, policy) pair whose `${entry.name}.${policy.tool}` equals the
+      // namespaced name. Reject when the parse is ambiguous or yields an empty
+      // server/tool segment (fail-closed) — never silently bypass the policy.
       const dot = namespaced.indexOf('.')
-      if (dot < 0) throw new Error(`malformed mcp call '${namespaced}' — expected server.tool`)
-      const server = namespaced.slice(0, dot)
-      const tool = namespaced.slice(dot + 1)
-
-      const entry = entryFor(server)
-      if (!entry) throw new Error(`mcp server '${server}' is not allowlisted`)
-      const policy = entry.tools.find(t => t.tool === tool)
-      if (!policy) throw new Error(`mcp tool '${namespaced}' has no allowlist policy`)
+      if (dot <= 0 || dot >= namespaced.length - 1) {
+        throw new Error(`malformed mcp call '${namespaced}' — expected non-empty server.tool`)
+      }
+      let entry: McpServerEntry | undefined
+      let policy: McpToolPolicy | undefined
+      for (const candidate of deps.allowlist.servers) {
+        const prefix = `${candidate.name}.`
+        if (!namespaced.startsWith(prefix)) continue
+        const toolName = namespaced.slice(prefix.length)
+        const match = candidate.tools.find(t => t.tool === toolName)
+        if (match) {
+          if (policy) throw new Error(`ambiguous mcp call '${namespaced}' — matches multiple allowlist policies`)
+          entry = candidate
+          policy = match
+        }
+      }
+      if (!entry || !policy) throw new Error(`mcp tool '${namespaced}' has no allowlist policy`)
+      const server = entry.name
+      const tool = policy.tool
 
       // ADR-0027: while an untrusted span is in context, outbound sinks are locked.
       if (policy.outboundSink && deps.hasUntrustedSpan?.()) {
