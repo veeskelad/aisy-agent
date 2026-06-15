@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { makeToolRegistry, makeCompressor, sanitizeControlSequences, checkWriteMode } from './index.js'
 import type {
   ToolCall,
@@ -612,6 +615,116 @@ describe('AC-04-15: rtk install path rejects cargo install resolution', () => {
     // Path from cargo install must fail the guard
     expect(result.ok).toBe(false)
     expect(result.resolvedPath).toMatch(/\.cargo/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression: compress() must not block the event loop (was execFileSync).
+// A declared-async compress() that calls a synchronous child-process exec
+// freezes the whole loop for up to its 5s timeout. The fix uses a non-blocking
+// async exec so timers/I-O can interleave while the child process runs.
+// ---------------------------------------------------------------------------
+
+describe('compress() does not block the event loop', () => {
+  let dir: string
+  let bin: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aisy-rtk-'))
+    bin = join(dir, 'rtk')
+    // Fake rtk: prints the pinned version on --version (so verifyBinary passes),
+    // and on the compress call sleeps briefly then echoes stdin back to stdout.
+    const script = [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then echo "rtk 9.9.9"; exit 0; fi',
+      'sleep 0.5',
+      'cat',
+      '',
+    ].join('\n')
+    writeFileSync(bin, script)
+    chmodSync(bin, 0o755)
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('does not block the event loop — control returns before the child completes', async () => {
+    const compressor = makeCompressor({ pinnedVersion: '9.9.9', binaryPath: bin })
+    const order: string[] = []
+
+    const done = compressor.compress('hello world').then(() => { order.push('compress') })
+    // Deterministic via MICROTASK ORDERING (FIFO is spec-guaranteed, so this is
+    // load-independent — unlike a wall-clock timer/tick count that starves on a
+    // busy cold-start worker). A synchronous execFileSync impl runs the child to
+    // completion BEFORE compress() returns, so its .then resolves during these
+    // drains; the async impl is still awaiting the child (its resolution rides a
+    // libuv macrotask, not a microtask), so only 'tick' has run by the assert.
+    // We assert ONLY the non-blocking property here; subprocess success/failure
+    // (compressed:true) is cold-start-fragile and is covered by AC-04-11..13.
+    order.push('tick')
+    for (let k = 0; k < 5; k++) await Promise.resolve()
+
+    expect(order).toEqual(['tick']) // child still running → compress not resolved
+    await done
+    expect(order).toEqual(['tick', 'compress'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Regression: TOCTOU narrowing — compress() must execute the SAME resolved
+// path that verifyBinary() just checked, not separately re-dereference
+// deps.binaryPath. The fix re-verifies immediately before exec and runs the
+// pinned resolvedPath returned by that verify call.
+// ---------------------------------------------------------------------------
+
+describe('compress() closes the verify/exec TOCTOU window', () => {
+  let dir: string
+  let bin: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aisy-rtk-toctou-'))
+    bin = join(dir, 'rtk')
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('compresses through the verified resolved path', async () => {
+    // Binary reports the pinned version and uppercases stdin as its "compression".
+    const script = [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then echo "rtk 9.9.9"; exit 0; fi',
+      'tr a-z A-Z',
+      '',
+    ].join('\n')
+    writeFileSync(bin, script)
+    chmodSync(bin, 0o755)
+
+    const compressor = makeCompressor({ pinnedVersion: '9.9.9', binaryPath: bin })
+    // verifyBinary().resolvedPath is the path compress() must execute.
+    expect(compressor.verifyBinary().ok).toBe(true)
+    const out = await compressor.compress('payload')
+    expect(out.compressed).toBe(true)
+    expect(out.text.trim()).toBe('PAYLOAD')
+  })
+
+  it('does not compress when the binary version does not match the pin', async () => {
+    // Re-verify before exec must catch a version mismatch and fail open.
+    const script = [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then echo "rtk 0.0.1"; exit 0; fi',
+      'tr a-z A-Z',
+      '',
+    ].join('\n')
+    writeFileSync(bin, script)
+    chmodSync(bin, 0o755)
+
+    const compressor = makeCompressor({ pinnedVersion: '9.9.9', binaryPath: bin })
+    const out = await compressor.compress('payload')
+    expect(out.compressed).toBe(false)
+    expect(out.text).toBe('payload')
   })
 })
 

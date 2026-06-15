@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   AgentLoop,
   AgentLoopDeps,
@@ -112,14 +113,13 @@ function lintPlan(plan: Plan): LintResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Deterministic djb2 over the canonical JSON of the payload. */
+/**
+ * Deterministic sha256 over the JSON of the payload (spec §4.2). djb2 was 32-bit
+ * and collision-prone, which is unsafe for a payload-identity hash in a
+ * tamper-evident log; sha256 removes the practical collision risk.
+ */
 function payloadHash(payload: unknown): string {
-  const s = JSON.stringify(payload) ?? ''
-  let h = 5381
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0
-  }
-  return h.toString(16)
+  return createHash('sha256').update(JSON.stringify(payload) ?? '', 'utf8').digest('hex')
 }
 
 /** Within-session forget protocol trigger — operator-typed, deterministic. */

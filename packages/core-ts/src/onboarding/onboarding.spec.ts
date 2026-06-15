@@ -336,6 +336,30 @@ describe('Onboarding & Operations (component 13)', () => {
     expect(res.completed).toBe(false)
   })
 
+  // BUG-1 — redaction must be EFFECTIVE on the validation-failure path. Until
+  // the vault is seeded (step [4], gated on success) deps.vault.secretValues()
+  // is empty, so a redact() over a failure detail in step [2] is a guaranteed
+  // no-op. The redactor must know the secret values before validation runs so a
+  // secret that surfaces in a rejection detail can never be echoed.
+  it('BUG-1: a secret value surfacing in a validation-failure detail is redacted (redactor seeded before validation)', async () => {
+    const env: Record<string, string> = {}
+    for (const k of REQUIRED_ENV_KEYS) env[k] = `value-${k}`
+    // The provider rejection detail embeds the HTTP status (here 503). If the
+    // secret VALUE equals that status, an effective redactor must mask it; a
+    // no-op redactor (empty secret set, vault not yet seeded) would leak it.
+    env['AISY_PROVIDER_REASONING_KEY'] = '503'
+
+    const deps = makeDeps({ env, validators: makeFakeValidators({ provider: false, providerStatus: 503 }) })
+    const res = await makeOnboardingOps(deps).init({ nonInteractive: true })
+
+    const failed = res.outcomes.find((o) => o.step.includes('validate.provider') && o.result === 'failed')
+    expect(failed).toBeDefined()
+    // The secret value (which equals the status in the detail) must be redacted.
+    expect(failed && 'detail' in failed && failed.detail).toContain('«redacted»')
+    expect(failed && 'detail' in failed && failed.detail).not.toContain('503')
+    expect(res.completed).toBe(false)
+  })
+
   // AC-13-5 — telegram token validated via getMe; invalid blocks completion, redacted.
   it('AC-13-5: an invalid Telegram token blocks completion in non-interactive mode with a redacted error', async () => {
     const env: Record<string, string> = {}
@@ -626,6 +650,49 @@ describe('Onboarding & Operations (component 13)', () => {
     const summed = events.reduce((s, e) => s + e.dollars, 0)
     expect(usage.totalUsd).toBeCloseTo(summed)
     expect(usage.byTier.reasoning + usage.byTier.critique + usage.byTier.routine).toBeCloseTo(summed)
+  })
+
+  // BUG-2 — /usage 'day' must filter to the current calendar day, distinct from
+  // 'session' (which aggregates every in-session event).
+  it("BUG-2: /usage 'day' filters to the current calendar day, distinct from 'session'", async () => {
+    // FIXED_CLOCK is 2026-06-12T00:00:00.000Z.
+    const today = Date.parse('2026-06-12T10:00:00.000Z')
+    const todayLate = Date.parse('2026-06-12T23:59:00.000Z')
+    const yesterday = Date.parse('2026-06-11T22:00:00.000Z')
+    const events: CostChargedEvent[] = [
+      { tier: 'reasoning', dollars: 1.0, at: yesterday },
+      { tier: 'reasoning', dollars: 0.5, at: today },
+      { tier: 'critique', dollars: 0.25, at: todayLate },
+    ]
+    const cmds = makeInSessionCommands(makeInSessionDeps({ cost: makeFakeCost(events) }))
+
+    const day = await cmds.usage('day')
+    const session = await cmds.usage('session')
+
+    // 'day' keeps only the two charges dated 2026-06-12 (0.5 + 0.25).
+    expect(day.totalUsd).toBeCloseTo(0.75)
+    expect(day.byTier.reasoning).toBeCloseTo(0.5)
+    expect(day.byTier.critique).toBeCloseTo(0.25)
+    // 'session' still aggregates everything (1.0 + 0.5 + 0.25), so day != session.
+    expect(session.totalUsd).toBeCloseTo(1.75)
+    expect(day.totalUsd).not.toBeCloseTo(session.totalUsd)
+  })
+
+  // BUG-3 — a template-only .env (all empty KEY= values) must NOT be reported as
+  // already-present, so doctor's env.required-keys check still flags missing keys.
+  it('BUG-3: a template-only .env (all empty KEY= values) is not reported already-present by init', async () => {
+    // .env exists but carries only the empty template (KEY= for every key).
+    const templateEnv = REQUIRED_ENV_KEYS.map((k) => `${k}=`).join('\n') + '\n'
+    const seed = healthySeed()
+    seed['.env'] = templateEnv
+    const deps = healthyDeps({ fs: makeFakeFs(seed) })
+
+    const res = await makeOnboardingOps(deps).init({ nonInteractive: true })
+
+    const envOutcome = res.outcomes.find((o) => o.step === 'scaffold..env')
+    expect(envOutcome).toBeDefined()
+    // It must NOT be treated as already-present (which would hide missing keys).
+    expect(envOutcome?.result).not.toBe('already-present')
   })
 
   // AC-13-21 — /context reports files/tools/skills + sizes, no secret or full fact body.

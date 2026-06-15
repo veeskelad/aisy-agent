@@ -308,6 +308,17 @@ describe('AgentLoop', () => {
     expect(sessionLog.appendOrder).toContain('provider.exhausted')
   })
 
+  it('AC-01-8b: log entry payloadHash is sha256 (64 hex chars), not collision-prone djb2', async () => {
+    const sessionLog = makeSessionLogFake()
+    const loop = makeAgentLoop(makeDeps({ provider: makeAllDownProvider(), sessionLog }))
+    await loop.runTurn(makeTurnInput())
+
+    // sha256 → 64 lowercase hex chars; the old djb2 produced ≤ 8 hex chars.
+    for (const entry of sessionLog.entries) {
+      expect(entry.payloadHash).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
   it('AC-01-9: after all-providers-down halt, SessionLog.resume returns TurnState with next un-verified step; no completed step re-executes', async () => {
     const sessionLog = makeSessionLogFake({ status: 'in-progress', nextStepIndex: 1 })
     const exec = makeExecSpy()

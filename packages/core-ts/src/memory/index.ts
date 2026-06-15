@@ -246,16 +246,48 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
     d.exec('COMMIT')
   }
 
+  const reindexScoped = (d: Database.Database, ids: string[]): void => {
+    // Scoped reindex (§5.1, ADR-0030): re-sync ONLY the listed ids' FTS rows,
+    // still through the forget filter. A listed id that is tombstoned/forgotten
+    // is dropped from the index; a live one is re-inserted. Unlisted ids are
+    // left untouched.
+    const selectLive = d.prepare(
+      `SELECT rowid, text FROM facts WHERE id = ? AND ${LIVE_FILTER}`,
+    )
+    const findRowid = d.prepare('SELECT rowid FROM facts WHERE id = ?')
+    const delFts = d.prepare('DELETE FROM fts WHERE rowid = ?')
+    const insFts = d.prepare('INSERT INTO fts (rowid, text) VALUES (?, ?)')
+    d.exec('BEGIN')
+    try {
+      for (const id of ids) {
+        const known = findRowid.get(id) as { rowid: number } | undefined
+        if (!known) continue
+        delFts.run(known.rowid)
+        const live = selectLive.get(id) as { rowid: number; text: string } | undefined
+        if (live) insFts.run(live.rowid, live.text)
+      }
+      d.exec('COMMIT')
+    } catch (err) {
+      try { d.exec('ROLLBACK') } catch { /* preserve the original error */ }
+      throw err
+    }
+  }
+
   return {
     // READ PATH — filter applied in the SQL itself (§5.2)
     async search(query: string, opts?: { limit?: number }): Promise<RankedHit[]> {
       const d = openForRead()
       const chain = verifyForgetChain(d)
       if (!chain.ok) throw new ForgetListTamperError(chain.detail ?? 'hash chain break')
+      // Reduce each token to its FTS5-indexable content (letters/digits) FIRST,
+      // then drop tokens that are now empty, so a query of only quotes /
+      // whitespace / punctuation yields no MATCH terms and is caught by the
+      // guard below — never relying on FTS5 treating '""' as an empty query.
       const match = query
         .split(/\s+/)
+        .map(t => t.replace(/[^a-zA-Z0-9]+/g, ''))
         .filter(t => t.length > 0)
-        .map(t => `"${t.replace(/"/g, '')}"`)
+        .map(t => `"${t}"`)
         .join(' OR ')
       if (!match) return []
       const rows = d.prepare(
@@ -381,9 +413,12 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
     },
 
     // DERIVED-INDEX CONTRACT — any reindex routes through the choke point's
-    // filter, never around it (ADR-0030).
-    async reindex(_scope: 'all' | { ids: string[] }): Promise<void> {
-      refreshDerivedIndex(open())
+    // filter, never around it (ADR-0030). A scoped { ids } request reindexes
+    // only those ids; 'all' rebuilds the whole derived index.
+    async reindex(scope: 'all' | { ids: string[] }): Promise<void> {
+      const d = open()
+      if (scope === 'all') refreshDerivedIndex(d)
+      else reindexScoped(d, scope.ids)
     },
 
     async rebuildFromFiles(): Promise<void> {

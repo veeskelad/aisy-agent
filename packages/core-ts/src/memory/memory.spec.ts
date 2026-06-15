@@ -63,6 +63,17 @@ describe('search query sanitization', () => {
     const hits = await store.search('"""')
     expect(hits).toEqual([])
   })
+
+  it('a query of only quotes/whitespace/punctuation returns [] deterministically (not via an FTS5 quirk)', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+    await store.commit({ op: 'ADD', text: 'plain fact' }, { withinSession: false })
+    // Each of these collapses to no indexable token. The guard must catch them
+    // before any MATCH is built — never relying on FTS5 treating '""' as empty.
+    for (const q of ['"""', '" "', '""', '   ', '.,!', '()', '- :']) {
+      expect(await store.search(q)).toEqual([])
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -289,6 +300,33 @@ describe('AC-03-8: reindex re-applies forget invariant; bypass raises BypassErro
 
     const hits = await store.search('Tax ID')
     expect(hits.find(h => h.id === factId)).toBeUndefined()
+  })
+
+  it('AC-03-8: reindex({ ids }) honours the scope — only the listed ids are reindexed, others are left untouched', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    const a = await store.commit({ op: 'ADD', text: 'apple pie recipe' }, { withinSession: false })
+    const b = await store.commit({ op: 'ADD', text: 'banana split sundae' }, { withinSession: false })
+
+    // Simulate derived-index drift: drop BOTH facts from the FTS index directly.
+    const raw = new Database(deps.dbPath)
+    raw.exec('DELETE FROM fts')
+    raw.close()
+
+    // Scoped reindex of A only must restore A but NOT touch B.
+    await store.reindex({ ids: [a.factId!] })
+
+    const aHits = await store.search('apple')
+    expect(aHits.find(h => h.id === a.factId)).toBeTruthy()
+
+    const bHits = await store.search('banana')
+    expect(bHits.find(h => h.id === b.factId)).toBeUndefined()
+
+    // A subsequent reindex-all restores everything.
+    await store.reindex('all')
+    const bHitsAfterAll = await store.search('banana')
+    expect(bHitsAfterAll.find(h => h.id === b.factId)).toBeTruthy()
   })
 
   it('AC-03-8: a write attempted off the choke point raises BypassError', async () => {

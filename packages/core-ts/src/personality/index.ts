@@ -126,6 +126,18 @@ export function parseConstitution(raw: string): Constitution {
     )
   }
 
+  // Stable ids must be unique: a colliding id silently shadows an earlier
+  // principle (incl. vetoId resolution). Fail closed (§3, §5.1).
+  const seenIds = new Set<string>()
+  for (const p of principles) {
+    if (seenIds.has(p.id)) {
+      throw new ConstitutionError(
+        `ConstitutionError: duplicate principle id "${p.id}" in constitution.md — ids must be unique, no silent shadowing (§3)`,
+      )
+    }
+    seenIds.add(p.id)
+  }
+
   // Sorted ascending by precedence at parse time (§3); the model never sees an
   // unordered bag and cannot "choose" a different precedence (§5.1).
   principles.sort((a, b) => a.precedence - b.precedence)
@@ -380,6 +392,16 @@ export function makePersonality(deps: PersonalityDeps): Personality {
   }
   for (const [name, spec] of Object.entries(deps.modes ?? {})) {
     modeRegistry[name] = spec
+  }
+
+  // An explicit initialMode must name a registered register; an unknown one would
+  // start the session in a register that does not exist. Fail closed at
+  // construction (§5.1), consistent with the constitution/soul gates above. The
+  // implicit 'default' fallback (when initialMode is omitted) stays a safe default.
+  if (deps.initialMode !== undefined && modeRegistry[deps.initialMode] === undefined) {
+    throw new ConstitutionError(
+      `ConstitutionError: initialMode "${deps.initialMode}" is not a registered mode — fail closed at construction (§5.1)`,
+    )
   }
 
   let activeMode = deps.initialMode ?? 'default'

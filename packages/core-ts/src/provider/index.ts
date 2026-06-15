@@ -217,8 +217,15 @@ export function makeModelRouter(deps: ModelRouterDeps): ModelRouter {
       // Budget ceiling enforced in code BEFORE dispatch (Eng-12).
       const budget = budgets.get(req.taskId)
       if (budget) {
-        const projected = budget.tokensSpent + req.body.estimatedInputTokens
-        if (projected > budget.tokenCeiling || budget.dollarsSpent >= budget.dollarCeiling) {
+        // Both ceilings guard the SAME thing — the PROJECTED (post-call) total
+        // — so a call that *would* cross either ceiling is refused before it
+        // runs (spec 09 §4). The dollar side has no per-call dollar estimate, so
+        // it projects this call's cost from the realized rate ($/token so far)
+        // applied to the estimated input tokens, mirroring the token check.
+        const projectedTokens = budget.tokensSpent + req.body.estimatedInputTokens
+        const pricePerToken = budget.tokensSpent > 0 ? budget.dollarsSpent / budget.tokensSpent : 0
+        const projectedDollars = budget.dollarsSpent + req.body.estimatedInputTokens * pricePerToken
+        if (projectedTokens > budget.tokenCeiling || projectedDollars > budget.dollarCeiling) {
           emit({ type: 'budget.exceeded', taskId: req.taskId, budget })
           return { kind: 'budget_exceeded', budget }
         }

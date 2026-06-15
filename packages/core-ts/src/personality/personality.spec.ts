@@ -62,6 +62,15 @@ const CONSTITUTION_MULTI_VETO = `# Constitution
 [2] (veto) Tell the truth about what I did, what I declined, and what I am unsure of.
 `
 
+// Two principles whose first four word tokens are identical ("never-take-an-irreversible"),
+// so principleId() collides — the second would silently shadow the first.
+const CONSTITUTION_DUP_ID = `# Constitution
+
+[1] (veto) Never take an irreversible action without explicit human confirmation.
+
+[2] Never take an irreversible step that the principal did not request.
+`
+
 const FIXTURE_ROOT = mkdtempSync(join(tmpdir(), 'aisy-personality-'))
 
 function fixture(name: string, files: Record<string, string>): string {
@@ -135,6 +144,13 @@ describe('Component 08 — Personality', () => {
   it('AC-08-5: constitution.md with duplicate precedence throws ConstitutionError and session does not start', async () => {
     const loader = makePersonalityLoader()
     await expect(loader.load(FX.dupPrecedence)).rejects.toThrow('ConstitutionError')
+  })
+
+  it('AC-08-5b: constitution.md with two principles that collide to the same id throws ConstitutionError (no silent shadowing)', () => {
+    // Both principles' first four word tokens are "never take an irreversible" ->
+    // principleId() === 'never-take-an-irreversible'. A colliding id silently shadows
+    // the earlier principle (incl. vetoId resolution); fail closed instead.
+    expect(() => parseConstitution(CONSTITUTION_DUP_ID)).toThrow('ConstitutionError')
   })
 
   it('AC-08-6: constitution.md with zero or multiple veto principles throws ConstitutionError', async () => {
@@ -263,6 +279,21 @@ describe('Component 08 — Personality', () => {
     expect(personality.checkVeto({ id: 'x', irreversible: true, description: 'destroy data' }).allowed).toBe(false)
     // A tone-only register from SOUL.md is accepted (§5.5):
     expect(personality.setMode('terse')).toEqual({ ok: true, mode: 'terse' })
+  })
+
+  it('AC-08-10b: makePersonality() with an initialMode not in the mode registry throws ConstitutionError (fail-closed at construction)', () => {
+    // An initialMode that names no registered register would put the personality
+    // into a register that does not exist; fail closed at construction, consistent
+    // with the other invalid-config gates (§5.1).
+    expect(() =>
+      makePersonality({ constitution: CONSTITUTION_MD, soul: SOUL_MD, initialMode: 'no-such-mode' }),
+    ).toThrow('ConstitutionError')
+    // A registered SOUL.md register is accepted as the initial mode.
+    expect(() =>
+      makePersonality({ constitution: CONSTITUTION_MD, soul: SOUL_MD, initialMode: 'terse' }),
+    ).not.toThrow()
+    // The implicit default ('default') remains a safe default when omitted.
+    expect(() => makePersonality({ constitution: CONSTITUTION_MD, soul: SOUL_MD })).not.toThrow()
   })
 
   it('AC-08-11: constitution bytes in prefix segment-1 are unchanged after a conversation turn', async () => {

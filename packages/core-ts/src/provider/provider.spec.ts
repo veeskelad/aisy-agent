@@ -417,6 +417,46 @@ describe('AC-09-11: Task halted on budget_exceeded; dispatch blocked until ceili
 })
 
 // ---------------------------------------------------------------------------
+// AC-09-9b: dollar ceiling is checked against the PROJECTED (post-call) total,
+// consistently with the token ceiling (regression: the dollar check used the
+// pre-call total + `>=` while the token check used the projected total + `>`,
+// so a call that fits pre-call but would cross the dollar ceiling slipped
+// through — spec 09 §4: "a call that would cross either ceiling is refused
+// before dispatch")
+// ---------------------------------------------------------------------------
+
+describe('AC-09-9b: dollar ceiling refuses a call that crosses it only via the projected total', () => {
+  it('AC-09-9b: a call that fits the dollar ceiling pre-call but would exceed it post-call is refused; adapter never called', async () => {
+    const adapter = makeFakeProviderAdapter(PROVIDERS.deepseekFlash)
+    const events: RouterEvent[] = []
+    const budgets = new Map<string, TaskBudget>([
+      ['task-dollar-proj', {
+        taskId:        'task-dollar-proj',
+        // Token ceiling is far away — only the DOLLAR ceiling must trip here,
+        // and only via the projected (post-call) total.
+        tokenCeiling:  1_000_000,
+        dollarCeiling: 1.0,
+        tokensSpent:   1_000,
+        dollarsSpent:  0.9,   // fits pre-call (0.9 < 1.0) …
+      }],
+    ])
+    const router = makeModelRouter({ adapters: [adapter], budgets, emitEvent: (e) => events.push(e) })
+
+    // … but this call's estimated input projects past the ceiling:
+    // realized rate 0.9/1000 = 0.0009 $/tok × 200 tok = 0.18 → projected 1.08 > 1.0.
+    const result = await router.dispatch(makeReq({
+      taskId: 'task-dollar-proj',
+      body: { raw: new Uint8Array([7, 8, 9]), estimatedInputTokens: 200 },
+    }))
+
+    expect((result as DispatchError).kind).toBe('budget_exceeded')
+    expect(events.find(e => e.type === 'budget.exceeded')).toBeDefined()
+    // Same guarantee the token ceiling gives: refused BEFORE any adapter call.
+    expect(adapter.callCount).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // AC-09-12: Judge collision → judge_collision_held; judge adapter never called
 // ---------------------------------------------------------------------------
 

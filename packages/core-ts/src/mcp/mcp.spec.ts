@@ -138,6 +138,28 @@ describe('MCP component (07)', () => {
     }
   })
 
+  it('AC-07-5b: DiffCard.descriptorDiff carries BOTH the previous (pinned) and the new (live) descriptors for operator review', async () => {
+    // Rug-pull review needs old-vs-new, not just the live set. The entry stores
+    // the human-approved descriptors that produced descriptorHash; the diff card
+    // must surface both so the operator can see exactly what changed.
+    const mutatedTool: RawDescriptor = { ...TOOL_A, description: 'MUTATED description' }
+    const deps = makeDeps({
+      allowlist: { servers: [{ ...ENTRY_FULL, descriptors: [TOOL_A] }] },
+      fetchDescriptors: vi.fn(async () => [mutatedTool]),
+    })
+    const result = await makeMCPManager(deps).connect('tracker')
+
+    expect(result.kind).toBe('disabled')
+    if (result.kind === 'disabled') {
+      const diff = result.diffCard.descriptorDiff
+      expect(diff.previous).toEqual([TOOL_A])           // old (pinned) descriptors
+      expect(diff.live).toEqual([mutatedTool])          // new (live) descriptors
+      // The operator can see the change: old description vs new description.
+      expect(diff.previous[0]!.description).toBe('Search the tracker')
+      expect(diff.live[0]!.description).toBe('MUTATED description')
+    }
+  })
+
   it('AC-07-6: mutating only inputSchema (description unchanged) also triggers disabled:hash-mismatch', async () => {
     const mutatedTool: RawDescriptor = {
       ...TOOL_A,
@@ -243,6 +265,27 @@ describe('MCP component (07)', () => {
       const line = result.menu.find(l => l.name === 'tracker.search')
       expect(line).toBeUndefined()   // omitted, not fallen-back to raw description
     }
+  })
+
+  it('AC-07-11b: summary==null and generator fails → mcp.summary_quarantined still emitted (failure is visible to Observability)', async () => {
+    const entryNullSummary: McpServerEntry = {
+      ...ENTRY_FULL,
+      tools: [{ tool: 'search', tier: 0, outboundSink: false, summary: null }],
+    }
+    const emit = vi.fn()
+    const deps = makeDeps({
+      allowlist: { servers: [entryNullSummary] },
+      generateSummary: vi.fn(async () => null),   // generator failure
+      emit,
+    })
+    const result = await makeMCPManager(deps).connect('tracker')
+
+    expect(result.kind).toBe('connected')
+    // Even though the tool is omitted from the menu, the quarantine attempt
+    // must surface to Observability — otherwise a silent generator failure is
+    // invisible to the operator.
+    const events = (emit.mock.calls as [McpEvent][]).map(c => c[0])
+    expect(events).toContain('mcp.summary_quarantined')
   })
 
   // ── Tier & read/write are policy-sourced ─────────────────────────────────

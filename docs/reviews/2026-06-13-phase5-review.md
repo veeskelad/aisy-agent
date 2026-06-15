@@ -349,3 +349,31 @@ All fixed with a named regression test, verified green, `tsc` clean:
 - **B2 · real bug, lower blast-radius (~16):** agent-loop djb2→sha256 payloadHash + per-session `seq`; gateway expiry-path test gap; mcp `DiffCard` old-vs-new + silent quarantine-on-null; memory scoped-reindex honoured + all-quotes guard; nightly `draftSkills` result discarded + stale closure state; provider budget operator inconsistency + injectable `prefixHashes` + `queueRecord` replayability; safety nested-trifecta separator; onboarding pre-seed redact no-op + `/usage` "day" period + template-only `.env` detection; tools `compress()` sync-in-async + TOCTOU; personality `initialMode`/`principleId` validation. *Scheduled for the v0.2 hardening pass with regression tests.*
 - **B3 · cleanup / DRY (~12):** the duplicated `sha256`/`createHash`/`globToRegExp` helpers across components (consolidate into one shared util); `SECRET_SHAPES` vs `BUILTIN_SECRET_PATTERNS` convergence; inline `LIVE_FILTER`; redundant `checkDegradation` first check; mergeable `scaffoldFile` branches; `validate()` fire-and-forget boilerplate. *Low risk, no behavioural change; batch when the shared-util module lands.*
 - **By design (1):** personality SHA-256 domain-separator was **not** changed in this pass — it would alter persisted identity hashes and risk the anti-degradation/identity tests; it moves to B1 (needs a hash-migration plan), tracked but deliberately untouched here.
+
+### Update — 2026-06-15 (B2 hardening wave)
+
+The B2 bucket above is now **mostly cleared**. Fixed (each verified real + a
+regression test; 6 parallel per-component subagents, verify-first, then central
+`tsc` + full-suite check): agent-loop **djb2→sha256 payloadHash**; memory
+**scoped-reindex** + **all-quotes guard**; provider **budget-operator
+consistency** (both ceilings guard the projected total); onboarding
+**redact-before-seed** + **/usage 'day'** + **template-only .env**; tools
+**compress() sync→async** + **verify/exec TOCTOU**; mcp **DiffCard old-vs-new** +
+**quarantine-on-null emit**; personality **initialMode** + **principleId**
+validation.
+
+Two notes from the wave:
+- **Residual bug the wave itself surfaced:** the tools `compress()` async fix was
+  *incomplete* — the TOCTOU fix had re-introduced a synchronous `verifyBinary()`
+  (`execFileSync --version`) on the compress path, so the loop still froze on a
+  cold/slow spawn. Caught by a non-blocking regression test; fixed by making the
+  version probe async too. The regression test was rewritten to assert
+  non-blocking **deterministically via microtask ordering** (a wall-clock/tick
+  timer flaked on cold-start vitest workers — 0 ticks over a descheduled ~2 s).
+- **Reclassified to B1:** agent-loop **per-session `seq`** — `LogEntry` carries no
+  `sessionId`, so per-session monotonicity isn't well-defined at the log contract
+  level; whether to add `sessionId` + make `seq` per-session is a design call.
+
+Remaining deferred after B2: **B1 (~13, incl. seq + personality domain-sep)** and
+**B3 (~12, DRY)**. Suite: **510 green, `tsc` clean, 0 errors**, flake-free over 15
+consecutive runs.

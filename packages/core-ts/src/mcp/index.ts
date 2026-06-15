@@ -22,6 +22,7 @@ export type {
   ResolvedMcpCall,
   UntrustedResultSpan,
   DiffCard,
+  DescriptorDiff,
   McpClient,
   McpAllowlistConfig,
   McpDescriptorHash,
@@ -135,11 +136,13 @@ export function makeMCPManager(deps: McpManagerDeps): McpManager {
         const liveHash = canonicalDescriptorHash(live)
         if (liveHash !== entry.descriptorHash) {
           // Rug-pull defense: server disabled until an operator approves the diff.
+          // The card carries BOTH the previously-approved (pinned) descriptors and
+          // the new (live) set, so the operator can see exactly what changed.
           const diffCard = {
             server: name,
             oldHash: entry.descriptorHash,
             newHash: liveHash,
-            descriptorDiff: JSON.stringify(sortDeep(live), null, 2),
+            descriptorDiff: { previous: entry.descriptors ?? [], live },
           }
           deps.emit('mcp.disabled_hash_mismatch', { server: name })
           deps.emit('mcp.diff_card_emitted', diffCard)
@@ -153,8 +156,10 @@ export function makeMCPManager(deps: McpManagerDeps): McpManager {
           let summary = policy.summary
           if (summary === null) {
             const descriptor = live.find(t => t.name === policy.tool)
+            // Entering the quarantined-generation path is observable regardless of
+            // outcome — a silent generator failure must still reach Observability.
+            deps.emit('mcp.summary_quarantined', { server: name, tool: policy.tool })
             summary = descriptor ? await deps.generateSummary(descriptor) : null
-            if (summary !== null) deps.emit('mcp.summary_quarantined', { server: name, tool: policy.tool })
           }
           if (summary === null) continue
           menu.push({

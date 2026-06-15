@@ -14,6 +14,7 @@ export interface McpServerEntry {
   command?: string[]        // stdio only; pinned binary
   pin: string               // exact version@digest; REQUIRED — fail-closed without it
   descriptorHash: string    // sha256 from first human approval; REQUIRED — fail-closed without it
+  descriptors?: RawDescriptor[] // the human-approved descriptor set that produced descriptorHash; surfaced in the rug-pull DiffCard as the "previous" side
   tokenEnv: string | null   // minimal-scope token env name; null = local read-only server
   tools: McpToolPolicy[]    // per-tool tier + read/write, human-authored
 }
@@ -86,7 +87,15 @@ export interface DiffCard {
   server: string
   oldHash: string
   newHash: string
-  descriptorDiff: string    // textual diff of old vs new descriptors, for human review
+  descriptorDiff: DescriptorDiff   // old (pinned) vs new (live) descriptors, for human review
+}
+
+/** Old-vs-new descriptor pair shown to the operator on a rug-pull (hash mismatch).
+ *  `previous` is the human-approved set stored in the allowlist entry (empty if none was recorded);
+ *  `live` is the set just fetched from the server. */
+export interface DescriptorDiff {
+  previous: RawDescriptor[]
+  live: RawDescriptor[]
 }
 
 // ── Client interface ──────────────────────────────────────────────────────────

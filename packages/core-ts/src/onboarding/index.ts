@@ -125,6 +125,18 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     const force = opts.force === true
     let failed = false
 
+    // Seed the redactor BEFORE any redact() on a failure detail. The vault is
+    // only persisted later (step [4], gated on success), so until then redact()
+    // over deps.vault.secretValues() would be a guaranteed no-op. Here we mask
+    // against the env secret VALUES directly so a rejection detail can never
+    // echo a secret, regardless of validation outcome (CSO-M3, AC-13-4/5).
+    const envSecretValues = new Set<string>()
+    for (const key of REQUIRED_ENV_KEYS) {
+      const value = envValueOf(key)
+      if (value.length > 0) envSecretValues.add(value)
+    }
+    const redactInit = (s: string): string => redactWith(envSecretValues, s)
+
     // [1] Detect prerequisites — fail-closed with an actionable message (§7).
     for (const tool of ['node', 'pnpm', 'docker'] as const) {
       const v = deps.prereqs.version(tool)
@@ -147,7 +159,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
         outcomes.push({
           step: `validate.provider.${tier}`,
           result: 'failed',
-          detail: redact(`${tier}-tier key rejected (HTTP ${ping.httpStatus ?? '???'})`),
+          detail: redactInit(`${tier}-tier key rejected (HTTP ${ping.httpStatus ?? '???'})`),
         })
         failed = true
       }
@@ -161,7 +173,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
         outcomes.push({
           step: 'validate.telegram-token',
           result: 'failed',
-          detail: redact(`Telegram token rejected (HTTP ${me.httpStatus ?? '???'})`),
+          detail: redactInit(`Telegram token rejected (HTTP ${me.httpStatus ?? '???'})`),
         })
         failed = true
       }
@@ -170,12 +182,19 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // [3] Scaffold files — only if absent (or populated→skip unless --force).
     const scaffoldFile = (path: string): void => {
       const present = deps.fs.exists(path)
-      const populated = present && deps.fs.isPopulated(path)
+      let populated = present && deps.fs.isPopulated(path)
+      // A template-only .env (every required key has an empty value) is NOT a
+      // real config: it must not be reported already-present, or doctor's
+      // env.required-keys check is silently masked. Re-scaffold so the operator
+      // gets a fresh template and the missing values are surfaced (AC-13-9).
+      if (present && populated && path === '.env' && parseEnvBody(deps.fs.read(path)).size === 0) {
+        populated = false
+      }
       if (present && populated && !force) {
         outcomes.push({ step: `scaffold.${path}`, result: 'already-present' })
         return
       }
-      if (present && !populated && !force) {
+      if (present && !populated && path !== '.env' && !force) {
         // present-but-empty (e.g. a crash mid-write) — leave it, treat as present.
         outcomes.push({ step: `scaffold.${path}`, result: 'already-present' })
         return
@@ -557,8 +576,14 @@ export function makeInSessionCommands(deps: InSessionDeps): InSessionCommands {
       // The "turn" bucket is the single most recent charge.
       return events.length > 0 ? [events[events.length - 1] as CostChargedEvent] : []
     }
-    // session/day both aggregate the full in-session event list (the journal
-    // only holds the current session's events).
+    if (period === 'day') {
+      // "day" filters to charges dated on the current calendar day (UTC),
+      // sourced from the injected clock so it stays deterministic in tests.
+      const today = deps.clock.nowIso().slice(0, 10) // YYYY-MM-DD
+      return events.filter((e) => new Date(e.at).toISOString().slice(0, 10) === today)
+    }
+    // "session" aggregates the full in-session event list (the journal only
+    // holds the current session's events).
     return events
   }
 
