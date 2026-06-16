@@ -127,10 +127,13 @@ const gateway = makeGateway({
   isSafetyAvailable: () => true,
 })
 
+const budgetUsd = Number(process.env['AISY_BUDGET_USD'] ?? '0') || 0
 const bot = makeTelegramBot({
   token,
   allowedChatId,
   gateway,
+  model,
+  budgetUsd,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
     makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
 })

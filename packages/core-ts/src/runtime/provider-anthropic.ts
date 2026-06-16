@@ -90,9 +90,31 @@ interface AnthropicContentBlock {
   input?: Record<string, unknown>
 }
 
-/** Parse an Anthropic Messages response body into a ModelResponse. */
-export function parseResponse(body: unknown): ModelResponse {
-  const b = (body && typeof body === 'object' ? body : {}) as { content?: AnthropicContentBlock[] }
+export interface ModelPrice {
+  /** USD per million input tokens. */
+  inPerMtok: number
+  /** USD per million output tokens. */
+  outPerMtok: number
+}
+
+/** Rough public price sheet (USD / Mtok). Unknown models → no dollar estimate. */
+const PRICES: Record<string, ModelPrice> = {
+  'claude-opus-4-8': { inPerMtok: 15, outPerMtok: 75 },
+  'claude-sonnet-4-6': { inPerMtok: 3, outPerMtok: 15 },
+  'claude-haiku-4-5-20251001': { inPerMtok: 1, outPerMtok: 5 },
+}
+
+export function priceFor(model: string): ModelPrice | undefined {
+  return PRICES[model]
+}
+
+/** Parse an Anthropic Messages response body into a ModelResponse, costing usage
+ *  against `price` when provided. */
+export function parseResponse(body: unknown, price?: ModelPrice): ModelResponse {
+  const b = (body && typeof body === 'object' ? body : {}) as {
+    content?: AnthropicContentBlock[]
+    usage?: { input_tokens?: number; output_tokens?: number }
+  }
   const blocks = Array.isArray(b.content) ? b.content : []
   const replyParts: string[] = []
   const toolCalls: ToolCall[] = []
@@ -104,7 +126,20 @@ export function parseResponse(body: unknown): ModelResponse {
     }
   }
   const reply = replyParts.join('')
-  return toolCalls.length > 0 ? { reply, toolCalls } : { reply }
+
+  let usage: ModelResponse['usage']
+  if (b.usage) {
+    const inputTokens = b.usage.input_tokens ?? 0
+    const outputTokens = b.usage.output_tokens ?? 0
+    const dollars = price ? (inputTokens / 1e6) * price.inPerMtok + (outputTokens / 1e6) * price.outPerMtok : 0
+    usage = { inputTokens, outputTokens, dollars }
+  }
+
+  return {
+    reply,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(usage ? { usage } : {}),
+  }
 }
 
 export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdapter {
@@ -148,7 +183,7 @@ export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdap
       if (res.status >= 400) throw new AnthropicError('server-error', `Anthropic client error ${res.status}`)
 
       const body = (await res.json()) as unknown
-      return parseResponse(body)
+      return parseResponse(body, priceFor(deps.model))
     },
   }
 }

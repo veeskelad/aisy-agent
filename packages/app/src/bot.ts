@@ -28,6 +28,7 @@ import {
   decodeCallback,
   renderResolved,
   resolveTap,
+  renderEvent,
   fitBody,
   type CardCallback,
   type CardContext,
@@ -41,6 +42,10 @@ export interface TelegramBotDeps {
   gateway: Gateway
   /** Build the runner given the bot-owned approval port (closes the loop). */
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => AgentRunner
+  /** Model id shown in the cost summary. */
+  model: string
+  /** Session budget (USD) for the cost bar; 0 ⇒ no bar fill. */
+  budgetUsd?: number
   now?: () => string
   /** Debounce window for coalescing a rapid message burst. Default 1200ms. */
   debounceMs?: number
@@ -86,6 +91,8 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
   const steer = new SteerQueue()
   // A Tier-3 card awaiting a step-up code typed as the next message.
   let pendingStepUp: { cb: CardCallback; card: PendingCard } | null = null
+  // A reply held by the outbound lockout, awaiting an allow/block tap.
+  let pendingOutbound: { reply: string; messageId: number } | null = null
 
   // Single-operator allowlist: silently drop anything off the allowed chat.
   bot.use(async (ctx, next) => {
@@ -133,6 +140,38 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     }
   }
 
+  const sendCostSummary = async (usage: { inputTokens: number; outputTokens: number; dollars: number }): Promise<void> => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId,
+      tokensIn: usage.inputTokens,
+      tokensOut: usage.outputTokens,
+      dollars: usage.dollars,
+      limitUsd: deps.budgetUsd ?? 0,
+      model: deps.model,
+    })
+    if (msg) await bot.api.sendMessage(deps.allowedChatId, msg.html, { parse_mode: 'HTML' })
+  }
+
+  // Outbound lockout: the turn ran with untrusted context, so the reply is held
+  // until the operator allows it (ADR-0048; tool-level narrowing already applied).
+  const presentOutboundLockout = async (reply: string): Promise<void> => {
+    const msg = renderEvent({
+      kind: 'outbound.locked',
+      sources: ['untrusted-контент в контексте задачи'],
+      preview: reply.slice(0, 200),
+    })
+    if (!msg) {
+      await sendReply(reply)
+      return
+    }
+    const sent = await bot.api.sendMessage(deps.allowedChatId, msg.html, {
+      parse_mode: 'HTML',
+      ...(msg.buttons ? { reply_markup: toInlineKeyboard(msg.buttons) } : {}),
+    })
+    pendingOutbound = { reply, messageId: sent.message_id }
+  }
+
   const runTurn = async (spans: { text: string; provenance: Provenance }[]): Promise<void> => {
     agentState = 'running'
     try {
@@ -140,7 +179,12 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
         sessionId,
         spans: spans.map((s) => ({ role: 'user', provenance: s.provenance, text: s.text })),
       })
-      await sendReply(result.reply)
+      if (result.narrowed === true) {
+        await presentOutboundLockout(result.reply)
+      } else {
+        await sendReply(result.reply)
+      }
+      if (result.usage) await sendCostSummary(result.usage)
     } finally {
       agentState = 'idle'
       // Drain mid-turn steer input (newest-first) and run it as the next turn.
@@ -199,8 +243,21 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
 
   // --- approval card taps ---
   bot.on('callback_query:data', async (ctx) => {
-    const cb = decodeCallback(ctx.callbackQuery.data)
+    const data = ctx.callbackQuery.data
     await ctx.answerCallbackQuery()
+
+    // Outbound lockout decision (event-bridge callback, not a card).
+    if (data === 'outbound:allow' || data === 'outbound:block') {
+      const held = pendingOutbound
+      pendingOutbound = null
+      if (!held) return
+      const verdict = data === 'outbound:allow' ? '✅ Вывод разрешён' : '❌ Вывод заблокирован'
+      await bot.api.editMessageText(deps.allowedChatId, held.messageId, verdict)
+      if (data === 'outbound:allow') await sendReply(held.reply)
+      return
+    }
+
+    const cb = decodeCallback(data)
     if (!cb) return
     const card = pending.get(cb.cardId)
     if (!card) return

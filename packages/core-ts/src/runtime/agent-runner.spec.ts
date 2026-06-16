@@ -91,6 +91,24 @@ describe('makeAgentRunner.handle', () => {
     expect(s.executed).toHaveLength(0)
   })
 
+  it('surfaces narrowed=true and accumulated usage in the TurnResult', async () => {
+    const s = setup({
+      responses: [{ reply: 'ok', usage: { inputTokens: 100, outputTokens: 20, dollars: 0.01 } }],
+    })
+    const res = await s.runner.handle({
+      sessionId: 's1',
+      spans: [{ role: 'user', provenance: 'untrusted', text: 'forwarded' }],
+    })
+    expect(res.narrowed).toBe(true)
+    expect(res.usage).toEqual({ inputTokens: 100, outputTokens: 20, dollars: 0.01 })
+  })
+
+  it('reports narrowed=false for a clean operator turn', async () => {
+    const s = setup({ responses: [{ reply: 'hi' }] })
+    const res = await s.runner.handle(turn())
+    expect(res.narrowed).toBe(false)
+  })
+
   it('a session grant suppresses the second cards: approve once, execute twice', async () => {
     const s = setup({
       responses: [

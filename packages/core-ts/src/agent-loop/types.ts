@@ -72,6 +72,13 @@ export type TurnState =
   | { status: "halted"; reason: "loop-guardian" | "all-providers-down" | "plan-lint-failed" | "cap-exceeded" }
   | { status: "in-progress"; nextStepIndex: number }
 
+/** Token + dollar usage for a turn (or a single model call). */
+export interface TurnUsage {
+  inputTokens: number
+  outputTokens: number
+  dollars: number
+}
+
 export interface TurnResult {
   reply: string
   state: "ok" | "awaiting-clarification" | "awaiting-approval" | "halted"
@@ -79,6 +86,10 @@ export interface TurnResult {
   /** On state "awaiting-approval", the hash of the pending Tier-3 plan; the caller must
    *  echo it back as approvalToken so a swapped plan cannot reuse a prior token (§5, AC-01-17). */
   planHash?: string
+  /** True if the turn's context held an untrusted span (outbound is locked). */
+  narrowed?: boolean
+  /** Accumulated provider usage for the turn (when the adapter reports it). */
+  usage?: TurnUsage
 }
 
 export interface AgentLoop {
@@ -111,6 +122,8 @@ export interface ModelResponse {
   interpretationCount?: number
   /** Inline plan emitted by the model; linted (R1–R5) before any dispatch. */
   plan?: Plan
+  /** Provider usage for this call, when the adapter reports it. */
+  usage?: TurnUsage
 }
 
 export interface ProviderError extends Error {

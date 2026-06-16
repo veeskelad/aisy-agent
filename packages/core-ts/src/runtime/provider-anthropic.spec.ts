@@ -88,6 +88,23 @@ describe('parseResponse', () => {
     expect(parseResponse({}).reply).toBe('')
     expect(parseResponse(null).reply).toBe('')
   })
+
+  it('extracts usage and costs it against the price sheet', () => {
+    const r = parseResponse(
+      { content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 } },
+      { inPerMtok: 3, outPerMtok: 15 },
+    )
+    expect(r.usage).toEqual({ inputTokens: 1_000_000, outputTokens: 1_000_000, dollars: 18 })
+  })
+
+  it('reports usage with zero dollars when no price is given', () => {
+    const r = parseResponse({ content: [], usage: { input_tokens: 10, output_tokens: 5 } })
+    expect(r.usage).toEqual({ inputTokens: 10, outputTokens: 5, dollars: 0 })
+  })
+
+  it('omits usage when the body has none', () => {
+    expect(parseResponse({ content: [] }).usage).toBeUndefined()
+  })
 })
 
 describe('makeAnthropicProvider.complete', () => {

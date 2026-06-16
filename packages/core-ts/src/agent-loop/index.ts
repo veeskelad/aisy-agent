@@ -220,15 +220,26 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         }
       }
 
+      // Accumulate provider usage across (possibly multiple) model calls.
+      let usageIn = 0
+      let usageOut = 0
+      let usageDollars = 0
+
       const callModel = async (): Promise<ModelResponse> => {
         // Eng-7 durability: the recorded intent is fsync'd BEFORE the dispatch.
         log('step.intent', { kind: 'model-call' })
         try {
-          return await deps.provider.complete({
+          const r = await deps.provider.complete({
             sessionId: input.sessionId,
             prefixBytes: snapshot.prefixBytes,
             spans: input.spans,
           })
+          if (r.usage) {
+            usageIn += r.usage.inputTokens
+            usageOut += r.usage.outputTokens
+            usageDollars += r.usage.dollars
+          }
+          return r
         } catch (err) {
           if ((err as Partial<ProviderError>).kind === 'all-exhausted') {
             log('provider.exhausted', {})
@@ -373,7 +384,14 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         }
 
         log('turn.end', { state: 'ok' })
-        return { reply: response.reply, state: 'ok' }
+        return {
+          reply: response.reply,
+          state: 'ok',
+          narrowed: s.narrowed,
+          ...(usageIn > 0 || usageOut > 0
+            ? { usage: { inputTokens: usageIn, outputTokens: usageOut, dollars: usageDollars } }
+            : {}),
+        }
       } catch (err) {
         if (err instanceof Halt) {
           log('turn.end', { state: 'halted', haltReason: err.reason })
