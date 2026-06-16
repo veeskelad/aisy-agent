@@ -86,6 +86,7 @@ export type { BudgetTracker } from './runtime/budget.js'
 export { makeMemoryStore } from './memory/index.js'
 export type { Memory, MemoryStore, MemoryStoreDeps, RankedHit, MemoryFact } from './memory/index.js'
 export { makeMemoryPort, makeMemorySearch } from './runtime/memory-adapter.js'
+export { makeJsonlSessionLog } from './runtime/session-log.js'
 
 // --- CLI (the app's unified `aisy` reuses these for init/doctor/diagnostics) ---
 export { makeNodeOnboardingOps, harnessVersion } from './runtime/onboarding-node.js'
