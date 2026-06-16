@@ -80,6 +80,9 @@ export type {
 export { makeSettingsStore, DEFAULT_SETTINGS } from './runtime/settings.js'
 export type { SettingsStore, Settings, SettingsPersistencePort } from './runtime/settings.js'
 
+export { makeBudgetTracker } from './runtime/budget.js'
+export type { BudgetTracker } from './runtime/budget.js'
+
 // --- CLI (the app's unified `aisy` reuses these for init/doctor/diagnostics) ---
 export { makeNodeOnboardingOps, harnessVersion } from './runtime/onboarding-node.js'
 export { runCli } from './cli/index.js'

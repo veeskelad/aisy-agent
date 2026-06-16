@@ -53,6 +53,7 @@ in this index so cross-references stay stable.
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Proposed | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Proposed | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0050 | Accepted  | 2026-06-16 | [Multi-Provider Catalog, Per-Agent Budget & On-Demand Spend](./2026-06-16-multi-provider-catalog-and-per-agent-budget.md) | providers, runtime, telegram, cost |
 | ADR-0049 | Accepted  | 2026-06-16 | [Interactive Onboarding + Terminal Telegram Pairing](./2026-06-16-interactive-onboarding-and-telegram-pairing.md) | onboarding, telegram, security, cli |
 | ADR-0048 | Accepted  | 2026-06-16 | [Runtime Composition Layer + @aisy/app Package](./2026-06-16-runtime-composition-and-app-package.md) | architecture, packaging, runtime, telegram |
 | ADR-0047 | Accepted  | 2026-06-16 | [Scoped Approval Grants — once / session / always](./2026-06-16-scoped-approval-grants.md) | safety, gateway, telegram, approvals |

@@ -12,6 +12,7 @@ import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy'
 import type {
   AgentRunner,
   ApprovalDecision,
+  BudgetTracker,
   Gateway,
   GrantScope,
   PendingAction,
@@ -54,6 +55,9 @@ export interface TelegramBotDeps {
   settings?: SettingsStore
   /** Spend ledger — fed from each turn's usage; viewed on demand in 📡 Монитор. */
   spend?: SpendStore
+  /** Per-agent budget tracker; when settings.budgetEnabled, a turn is refused
+   *  once the main agent is over its cap (ADR-0050 Phase 3). */
+  budget?: BudgetTracker
   now?: () => string
   /** Debounce window for coalescing a rapid message burst. Default 1200ms. */
   debounceMs?: number
@@ -218,6 +222,21 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
   }
 
   const runTurn = async (spans: { text: string; provenance: Provenance }[]): Promise<void> => {
+    // Budget gate (ADR-0050 Phase 3): refuse a new turn when enforcement is on
+    // and the main agent is over its cap. Turn-level; mid-turn enforcement lands
+    // with the delegation runtime.
+    if (deps.settings?.get().budgetEnabled === true && deps.budget?.over('main') === true) {
+      await sendPanel(
+        renderEvent({
+          kind: 'budget.capped',
+          limitUsd: deps.budget.capFor('main'),
+          spentUsd: deps.budget.spentFor('main'),
+          stepsDone: 0,
+          stepsTotal: 0,
+        }),
+      )
+      return
+    }
     agentState = 'running'
     try {
       const result = await runner.handle({
@@ -313,6 +332,16 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     }
     if (data === 'spend:refresh') {
       await sendSpendReport()
+      return
+    }
+    // Budget alert actions: details → spend report; resume → lift enforcement.
+    if (data === 'budget:details') {
+      await sendSpendReport()
+      return
+    }
+    if (data === 'budget:resume') {
+      deps.settings?.set('budgetEnabled', false)
+      await bot.api.sendMessage(deps.allowedChatId, '▶️ Бюджет-гейт снят. Снова включить — в ⚙️ Настройках.')
       return
     }
 

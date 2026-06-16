@@ -16,6 +16,12 @@ describe('renderEvent', () => {
     expect(msg.buttons?.[0]?.map((b) => b.data)).toEqual(['budget:details', 'budget:resume'])
   })
 
+  it('budget.capped omits the steps line for a pre-turn refusal (stepsTotal 0)', () => {
+    const msg = renderEvent({ kind: 'budget.capped', limitUsd: 2, spentUsd: 2.5, stepsDone: 0, stepsTotal: 0 })!
+    expect(msg.html).toContain('потрачено $2.50')
+    expect(msg.html).not.toContain('шагов')
+  })
+
   it('cost.summary renders a progress bar and percentage', () => {
     const msg = renderEvent({
       kind: 'cost.summary',

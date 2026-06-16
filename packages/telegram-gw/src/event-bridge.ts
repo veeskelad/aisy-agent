@@ -42,16 +42,20 @@ function btn(text: string, data: string): InlineButton {
 
 export function renderEvent(ev: UiEvent): BotMessage | null {
   switch (ev.kind) {
-    case 'budget.capped':
+    case 'budget.capped': {
+      const lines = [
+        '⛔ <b>Бюджет исчерпан</b>',
+        '',
+        `Агент остановлен — достигнут лимит $${ev.limitUsd.toFixed(2)} (потрачено $${ev.spentUsd.toFixed(2)}).`,
+      ]
+      // The steps line only applies to a mid-turn halt; a pre-turn refusal
+      // (stepsTotal 0) omits it.
+      if (ev.stepsTotal > 0) lines.push(`Выполнено: ${ev.stepsDone} из ${ev.stepsTotal} шагов.`)
       return {
-        html: [
-          '⛔ <b>Бюджет исчерпан</b>',
-          '',
-          `Агент остановлен — достигнут лимит $${ev.limitUsd.toFixed(2)}.`,
-          `Выполнено: ${ev.stepsDone} из ${ev.stepsTotal} шагов.`,
-        ].join('\n'),
+        html: lines.join('\n'),
         buttons: [[btn('📊 Детали', 'budget:details'), btn('▶️ Продолжить', 'budget:resume')]],
       }
+    }
 
     case 'cost.summary': {
       const frac = ev.limitUsd > 0 ? ev.dollars / ev.limitUsd : 0

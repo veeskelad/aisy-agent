@@ -23,6 +23,7 @@ import {
   findProvider,
   makeSpendStore,
   makeSettingsStore,
+  makeBudgetTracker,
   runCli,
   harnessVersion,
   VoiceUnavailable,
@@ -80,6 +81,9 @@ interface ProviderSel {
 interface ProvidersConfig {
   default?: ProviderSel
   tiers?: { reasoning: ProviderSel; critique: ProviderSel; routine: ProviderSel }
+  /** Per-(sub)agent overrides + budgets (ADR-0050 Phase 3). The main agent's
+   *  budget may also come from AISY_BUDGET_USD. */
+  agents?: Record<string, { provider?: string; model?: string; budgetUsd?: number }>
 }
 const providersPath = join(base, 'providers.json')
 function loadProviders(): ProvidersConfig {
@@ -215,6 +219,18 @@ const settings = makeSettingsStore({
   },
 })
 
+// Per-agent budget caps (ADR-0050 Phase 3): the main agent's cap is
+// agents.main.budgetUsd or AISY_BUDGET_USD; sub-agents declare their own.
+// `spent` is read live from the spend ledger.
+const caps: Record<string, number> = { main: providersCfg.agents?.['main']?.budgetUsd ?? budgetUsd }
+for (const [id, a] of Object.entries(providersCfg.agents ?? {})) {
+  if (typeof a.budgetUsd === 'number') caps[id] = a.budgetUsd
+}
+const budget = makeBudgetTracker({
+  caps,
+  spent: (agentId) => spend.byAgent().find((a) => a.agentId === agentId)?.dollars ?? 0,
+})
+
 const bot = makeTelegramBot({
   token,
   allowedChatId,
@@ -223,6 +239,7 @@ const bot = makeTelegramBot({
   budgetUsd,
   settings,
   spend,
+  budget,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
     makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
 })
