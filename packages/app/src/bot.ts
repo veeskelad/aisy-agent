@@ -254,6 +254,20 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
         deps.spend?.record({ model: deps.model, usage: result.usage })
         if (deps.settings?.get().showCostPerTurn === true) await sendCostSummary(result.usage)
       }
+    } catch (err) {
+      // A turn that throws — an executor/provider error not mapped to a loop
+      // Halt — must not become an unhandled rejection (silent hang / crash).
+      // Surface it so the operator can retry; the finally still resets state.
+      const detail = (err instanceof Error ? err.message : String(err)).slice(0, 200)
+      const msg = renderEvent({ kind: 'error', what: 'Ход прерван ошибкой', detail })
+      if (msg) {
+        await bot.api
+          .sendMessage(deps.allowedChatId, msg.html, {
+            parse_mode: 'HTML',
+            ...(msg.buttons ? { reply_markup: toInlineKeyboard(msg.buttons) } : {}),
+          })
+          .catch(() => {})
+      }
     } finally {
       agentState = 'idle'
       // Drain mid-turn steer input (newest-first) and run it as the next turn.
