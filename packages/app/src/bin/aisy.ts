@@ -4,10 +4,11 @@
 //   aisy init|doctor|…        → onboarding (delegated to @aisy/core's runCli)
 //
 // Secrets are read from the vault (~/.aisy/vault.json), seeded by `aisy init`.
-// MVP run adapters: bash sandboxed only when AISY_SANDBOX_IMAGE is set;
-// cold-start memory + in-memory session log (see ADR-0048).
+// Run adapters: bash sandboxed only when AISY_SANDBOX_IMAGE is set; SQLite-backed
+// memory (FTS) + search_memory tool, and a durable jsonl session log (ADR-0048,
+// Tier-1 wiring). Full crash-resume (SessionLog.resume) is still deferred.
 
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, readdirSync, appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,6 +25,10 @@ import {
   makeSpendStore,
   makeSettingsStore,
   makeBudgetTracker,
+  makeMemoryStore,
+  makeMemoryPort,
+  makeMemorySearch,
+  makeJsonlSessionLog,
   runCli,
   harnessVersion,
   VoiceUnavailable,
@@ -124,6 +129,7 @@ const TOOLS: AnthropicTool[] = [
   { name: 'write_file', description: 'Write a file in the workspace', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
   { name: 'list_dir', description: 'List a directory in the workspace', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
   { name: 'bash', description: 'Run a shell command in the sandbox', input_schema: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] } },
+  { name: 'search_memory', description: 'Search long-term memory (FTS) for relevant facts', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
 ]
 
 const fsPort: FsPort = {
@@ -147,11 +153,22 @@ const grantPersistence: GrantPersistencePort = {
     writeFileSync(grantsPath, JSON.stringify({ always: tools }, null, 2), { encoding: 'utf8', mode: 0o600 }),
 }
 
-const memory: MemoryPort = {
-  snapshot: async () => ({ prefixBytes: new Uint8Array(), prefixHash: 'cold', breakpoints: [], takenAt: new Date().toISOString() }),
-  forget: async () => {},
-}
-const sessionLog: SessionLog = { append: () => {}, resume: () => null }
+const nowIso = (): string => new Date().toISOString()
+const memoryRoot = vault['AISY_MEMORY_ROOT'] ?? process.env['AISY_MEMORY_ROOT'] ?? join(base, 'memory')
+const dbPath = vault['AISY_DB_PATH'] ?? process.env['AISY_DB_PATH'] ?? join(base, 'memory.db')
+const memoryStore = makeMemoryStore({
+  memoryRoot,
+  dbPath,
+  // Observability journal is wired in Tier 4; a no-op keeps commit fail-open today.
+  emitEvent: async () => {},
+  nowIso,
+})
+const memory: MemoryPort = makeMemoryPort(memoryStore, nowIso)
+
+const sessionLogPath = join(base, 'session-log.jsonl')
+const sessionLog: SessionLog = makeJsonlSessionLog({
+  appendLine: (line) => appendFileSync(sessionLogPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
+})
 
 const sandboxImage = process.env['AISY_SANDBOX_IMAGE'] ?? ''
 const runBash = sandboxImage
@@ -180,7 +197,12 @@ const provider: ProviderAdapter = providersCfg.tiers
   : adapterFor(defaultSel)
 const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
 
-const executeTool = makeToolExecutor({ fs: fsPort, workspaceRoot, ...(runBash ? { runBash } : {}) })
+const executeTool = makeToolExecutor({
+  fs: fsPort,
+  workspaceRoot,
+  searchMemory: makeMemorySearch(memoryStore),
+  ...(runBash ? { runBash } : {}),
+})
 
 const gateway = makeGateway({
   getAllowedChatId: async () => allowedChatId,
