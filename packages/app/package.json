@@ -1,21 +1,17 @@
 {
-  "name": "@aisy/telegram-gw",
+  "name": "@aisy/app",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "import": "./dist/index.js"
-    }
+  "bin": {
+    "aisy-run": "./dist/bin/run.js"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --project tsconfig.build.json"
+    "build": "tsc --project tsconfig.build.json",
+    "postbuild": "chmod +x dist/bin/run.js 2>/dev/null || true"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -24,6 +20,7 @@
   },
   "dependencies": {
     "@aisy/core": "workspace:*",
+    "@aisy/telegram-gw": "workspace:*",
     "grammy": "^1.30.0"
   }
 }

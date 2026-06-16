@@ -8,6 +8,28 @@ importers:
 
   .: {}
 
+  packages/app:
+    dependencies:
+      '@aisy/core':
+        specifier: workspace:*
+        version: link:../core-ts
+      '@aisy/telegram-gw':
+        specifier: workspace:*
+        version: link:../telegram-gw
+      grammy:
+        specifier: ^1.30.0
+        version: 1.44.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.21
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.19.21)
+
   packages/core-ts:
     dependencies:
       better-sqlite3:
