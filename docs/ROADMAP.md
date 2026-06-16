@@ -17,19 +17,23 @@ day · **M** 1–2 days · **L** 3+ days. Risk = how much it touches the tested 
 
 ## Tiers
 
-### Tier 1 — make the agent genuinely useful (wire built components; low risk)
-| # | Task | Effort | Risk | Depends |
-|---|------|--------|------|---------|
-| 1 | Real memory: `makeMemoryStore` → `MemoryPort` (snapshot/forget) + `search_memory` tool | M | low | memory (built) |
-| 2 | Durable `SessionLog` (jsonl append; full crash-resume deferred) | S–M | low | — |
-| 3 | Provider-aware `doctor` (read `providers.json`; stop false per-tier failures) | M | low | adds a read-port |
+### Tier 1 — make the agent genuinely useful (wire built components; low risk) — ✅ DONE
+| # | Task | Effort | Risk | Depends | Status |
+|---|------|--------|------|---------|--------|
+| 1 | Real memory: `makeMemoryStore` → `MemoryPort` (snapshot/forget) + `search_memory` tool | M | low | memory (built) | ✅ done |
+| 2 | Durable `SessionLog` (jsonl append; full crash-resume deferred) | S–M | low | — | ✅ done |
+| 3 | Provider-aware `doctor` (read `providers.json`; stop false per-tier failures) | M | low | adds a read-port | ✅ done |
 
 → **Plan:** [`docs/superpowers/plans/2026-06-16-tier1-live-wiring.md`](./superpowers/plans/2026-06-16-tier1-live-wiring.md)
+Shipped in commits `1634b61` (memory adapters), `2c2c2d3` (session log), `ffd46bd` (doctor),
+`b8ebe57` (bin wiring), `67d9526` (graceful `search_memory`). 658 core tests green.
+Residual surfaced in final review → folded into Tier 2 #4b below.
 
 ### Tier 2 — control & safety on the phone (shared loop abort-seam)
 | # | Task | Effort | Risk | Depends |
 |---|------|--------|------|---------|
 | 4 | `/stop` hard-kill: `AbortSignal` through loop → provider | M | med (loop) | — |
+| 4b | Harden `bot.ts` `runTurn` with a catch-all: a turn that throws (executor/provider error not mapped to `Halt`) currently becomes an unhandled rejection → silent failure / possible crash. Surface it as an error message + reset state. (Found in Tier-1 final review; the cold-start `search_memory` instance is already fixed at the adapter, but the transport-level gap remains.) | S | low | — |
 | 5 | Mid-turn budget: `Halt('budget-capped')` + budget port in loop | M | med (loop) | shares #4 seam |
 | 6 | Live outbound-lockout: `isOutboundLocked`/`narrowed` from safety (UI exists) | M | med | safety (built) |
 | 7 | Voice: Whisper sidecar → `transcribeVoice` | M | med | sidecars-py |
