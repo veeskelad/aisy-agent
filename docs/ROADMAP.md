@@ -33,7 +33,7 @@ Residual surfaced in final review → folded into Tier 2 #4b below.
 | # | Task | Effort | Risk | Depends |
 |---|------|--------|------|---------|
 | 4 | `/stop` hard-kill: `AbortSignal` through loop → provider | M | med (loop) | — |
-| 4b | Harden `bot.ts` `runTurn` with a catch-all: a turn that throws (executor/provider error not mapped to `Halt`) currently becomes an unhandled rejection → silent failure / possible crash. Surface it as an error message + reset state. (Found in Tier-1 final review; the cold-start `search_memory` instance is already fixed at the adapter, but the transport-level gap remains.) | S | low | — |
+| 4b | ✅ **done** (`be837ee`) — catch-all in `bot.ts` `runTurn`: a throwing turn now surfaces an error message + resets state instead of an unhandled rejection. (Found in Tier-1 final review.) Residual: error-detail secret redaction on this path not yet wired. | S | low | — |
 | 5 | Mid-turn budget: `Halt('budget-capped')` + budget port in loop | M | med (loop) | shares #4 seam |
 | 6 | Live outbound-lockout: `isOutboundLocked`/`narrowed` from safety (UI exists) | M | med | safety (built) |
 | 7 | Voice: Whisper sidecar → `transcribeVoice` | M | med | sidecars-py |
