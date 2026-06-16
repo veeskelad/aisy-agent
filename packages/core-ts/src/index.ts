@@ -52,6 +52,12 @@ export type { ExecuteToolDeps, FsPort, ToolResult } from './runtime/execute-tool
 export { makeHookGate } from './runtime/hook-gate.js'
 export type { HookGateDeps, ApprovalDecision } from './runtime/hook-gate.js'
 
+export { makeGuardian } from './runtime/guardian.js'
+export type { GuardianDeps } from './runtime/guardian.js'
+
+export { makeDockerBash, dockerRunArgs } from './runtime/sandbox-bash.js'
+export type { DockerBashDeps, DockerResult } from './runtime/sandbox-bash.js'
+
 // --- Safety: grant store (transport records grants; app may inspect/reset) ---
 export { makeGrantStore } from './safety/index.js'
 export type {

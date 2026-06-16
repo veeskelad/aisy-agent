@@ -17,12 +17,13 @@ import {
   makeToolExecutor,
   makeGateway,
   makeGrantStore,
+  makeGuardian,
+  makeDockerBash,
   VoiceUnavailable,
   type AnthropicTool,
   type ApprovalDecision,
   type FsPort,
   type GrantPersistencePort,
-  type LoopGuardian,
   type MemoryPort,
   type PendingAction,
   type SessionLog,
@@ -90,13 +91,21 @@ const memory: MemoryPort = {
   forget: async () => {},
 }
 const sessionLog: SessionLog = { append: () => {}, resume: () => null }
-// MVP guardian: no cycle detection yet — the runner's tool-call cap is the
-// backstop. TODO: wire a real agent-loop LoopGuardian.
-const guardian: LoopGuardian = { observe: () => ({ trip: false }), note: () => {} }
+
+// bash runs in a locked-down container only when an image is configured;
+// otherwise executeTool reports bash unavailable (read/write/list still work).
+const sandboxImage = process.env['AISY_SANDBOX_IMAGE'] ?? ''
+const runBash = sandboxImage
+  ? makeDockerBash({ image: sandboxImage, workspaceRoot, gvisor: process.env['AISY_SANDBOX_GVISOR'] === '1', timeoutSec: 120 })
+  : undefined
 
 const grants = makeGrantStore({ persistence: grantPersistence })
 const provider = makeAnthropicProvider({ apiKey, model, tools: TOOLS })
-const executeTool = makeToolExecutor({ fs: fsPort, workspaceRoot })
+const executeTool = makeToolExecutor({
+  fs: fsPort,
+  workspaceRoot,
+  ...(runBash ? { runBash } : {}),
+})
 
 const gateway = makeGateway({
   getAllowedChatId: async () => allowedChatId,
@@ -114,7 +123,7 @@ const bot = makeTelegramBot({
   allowedChatId,
   gateway,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
-    makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian, sessionLog, maxTotalToolCalls: 50 }),
+    makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
 })
 
 process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${model})…\n`)
