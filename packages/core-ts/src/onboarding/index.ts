@@ -71,6 +71,7 @@ export type {
   ProviderSelection,
   ProvidersConfig,
   ProvidersOutPort,
+  ProvidersInPort,
 } from './types.js'
 export {
   REQUIRED_ENV_KEYS,
@@ -400,11 +401,40 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     }
     const fix = opts.fix === true
 
-    // env (critical) — required keys present, no obvious placeholders.
+    // ADR-0050: when a providers.json exists, doctor validates the CHOSEN
+    // providers (keys from the merged env/vault map) instead of legacy tiers.
+    const provCfg = deps.providersIn?.read() ?? null
+    const catalog = deps.providerCatalog ?? []
+    const chosenSelections = provCfg
+      ? [
+          ...(provCfg.default ? [provCfg.default] : []),
+          ...(provCfg.tiers ? Object.values(provCfg.tiers) : []),
+        ]
+      : []
+    const distinctChosen = [...new Map(chosenSelections.map((s) => [s.provider, s])).values()]
+    const requiredKeys: readonly string[] = provCfg
+      ? [
+          'AISY_TELEGRAM_BOT_TOKEN',
+          'AISY_TELEGRAM_CHAT_ID',
+          'AISY_MEMORY_ROOT',
+          'AISY_DB_PATH',
+          ...distinctChosen
+            .map((s) => catalog.find((e) => e.id === s.provider))
+            .filter((e): e is NonNullable<typeof e> => !!e && e.needsKey && !!e.keyEnv)
+            .map((e) => e.keyEnv as string),
+        ]
+      : REQUIRED_ENV_KEYS
+
+    // env (critical) — required keys present.
     {
-      const body = deps.fs.exists('.env') ? deps.fs.read('.env') : ''
-      const present = parseEnvBody(body)
-      const missing = REQUIRED_ENV_KEYS.filter((k) => !present.has(k))
+      let missing: string[]
+      if (provCfg) {
+        missing = requiredKeys.filter((k) => envValueOf(k).length === 0)
+      } else {
+        const body = deps.fs.exists('.env') ? deps.fs.read('.env') : ''
+        const present = parseEnvBody(body)
+        missing = requiredKeys.filter((k) => !present.has(k))
+      }
       const ok = missing.length === 0
       add({
         id: 'env.required-keys',
@@ -416,18 +446,49 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       })
     }
 
-    // providers (high) — per-tier reachability ping.
-    for (const tier of TIERS) {
-      const key = envValueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
-      const ping = await deps.validators.pingProvider(tier, key)
-      add({
-        id: `providers.${tier}.reachable`,
-        domain: 'providers',
-        status: ping.ok ? 'pass' : 'fail',
-        severity: 'high',
-        detail: ping.ok ? `${tier} key reachable` : redact(`${tier} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
-        fixable: false,
-      })
+    // providers (high) — reachability ping. Catalog install ⇒ ping the chosen
+    // providers; otherwise the legacy per-tier ping.
+    if (provCfg) {
+      for (const sel of distinctChosen) {
+        const entry = catalog.find((e) => e.id === sel.provider)
+        if (!entry || !entry.needsKey || !entry.keyEnv) {
+          add({
+            id: `providers.${sel.provider}.reachable`,
+            domain: 'providers',
+            status: 'pass',
+            severity: 'high',
+            detail: `${sel.provider} needs no key`,
+            fixable: false,
+          })
+          continue
+        }
+        const key = envValueOf(entry.keyEnv)
+        const baseUrl = envValueOf(`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`) || entry.defaultBaseUrl
+        const ping = deps.validators.pingCatalogProvider
+          ? await deps.validators.pingCatalogProvider({ providerId: sel.provider, key, ...(baseUrl ? { baseUrl } : {}) })
+          : { ok: key.length > 0 }
+        add({
+          id: `providers.${sel.provider}.reachable`,
+          domain: 'providers',
+          status: ping.ok ? 'pass' : 'fail',
+          severity: 'high',
+          detail: ping.ok ? `${sel.provider} key reachable` : redact(`${sel.provider} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
+          fixable: false,
+        })
+      }
+    } else {
+      for (const tier of TIERS) {
+        const key = envValueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
+        const ping = await deps.validators.pingProvider(tier, key)
+        add({
+          id: `providers.${tier}.reachable`,
+          domain: 'providers',
+          status: ping.ok ? 'pass' : 'fail',
+          severity: 'high',
+          detail: ping.ok ? `${tier} key reachable` : redact(`${tier} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
+          fixable: false,
+        })
+      }
     }
 
     // telegram (critical) — getMe + exactly one allowlisted chat_id (spec §4 matrix).

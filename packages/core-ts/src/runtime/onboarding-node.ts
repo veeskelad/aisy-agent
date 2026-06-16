@@ -215,6 +215,18 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
     },
   }
 
+  const providersIn = {
+    read(): ProvidersConfig | null {
+      const p = join(base, 'providers.json')
+      if (!existsSync(p)) return null
+      try {
+        return JSON.parse(readFileSync(p, 'utf8')) as ProvidersConfig
+      } catch {
+        return null
+      }
+    },
+  }
+
   const openDb = (): Db | null => {
     if (!existsSync(dbPath)) return null
     try {
@@ -344,6 +356,7 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
     env,
     providerCatalog,
     providersOut,
+    providersIn,
     // Interactive only on a real TTY; piped/non-interactive stays env-driven.
     ...(process.stdin.isTTY ? { prompt: makeReadlinePrompt() } : {}),
   })

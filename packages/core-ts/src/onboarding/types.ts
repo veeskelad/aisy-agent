@@ -286,6 +286,13 @@ export interface ProvidersOutPort {
   write(config: ProvidersConfig): void
 }
 
+/** Read seam for the persisted ProvidersConfig — lets `doctor` validate the
+ *  chosen providers instead of the legacy per-tier env keys. Absent or null ⇒
+ *  doctor falls back to the legacy per-tier checks. */
+export interface ProvidersInPort {
+  read(): ProvidersConfig | null
+}
+
 /** Memory port (Memory 03) — init triggers rebuild; doctor checks integrity. */
 export interface MemoryPort {
   rebuildFromFiles(): Promise<void>
@@ -445,6 +452,8 @@ export interface OnboardingDeps {
   providerCatalog?: readonly ProviderCatalogEntry[]
   /** Persists the chosen ProvidersConfig (providers.json). */
   providersOut?: ProvidersOutPort
+  /** Reads the persisted providers.json (ADR-0050) for provider-aware doctor. */
+  providersIn?: ProvidersInPort
   /** Event sink (Observability 12). */
   events?: EventSink
   /** Disk free bytes probe; default healthy. */

@@ -961,3 +961,45 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     expect(res.outcomes.some((o) => o.step === 'validate.provider.claude-cli' && o.result === 'done')).toBe(true)
   })
 })
+
+describe('doctor — provider-aware (ADR-0050)', () => {
+  it('with providers.json: pings the chosen provider, not legacy tiers; required-keys pass from vault env', async () => {
+    const pinged: string[] = []
+    const validators: CredentialValidators = {
+      ...makeFakeValidators(),
+      pingCatalogProvider: async (o) => {
+        pinged.push(o.providerId)
+        return { ok: true, httpStatus: 200 }
+      },
+    }
+    // env carries the chosen provider key + telegram/memory (vault-merged in prod).
+    const env: Record<string, string> = {
+      AISY_PROVIDER_DEEPSEEK_KEY: 'dk',
+      AISY_TELEGRAM_BOT_TOKEN: 'tok',
+      AISY_TELEGRAM_CHAT_ID: '42',
+      AISY_MEMORY_ROOT: '/m',
+      AISY_DB_PATH: '/db',
+    }
+    const deps = makeDeps({
+      fs: makeFakeFs(healthySeed()),
+      env,
+      validators,
+      providerCatalog: [DEEPSEEK_ENTRY],
+      providersIn: { read: () => ({ default: { provider: 'deepseek', model: 'deepseek-chat' } }) },
+    })
+
+    const report = await makeOnboardingOps(deps).doctor({})
+
+    expect(pinged).toEqual(['deepseek'])
+    const prov = report.checks.find((c) => c.id === 'providers.deepseek.reachable')
+    expect(prov?.status).toBe('pass')
+    const env0 = report.checks.find((c) => c.id === 'env.required-keys')
+    expect(env0?.status).toBe('pass')
+  })
+
+  it('without providers.json: legacy per-tier checks still run', async () => {
+    const deps = healthyDeps() // no providersIn ⇒ legacy path
+    const report = await makeOnboardingOps(deps).doctor({})
+    expect(report.checks.some((c) => c.id === 'providers.reasoning.reachable')).toBe(true)
+  })
+})
