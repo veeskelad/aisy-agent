@@ -12,13 +12,15 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   makeAgentRunner,
-  makeAnthropicProvider,
   makeToolExecutor,
   makeGateway,
   makeGrantStore,
   makeGuardian,
   makeDockerBash,
   makeNodeOnboardingOps,
+  buildProvider,
+  makeTieredProvider,
+  findProvider,
   runCli,
   harnessVersion,
   VoiceUnavailable,
@@ -28,6 +30,7 @@ import {
   type GrantPersistencePort,
   type MemoryPort,
   type PendingAction,
+  type ProviderAdapter,
   type SessionLog,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
@@ -64,10 +67,45 @@ function loadVault(): Record<string, string> {
 const vault = loadVault()
 const token = vault['AISY_TELEGRAM_BOT_TOKEN'] ?? process.env['AISY_TELEGRAM_BOT_TOKEN'] ?? ''
 const chatIdRaw = vault['AISY_TELEGRAM_CHAT_ID'] ?? process.env['AISY_TELEGRAM_CHAT_ID'] ?? ''
-const apiKey = vault['AISY_PROVIDER_REASONING_KEY'] ?? process.env['AISY_PROVIDER_REASONING_KEY'] ?? ''
-const model = process.env['AISY_PROVIDER_MODEL'] ?? 'claude-sonnet-4-6'
+// Provider selection from ~/.aisy/providers.json (per-tier or a single default).
+// Back-compat: no file ⇒ Anthropic + AISY_PROVIDER_MODEL + the legacy reasoning key.
+interface ProviderSel {
+  provider: string
+  model: string
+}
+interface ProvidersConfig {
+  default?: ProviderSel
+  tiers?: { reasoning: ProviderSel; critique: ProviderSel; routine: ProviderSel }
+}
+const providersPath = join(base, 'providers.json')
+function loadProviders(): ProvidersConfig {
+  if (!existsSync(providersPath)) return {}
+  try {
+    return JSON.parse(readFileSync(providersPath, 'utf8')) as ProvidersConfig
+  } catch {
+    return {}
+  }
+}
+const providersCfg = loadProviders()
+const defaultSel: ProviderSel =
+  providersCfg.default ?? { provider: 'anthropic', model: process.env['AISY_PROVIDER_MODEL'] ?? 'claude-sonnet-4-6' }
 
-if (!token || !chatIdRaw || !apiKey) {
+function keyFor(providerId: string): string {
+  const entry = findProvider(providerId)
+  if (!entry?.keyEnv) return '' // CLI providers need no key
+  let k = vault[entry.keyEnv] ?? process.env[entry.keyEnv] ?? ''
+  if (!k && providerId === 'anthropic') {
+    k = vault['AISY_PROVIDER_REASONING_KEY'] ?? process.env['AISY_PROVIDER_REASONING_KEY'] ?? ''
+  }
+  return k
+}
+function baseUrlFor(providerId: string): string | undefined {
+  const k = `AISY_PROVIDER_${providerId.toUpperCase()}_BASE_URL`
+  return vault[k] ?? process.env[k]
+}
+
+const defaultNeedsKey = findProvider(defaultSel.provider)?.kind !== 'cli'
+if (!token || !chatIdRaw || (defaultNeedsKey && keyFor(defaultSel.provider).length === 0)) {
   process.stderr.write('aisy run: missing bot token / chat_id / provider key — run `aisy init` first.\n')
   process.exit(1)
 }
@@ -113,7 +151,27 @@ const runBash = sandboxImage
   : undefined
 
 const grants = makeGrantStore({ persistence: grantPersistence })
-const provider = makeAnthropicProvider({ apiKey, model, tools: TOOLS })
+
+function adapterFor(sel: ProviderSel): ProviderAdapter {
+  const apiKey = keyFor(sel.provider)
+  const baseUrl = baseUrlFor(sel.provider)
+  return buildProvider({
+    provider: sel.provider,
+    model: sel.model,
+    tools: TOOLS,
+    ...(apiKey ? { apiKey } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+  })
+}
+const provider: ProviderAdapter = providersCfg.tiers
+  ? makeTieredProvider({
+      reasoning: adapterFor(providersCfg.tiers.reasoning),
+      critique: adapterFor(providersCfg.tiers.critique),
+      routine: adapterFor(providersCfg.tiers.routine),
+    })
+  : adapterFor(defaultSel)
+const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
+
 const executeTool = makeToolExecutor({ fs: fsPort, workspaceRoot, ...(runBash ? { runBash } : {}) })
 
 const gateway = makeGateway({
@@ -132,11 +190,11 @@ const bot = makeTelegramBot({
   token,
   allowedChatId,
   gateway,
-  model,
+  model: modelLabel,
   budgetUsd,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
     makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
 })
 
-process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${model})…\n`)
+process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${modelLabel})…\n`)
 void bot.start()

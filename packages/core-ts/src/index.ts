@@ -46,6 +46,15 @@ export type { AgentRunner, AgentRunnerDeps } from './runtime/agent-runner.js'
 export { makeAnthropicProvider } from './runtime/provider-anthropic.js'
 export type { AnthropicProviderDeps, AnthropicTool } from './runtime/provider-anthropic.js'
 
+export { makeOpenAICompatProvider, parseOpenAIResponse } from './runtime/provider-openai.js'
+export type { OpenAIProviderDeps, ModelPrice } from './runtime/provider-openai.js'
+
+export { makeCliProvider, promptFromSpans } from './runtime/provider-cli.js'
+export type { CliProviderDeps, CliRunResult } from './runtime/provider-cli.js'
+
+export { PROVIDER_CATALOG, findProvider, buildProvider, makeTieredProvider } from './runtime/providers.js'
+export type { ProviderEntry, ProviderKind, BuildProviderConfig, TierAdapters } from './runtime/providers.js'
+
 export { makeToolExecutor } from './runtime/execute-tool.js'
 export type { ExecuteToolDeps, FsPort, ToolResult } from './runtime/execute-tool.js'
 
