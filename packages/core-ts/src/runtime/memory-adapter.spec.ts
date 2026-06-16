@@ -53,4 +53,15 @@ describe('makeMemorySearch', () => {
     const search = makeMemorySearch(fakeMemory({ search: async () => [] }))
     expect(await search('q')).toBe('Память: ничего не найдено.')
   })
+
+  it('degrades gracefully when the index is cold/unavailable (never throws)', async () => {
+    const search = makeMemorySearch(
+      fakeMemory({
+        search: async () => {
+          throw new Error('cold start: no index on disk')
+        },
+      }),
+    )
+    await expect(search('q')).resolves.toBe('Память: индекс пуст или недоступен.')
+  })
 })
