@@ -4,14 +4,14 @@
   "private": true,
   "type": "module",
   "bin": {
-    "aisy-run": "./dist/bin/run.js"
+    "aisy": "./dist/bin/aisy.js"
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsc --project tsconfig.build.json",
-    "postbuild": "chmod +x dist/bin/run.js 2>/dev/null || true"
+    "postbuild": "chmod +x dist/bin/aisy.js 2>/dev/null || true"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

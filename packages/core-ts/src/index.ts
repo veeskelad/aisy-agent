@@ -58,6 +58,10 @@ export type { GuardianDeps } from './runtime/guardian.js'
 export { makeDockerBash, dockerRunArgs } from './runtime/sandbox-bash.js'
 export type { DockerBashDeps, DockerResult } from './runtime/sandbox-bash.js'
 
+// --- CLI (the app's unified `aisy` reuses these for init/doctor/diagnostics) ---
+export { makeNodeOnboardingOps, harnessVersion } from './runtime/onboarding-node.js'
+export { runCli } from './cli/index.js'
+
 // --- Safety: grant store (transport records grants; app may inspect/reset) ---
 export { makeGrantStore } from './safety/index.js'
 export type {

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// `aisy-run` — boot the live Telegram agent.
+// Unified `aisy` CLI.
+//   aisy run                  → boot the live Telegram agent (this package)
+//   aisy init|doctor|…        → onboarding (delegated to @aisy/core's runCli)
 //
-// Wires real runtime adapters (Anthropic provider, node fs tools, gateway,
-// persisted grants) into the agent runner and starts grammY long-polling.
 // Secrets are read from the vault (~/.aisy/vault.json), seeded by `aisy init`.
-//
-// MVP adapters: no sandbox (bash reports unavailable), cold-start memory, and an
-// in-memory session log. These layer in as the corresponding ports land.
+// MVP run adapters: bash sandboxed only when AISY_SANDBOX_IMAGE is set;
+// cold-start memory + in-memory session log (see ADR-0048).
 
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -19,6 +18,9 @@ import {
   makeGrantStore,
   makeGuardian,
   makeDockerBash,
+  makeNodeOnboardingOps,
+  runCli,
+  harnessVersion,
   VoiceUnavailable,
   type AnthropicTool,
   type ApprovalDecision,
@@ -30,6 +32,20 @@ import {
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
 
+const argv = process.argv.slice(2)
+
+// Non-run commands → onboarding CLI (init / doctor / diagnostics / help).
+if (argv[0] !== 'run') {
+  const exitCode = await runCli(argv, {
+    ops: makeNodeOnboardingOps(),
+    out: (s) => process.stdout.write(s + '\n'),
+    err: (s) => process.stderr.write(s + '\n'),
+    version: harnessVersion(),
+  })
+  process.exit(exitCode)
+}
+
+// --- aisy run: boot the live agent ---
 const base = process.env['AISY_HOME'] ?? join(homedir(), '.aisy')
 const vaultPath = join(base, 'vault.json')
 const grantsPath = join(base, 'grants.json')
@@ -56,7 +72,6 @@ if (!token || !chatIdRaw || !apiKey) {
 }
 const allowedChatId = Number(chatIdRaw)
 
-// Tools advertised to the model (MVP set; bash is gated by the sandbox port).
 const TOOLS: AnthropicTool[] = [
   { name: 'read_file', description: 'Read a file in the workspace', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
   { name: 'write_file', description: 'Write a file in the workspace', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
@@ -85,15 +100,12 @@ const grantPersistence: GrantPersistencePort = {
     writeFileSync(grantsPath, JSON.stringify({ always: tools }, null, 2), { encoding: 'utf8', mode: 0o600 }),
 }
 
-// MVP memory: cold-start snapshot, no within-session forget persistence.
 const memory: MemoryPort = {
   snapshot: async () => ({ prefixBytes: new Uint8Array(), prefixHash: 'cold', breakpoints: [], takenAt: new Date().toISOString() }),
   forget: async () => {},
 }
 const sessionLog: SessionLog = { append: () => {}, resume: () => null }
 
-// bash runs in a locked-down container only when an image is configured;
-// otherwise executeTool reports bash unavailable (read/write/list still work).
 const sandboxImage = process.env['AISY_SANDBOX_IMAGE'] ?? ''
 const runBash = sandboxImage
   ? makeDockerBash({ image: sandboxImage, workspaceRoot, gvisor: process.env['AISY_SANDBOX_GVISOR'] === '1', timeoutSec: 120 })
@@ -101,11 +113,7 @@ const runBash = sandboxImage
 
 const grants = makeGrantStore({ persistence: grantPersistence })
 const provider = makeAnthropicProvider({ apiKey, model, tools: TOOLS })
-const executeTool = makeToolExecutor({
-  fs: fsPort,
-  workspaceRoot,
-  ...(runBash ? { runBash } : {}),
-})
+const executeTool = makeToolExecutor({ fs: fsPort, workspaceRoot, ...(runBash ? { runBash } : {}) })
 
 const gateway = makeGateway({
   getAllowedChatId: async () => allowedChatId,

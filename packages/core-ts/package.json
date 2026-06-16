@@ -11,15 +11,11 @@
       "import": "./dist/index.js"
     }
   },
-  "bin": {
-    "aisy": "./dist/bin/aisy.js"
-  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --project tsconfig.build.json",
-    "postbuild": "chmod +x dist/bin/aisy.js 2>/dev/null || true"
+    "build": "tsc --project tsconfig.build.json"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
