@@ -21,6 +21,8 @@ import {
   buildProvider,
   makeTieredProvider,
   findProvider,
+  makeSpendStore,
+  makeSettingsStore,
   runCli,
   harnessVersion,
   VoiceUnavailable,
@@ -32,6 +34,8 @@ import {
   type PendingAction,
   type ProviderAdapter,
   type SessionLog,
+  type SpendEntry,
+  type Settings,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
 
@@ -186,12 +190,39 @@ const gateway = makeGateway({
 })
 
 const budgetUsd = Number(process.env['AISY_BUDGET_USD'] ?? '0') || 0
+
+// Spend ledger + operator settings (ADR-0050 Phase 2), persisted under AISY_HOME.
+const spendPath = join(base, 'spend.json')
+const settingsPath = join(base, 'settings.json')
+const readJson = <T>(path: string, fallback: T): T => {
+  if (!existsSync(path)) return fallback
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T
+  } catch {
+    return fallback
+  }
+}
+const spend = makeSpendStore({
+  persistence: {
+    load: () => readJson<SpendEntry[]>(spendPath, []),
+    save: (entries) => writeFileSync(spendPath, JSON.stringify(entries, null, 2), { encoding: 'utf8', mode: 0o600 }),
+  },
+})
+const settings = makeSettingsStore({
+  persistence: {
+    load: () => readJson<Partial<Settings>>(settingsPath, {}),
+    save: (s) => writeFileSync(settingsPath, JSON.stringify(s, null, 2), { encoding: 'utf8', mode: 0o600 }),
+  },
+})
+
 const bot = makeTelegramBot({
   token,
   allowedChatId,
   gateway,
   model: modelLabel,
   budgetUsd,
+  settings,
+  spend,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
     makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
 })

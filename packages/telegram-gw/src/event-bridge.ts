@@ -28,6 +28,13 @@ export type UiEvent =
   | { kind: 'outbound.locked'; sources: string[]; preview?: string }
   | { kind: 'narrowed'; restrictions: string[]; reason: string }
   | { kind: 'error'; what: string; detail: string }
+  | {
+      kind: 'spend.report'
+      rows: { model: string; tokensIn: number; tokensOut: number; dollars: number }[]
+      totalUsd: number
+      perAgent?: { agentId: string; dollars: number }[]
+    }
+  | { kind: 'settings.panel'; showCostPerTurn: boolean; budgetEnabled: boolean }
 
 function btn(text: string, data: string): InlineButton {
   return { text, data }
@@ -87,5 +94,38 @@ export function renderEvent(ev: UiEvent): BotMessage | null {
         html: `❌ ${escapeHtml(ev.what)} · ${escapeHtml(ev.detail)}`,
         buttons: [[btn('🔄 Повторить', 'error:retry')]],
       }
+
+    case 'spend.report': {
+      const lines = ['📡 <b>Расход по моделям</b>', '']
+      if (ev.rows.length === 0) {
+        lines.push('Пока ничего не потрачено.')
+      } else {
+        for (const r of ev.rows) {
+          lines.push(`• <b>${escapeHtml(r.model)}</b> — $${r.dollars.toFixed(3)} (${r.tokensIn} in / ${r.tokensOut} out)`)
+        }
+        lines.push('', `Итого: $${ev.totalUsd.toFixed(3)}`)
+      }
+      if (ev.perAgent && ev.perAgent.length > 0) {
+        lines.push('', '<b>По агентам</b>')
+        for (const a of ev.perAgent) lines.push(`• ${escapeHtml(a.agentId)} — $${a.dollars.toFixed(3)}`)
+      }
+      return { html: lines.join('\n'), buttons: [[btn('🔄 Обновить', 'spend:refresh')]] }
+    }
+
+    case 'settings.panel': {
+      const onOff = (v: boolean): string => (v ? '✅ вкл' : '❌ выкл')
+      return {
+        html: [
+          '⚙️ <b>Настройки</b>',
+          '',
+          `Стоимость за ход: ${onOff(ev.showCostPerTurn)}`,
+          `Бюджет агентов: ${onOff(ev.budgetEnabled)}`,
+        ].join('\n'),
+        buttons: [
+          [btn(`Стоимость за ход: ${ev.showCostPerTurn ? '✅' : '❌'}`, 'set:showCostPerTurn')],
+          [btn(`Бюджет агентов: ${ev.budgetEnabled ? '✅' : '❌'}`, 'set:budgetEnabled')],
+        ],
+      }
+    }
   }
 }

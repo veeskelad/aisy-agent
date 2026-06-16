@@ -67,6 +67,19 @@ export type { GuardianDeps } from './runtime/guardian.js'
 export { makeDockerBash, dockerRunArgs } from './runtime/sandbox-bash.js'
 export type { DockerBashDeps, DockerResult } from './runtime/sandbox-bash.js'
 
+export { makeSpendStore } from './runtime/spend.js'
+export type {
+  SpendStore,
+  SpendEntry,
+  SpendUsage,
+  ModelSpend,
+  AgentSpend,
+  SpendPersistencePort,
+} from './runtime/spend.js'
+
+export { makeSettingsStore, DEFAULT_SETTINGS } from './runtime/settings.js'
+export type { SettingsStore, Settings, SettingsPersistencePort } from './runtime/settings.js'
+
 // --- CLI (the app's unified `aisy` reuses these for init/doctor/diagnostics) ---
 export { makeNodeOnboardingOps, harnessVersion } from './runtime/onboarding-node.js'
 export { runCli } from './cli/index.js'

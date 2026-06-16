@@ -16,6 +16,8 @@ import type {
   GrantScope,
   PendingAction,
   Provenance,
+  SettingsStore,
+  SpendStore,
   TelegramUpdate,
 } from '@aisy/core'
 import {
@@ -29,10 +31,12 @@ import {
   renderResolved,
   resolveTap,
   renderEvent,
+  resolveMenu,
   fitBody,
   type CardCallback,
   type CardContext,
   type InlineButton,
+  type MenuAction,
   type TapOutcome,
 } from '@aisy/telegram-gw'
 
@@ -46,6 +50,10 @@ export interface TelegramBotDeps {
   model: string
   /** Session budget (USD) for the cost bar; 0 ⇒ no bar fill. */
   budgetUsd?: number
+  /** Operator settings — gates the per-turn cost summary (ADR-0050 Phase 2). */
+  settings?: SettingsStore
+  /** Spend ledger — fed from each turn's usage; viewed on demand in 📡 Монитор. */
+  spend?: SpendStore
   now?: () => string
   /** Debounce window for coalescing a rapid message burst. Default 1200ms. */
   debounceMs?: number
@@ -172,6 +180,43 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     pendingOutbound = { reply, messageId: sent.message_id }
   }
 
+  const sendPanel = async (
+    msg: { html: string; buttons?: InlineButton[][] } | null,
+  ): Promise<void> => {
+    if (!msg) return
+    await bot.api.sendMessage(deps.allowedChatId, msg.html, {
+      parse_mode: 'HTML',
+      ...(msg.buttons ? { reply_markup: toInlineKeyboard(msg.buttons) } : {}),
+    })
+  }
+
+  const settingsPanel = (): { html: string; buttons?: InlineButton[][] } | null => {
+    const st = deps.settings?.get() ?? { showCostPerTurn: false, budgetEnabled: false }
+    return renderEvent({ kind: 'settings.panel', showCostPerTurn: st.showCostPerTurn, budgetEnabled: st.budgetEnabled })
+  }
+
+  const sendSpendReport = async (): Promise<void> => {
+    const rows = (deps.spend?.byModel() ?? []).map((r) => ({
+      model: r.model,
+      tokensIn: r.inputTokens,
+      tokensOut: r.outputTokens,
+      dollars: r.dollars,
+    }))
+    const totalUsd = deps.spend?.total().dollars ?? 0
+    const perAgent = (deps.spend?.byAgent() ?? []).map((a) => ({ agentId: a.agentId, dollars: a.dollars }))
+    await sendPanel(renderEvent({ kind: 'spend.report', rows, totalUsd, ...(perAgent.length > 0 ? { perAgent } : {}) }))
+  }
+
+  const handleMenu = async (action: MenuAction): Promise<void> => {
+    if (action === 'settings') {
+      await sendPanel(settingsPanel())
+    } else if (action === 'monitor') {
+      await sendSpendReport()
+    } else {
+      await bot.api.sendMessage(deps.allowedChatId, 'Раздел в разработке.')
+    }
+  }
+
   const runTurn = async (spans: { text: string; provenance: Provenance }[]): Promise<void> => {
     agentState = 'running'
     try {
@@ -184,7 +229,12 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
       } else {
         await sendReply(result.reply)
       }
-      if (result.usage) await sendCostSummary(result.usage)
+      if (result.usage) {
+        // Record spend always (viewed on demand in 📡 Монитор); only echo a
+        // per-turn cost card when the operator opted in (default off — ADR-0050).
+        deps.spend?.record({ model: deps.model, usage: result.usage })
+        if (deps.settings?.get().showCostPerTurn === true) await sendCostSummary(result.usage)
+      }
     } finally {
       agentState = 'idle'
       // Drain mid-turn steer input (newest-first) and run it as the next turn.
@@ -246,6 +296,26 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     const data = ctx.callbackQuery.data
     await ctx.answerCallbackQuery()
 
+    // Settings toggle (event-bridge callback) — flip + re-render the panel.
+    if (data.startsWith('set:')) {
+      const key = data.slice(4)
+      if (deps.settings && (key === 'showCostPerTurn' || key === 'budgetEnabled')) {
+        deps.settings.toggle(key)
+        const msg = settingsPanel()
+        if (msg) {
+          await ctx.editMessageText(msg.html, {
+            parse_mode: 'HTML',
+            ...(msg.buttons ? { reply_markup: toInlineKeyboard(msg.buttons) } : {}),
+          })
+        }
+      }
+      return
+    }
+    if (data === 'spend:refresh') {
+      await sendSpendReport()
+      return
+    }
+
     // Outbound lockout decision (event-bridge callback, not a card).
     if (data === 'outbound:allow' || data === 'outbound:block') {
       const held = pendingOutbound
@@ -269,6 +339,14 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text
     if (text.startsWith('/')) return // commands are handled by bot.command
+
+    // Reply-keyboard menu taps arrive as plain text — route them to panels
+    // instead of feeding the label to the agent as a task.
+    const menuAction = resolveMenu(text)
+    if (menuAction) {
+      await handleMenu(menuAction)
+      return
+    }
 
     if (pendingStepUp) {
       const ps = pendingStepUp

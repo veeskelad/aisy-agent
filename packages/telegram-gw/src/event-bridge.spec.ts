@@ -71,4 +71,33 @@ describe('renderEvent', () => {
     expect(msg.html).toContain('&lt;img src=x&gt;')
     expect(msg.html).not.toContain('<img')
   })
+
+  it('spend.report lists per-model rows + total, with a refresh button', () => {
+    const msg = renderEvent({
+      kind: 'spend.report',
+      rows: [
+        { model: 'opus', tokensIn: 100, tokensOut: 40, dollars: 0.5 },
+        { model: 'haiku', tokensIn: 20, tokensOut: 8, dollars: 0.02 },
+      ],
+      totalUsd: 0.52,
+    })!
+    expect(msg.html).toContain('📡 <b>Расход по моделям</b>')
+    expect(msg.html).toContain('<b>opus</b> — $0.500')
+    expect(msg.html).toContain('Итого: $0.520')
+    expect(msg.buttons?.[0]?.[0]?.data).toBe('spend:refresh')
+  })
+
+  it('spend.report handles the empty state', () => {
+    const msg = renderEvent({ kind: 'spend.report', rows: [], totalUsd: 0 })!
+    expect(msg.html).toContain('Пока ничего не потрачено.')
+  })
+
+  it('settings.panel shows toggles with set: callbacks', () => {
+    const msg = renderEvent({ kind: 'settings.panel', showCostPerTurn: true, budgetEnabled: false })!
+    expect(msg.html).toContain('⚙️ <b>Настройки</b>')
+    expect(msg.html).toContain('Стоимость за ход: ✅ вкл')
+    expect(msg.html).toContain('Бюджет агентов: ❌ выкл')
+    const datas = msg.buttons?.flat().map((b) => b.data)
+    expect(datas).toEqual(['set:showCostPerTurn', 'set:budgetEnabled'])
+  })
 })
