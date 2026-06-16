@@ -8,10 +8,53 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync, spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { makeOnboardingOps } from '../onboarding/index.js'
+import type { PromptPort, TelegramPairUpdate } from '../onboarding/types.js'
+
+/** Readline-backed interactive prompt; secret() mutes echo for token entry. */
+function makeReadlinePrompt(): PromptPort {
+  const ask = (q: string, opts?: { default?: string }): Promise<string> =>
+    new Promise((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout })
+      const def = opts?.default ? ` [${opts.default}]` : ''
+      rl.question(`${q}${def}: `, (a) => {
+        rl.close()
+        resolve(a.trim().length > 0 ? a.trim() : (opts?.default ?? ''))
+      })
+    })
+  return {
+    info: (m: string): void => void process.stdout.write(`${m}\n`),
+    ask,
+    confirm: (q: string, opts?: { default?: boolean }): Promise<boolean> =>
+      new Promise((resolve) => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        rl.question(`${q} [${opts?.default ? 'Y/n' : 'y/N'}]: `, (a) => {
+          rl.close()
+          const t = a.trim().toLowerCase()
+          resolve(t.length === 0 ? (opts?.default ?? false) : t.startsWith('y'))
+        })
+      }),
+    secret: (q: string): Promise<string> =>
+      new Promise((resolve) => {
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        const out = rl as unknown as { _writeToOutput?: (s: string) => void }
+        let muted = false
+        out._writeToOutput = (s: string): void => {
+          if (!muted) process.stdout.write(s)
+        }
+        rl.question(`${q} `, (a) => {
+          rl.close()
+          process.stdout.write('\n')
+          resolve(a.trim())
+        })
+        muted = true
+      }),
+  }
+}
 
 const req = createRequire(import.meta.url)
 
@@ -43,7 +86,12 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
       return readFileSync(p, 'utf8').split('\n').some((l) => l.trim().length > 0 && !l.startsWith('#'))
     },
     read: (p: string): string => readFileSync(p, 'utf8'),
-    write: (p: string, c: string): void => writeFileSync(p, c, 'utf8'),
+    write: (p: string, c: string): void => {
+      // Ensure the parent dir exists — scaffolds like memory/constitution.md
+      // are written before the memory tree dirs are mkdirp'd.
+      mkdirSync(dirname(p), { recursive: true })
+      writeFileSync(p, c, 'utf8')
+    },
     mkdirp: (p: string): void => {
       mkdirSync(p, { recursive: true })
     },
@@ -81,6 +129,32 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
         })
         const body = (await res.json()) as { ok: boolean }
         return { ok: body.ok, httpStatus: res.status }
+      } catch {
+        return { ok: false }
+      }
+    },
+    async telegramGetUpdates(token: string): Promise<{ ok: boolean; updates?: TelegramPairUpdate[] }> {
+      if (!token) return { ok: false }
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?timeout=0`, {
+          signal: AbortSignal.timeout(8000),
+        })
+        const body = (await res.json()) as {
+          ok: boolean
+          result?: { message?: { chat?: { id?: number }; text?: string; from?: { username?: string } } }[]
+        }
+        const updates: TelegramPairUpdate[] = []
+        for (const u of body.result ?? []) {
+          const m = u.message
+          if (m?.chat?.id !== undefined && typeof m.text === 'string') {
+            updates.push({
+              chatId: m.chat.id,
+              text: m.text,
+              ...(m.from?.username ? { username: m.from.username } : {}),
+            })
+          }
+        }
+        return { ok: body.ok, updates }
       } catch {
         return { ok: false }
       }
@@ -198,6 +272,10 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
   const pkg = req('../../package.json') as { version?: string }
   const harnessVersion = pkg.version ?? '0.0.0'
 
+  // Vault-set keys count as "already set" so interactive init skips them and
+  // only prompts for what is genuinely missing.
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), ...loadVault() }
+
   return makeOnboardingOps({
     clock,
     fs: nodeFs,
@@ -209,7 +287,9 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
     mcp,
     nightly,
     harnessVersion,
-    env: process.env as Record<string, string>,
+    env,
+    // Interactive only on a real TTY; piped/non-interactive stays env-driven.
+    ...(process.stdin.isTTY ? { prompt: makeReadlinePrompt() } : {}),
   })
 }
 

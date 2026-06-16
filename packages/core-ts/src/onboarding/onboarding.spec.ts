@@ -23,6 +23,7 @@ import type {
   CostChargedEvent,
   ContextItem,
   BootstrapSpan,
+  PromptPort,
 } from './types.js'
 import type { PendingAction } from '../gateway/types.js'
 
@@ -763,5 +764,59 @@ describe('Onboarding & Operations (component 13)', () => {
     expect(nightly.triggered).toBe(0)
     // The action summary signals the queued/rejected state to the operator.
     expect(action.summary.toLowerCase()).toMatch(/already running|queued|lock/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Interactive init (ADR-0049) — prompt for missing secrets + pair Telegram
+// ---------------------------------------------------------------------------
+
+function scriptedPrompt(secrets: string[], asks: string[]): PromptPort & { infos: string[] } {
+  let si = 0
+  let ai = 0
+  const infos: string[] = []
+  return {
+    infos,
+    secret: async () => secrets[si++] ?? '',
+    ask: async () => asks[ai++] ?? '',
+    confirm: async () => true,
+    info: (m: string) => void infos.push(m),
+  }
+}
+
+describe('interactive init (ADR-0049)', () => {
+  it('prompts for missing secrets and seeds them into the vault', async () => {
+    const prompt = scriptedPrompt(
+      ['k-reason', 'k-crit', 'k-routine', 'tok-123'],
+      ['424242', '/m/root', '/m/db'],
+    )
+    const vault = makeFakeVault()
+    const deps = makeDeps({ env: {}, prompt, vault })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    const seeded = (vault as ReturnType<typeof makeFakeVault>).seeded
+    expect(seeded['AISY_PROVIDER_REASONING_KEY']).toBe('k-reason')
+    expect(seeded['AISY_TELEGRAM_BOT_TOKEN']).toBe('tok-123')
+    expect(seeded['AISY_TELEGRAM_CHAT_ID']).toBe('424242')
+    expect(seeded['AISY_MEMORY_ROOT']).toBe('/m/root')
+  })
+
+  it('does not prompt for keys already provided via env', async () => {
+    const env: Record<string, string> = {}
+    for (const k of REQUIRED_ENV_KEYS) env[k] = `value-${k}`
+    const prompt = scriptedPrompt([], [])
+    const deps = makeDeps({ env, prompt })
+    const res = await makeOnboardingOps(deps).init({})
+    expect(res.completed).toBe(true)
+  })
+
+  it('--non-interactive skips prompting even when a prompt is wired', async () => {
+    const prompt = scriptedPrompt([], [])
+    const deps = makeDeps({ env: {}, prompt })
+    await makeOnboardingOps(deps).init({ nonInteractive: true })
+    // the interactive intro line is never printed ⇒ no prompting occurred
+    expect(prompt.infos).toEqual([])
   })
 })

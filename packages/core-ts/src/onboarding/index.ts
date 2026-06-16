@@ -25,6 +25,7 @@ import type {
 } from './types.js'
 import { REQUIRED_ENV_KEYS, SCAFFOLD_FILES, MEMORY_TREE_FILES, MEMORY_TREE_DIRS } from './types.js'
 import type { PendingAction } from '../gateway/types.js'
+import { runTelegramPairing } from './interactive.js'
 
 export type {
   OnboardingOps,
@@ -125,6 +126,49 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     const force = opts.force === true
     let failed = false
 
+    // Interactive collect (ADR-0049): when a prompt is wired and the operator
+    // did not opt into non-interactive/--yes, prompt for missing required
+    // secrets and pair the Telegram chat. Collected values override env for the
+    // rest of init (validation, vault seed). Already-set keys are not re-asked.
+    const collected: Record<string, string> = {}
+    const valueOf = (key: string): string => collected[key] ?? envValueOf(key)
+    const interactive = deps.prompt !== undefined && opts.nonInteractive !== true && opts.yes !== true
+    if (interactive && deps.prompt) {
+      const p = deps.prompt
+      p.info('Настройка Aisy — отвечай на вопросы (Enter — пропустить шаг).')
+      for (const tier of TIERS) {
+        const key = `AISY_PROVIDER_${tier.toUpperCase()}_KEY`
+        if (valueOf(key).length === 0) {
+          const v = (await p.secret(`API-ключ провайдера (${tier}):`)).trim()
+          if (v.length > 0) collected[key] = v
+        }
+      }
+      if (valueOf('AISY_TELEGRAM_BOT_TOKEN').length === 0) {
+        const t = (await p.secret('Telegram bot token:')).trim()
+        if (t.length > 0) collected['AISY_TELEGRAM_BOT_TOKEN'] = t
+      }
+      if (valueOf('AISY_TELEGRAM_CHAT_ID').length === 0) {
+        const token = valueOf('AISY_TELEGRAM_BOT_TOKEN')
+        if (token.length > 0) {
+          const gu = deps.validators.telegramGetUpdates
+          const chatId = await runTelegramPairing(token, {
+            prompt: p,
+            ...(gu ? { getUpdates: (t: string) => gu(t) } : {}),
+            clock: () => Date.now(),
+            genCode: () => `AISY-${randomUUID().slice(0, 4).toUpperCase()}`,
+            sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+          })
+          if (chatId) collected['AISY_TELEGRAM_CHAT_ID'] = chatId
+        }
+      }
+      for (const key of ['AISY_MEMORY_ROOT', 'AISY_DB_PATH'] as const) {
+        if (valueOf(key).length === 0) {
+          const v = (await p.ask(`Путь ${key}`)).trim()
+          if (v.length > 0) collected[key] = v
+        }
+      }
+    }
+
     // Seed the redactor BEFORE any redact() on a failure detail. The vault is
     // only persisted later (step [4], gated on success), so until then redact()
     // over deps.vault.secretValues() would be a guaranteed no-op. Here we mask
@@ -132,7 +176,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // echo a secret, regardless of validation outcome (CSO-M3, AC-13-4/5).
     const envSecretValues = new Set<string>()
     for (const key of REQUIRED_ENV_KEYS) {
-      const value = envValueOf(key)
+      const value = valueOf(key)
       if (value.length > 0) envSecretValues.add(value)
     }
     const redactInit = (s: string): string => redactWith(envSecretValues, s)
@@ -151,7 +195,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // [2] Validate credentials via INJECTED validators (no real network).
     // A secret VALUE is never written into detail — only status (AC-13-4/5).
     for (const tier of TIERS) {
-      const key = envValueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
+      const key = valueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
       const ping = await deps.validators.pingProvider(tier, key)
       if (ping.ok) {
         outcomes.push({ step: `validate.provider.${tier}`, result: 'done' })
@@ -165,7 +209,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       }
     }
     {
-      const token = envValueOf('AISY_TELEGRAM_BOT_TOKEN')
+      const token = valueOf('AISY_TELEGRAM_BOT_TOKEN')
       const me = await deps.validators.telegramGetMe(token)
       if (me.ok) {
         outcomes.push({ step: 'validate.telegram-token', result: 'done' })
@@ -218,7 +262,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // [4] Seed vault (Safety 05) with validated secrets — never logged.
     if (!failed) {
       for (const key of REQUIRED_ENV_KEYS) {
-        const value = envValueOf(key)
+        const value = valueOf(key)
         if (value.length > 0) deps.vault.seed(key, value)
       }
       outcomes.push({ step: 'vault.seed', result: 'done' })

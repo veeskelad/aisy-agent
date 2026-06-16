@@ -211,6 +211,29 @@ export interface CredentialValidators {
   pingProvider(tier: RouteTier, key: string): Promise<{ ok: boolean; httpStatus?: number }>
   /** Telegram getMe token validation. */
   telegramGetMe(token: string): Promise<{ ok: boolean; httpStatus?: number }>
+  /** Recent inbound updates — used for terminal pairing (capture the chat that
+   *  sends the pairing code). Optional: absent ⇒ pairing falls back to manual. */
+  telegramGetUpdates?(token: string): Promise<{ ok: boolean; updates?: TelegramPairUpdate[] }>
+}
+
+/** A minimal inbound update for pairing: who sent what. */
+export interface TelegramPairUpdate {
+  chatId: number
+  text: string
+  username?: string
+}
+
+/** Interactive terminal I/O port — injected so the wizard is testable with a
+ *  scripted double; the real adapter is readline. Absent ⇒ non-interactive. */
+export interface PromptPort {
+  /** Free-text question with an optional default (shown, returned on empty). */
+  ask(question: string, opts?: { default?: string }): Promise<string>
+  /** Secret entry (no echo) — API keys, bot tokens. */
+  secret(question: string): Promise<string>
+  /** Yes/no confirmation. */
+  confirm(question: string, opts?: { default?: boolean }): Promise<boolean>
+  /** Print an informational line to the operator. */
+  info(message: string): void
 }
 
 /** Memory port (Memory 03) — init triggers rebuild; doctor checks integrity. */
@@ -362,6 +385,9 @@ export interface OnboardingDeps {
   // --- optional seams ---
   /** Env values for --non-interactive init (read instead of prompting). */
   env?: Record<string, string>
+  /** Interactive terminal I/O. Present + a TTY ⇒ init prompts for missing
+   *  secrets and runs Telegram pairing; absent ⇒ env-driven (current behavior). */
+  prompt?: PromptPort
   /** Event sink (Observability 12). */
   events?: EventSink
   /** Disk free bytes probe; default healthy. */
