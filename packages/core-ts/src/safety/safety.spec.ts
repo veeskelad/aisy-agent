@@ -9,6 +9,7 @@ import {
   makeApprovalHandler,
   makeNightlyCarveout,
   makeLethalTrifectaDetector,
+  makeGrantStore,
 } from './index.js'
 import { makeEffectVerifier, makeSandboxStub } from '../testing/index.js'
 import type { ContextSpan, ToolCall, OutboundRequest, NightlyOp, EgressAllowlistEntry } from './index.js'
@@ -168,6 +169,63 @@ describe('AC-05-3: Tier-2 ask below Delegation; Tier-3 always ask', () => {
     const verdict = policy.evaluate(tainted, [operatorSpan()])
     // Still must ask, not allow
     expect(verdict.decision).not.toBe('allow')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ADR-0047 — Scoped approval grants suppress the Tier-2 ask, NEVER a deny
+// ---------------------------------------------------------------------------
+
+describe('ADR-0047: scoped approval grants', () => {
+  it('a session grant turns a Tier-2 ask into allow', () => {
+    const grants = makeGrantStore()
+    grants.record('bash', 'session')
+    const policy = makeSafetyPolicy({ grants })
+    const verdict = policy.evaluate(call('bash', { cmd: 'npm test' }), [operatorSpan()])
+    expect(verdict.decision).toBe('allow')
+  })
+
+  it('without a grant the same Tier-2 call still asks', () => {
+    const policy = makeSafetyPolicy({ grants: makeGrantStore() })
+    const verdict = policy.evaluate(call('bash', { cmd: 'npm test' }), [operatorSpan()])
+    expect(verdict.decision).toBe('ask')
+  })
+
+  it('a grant NEVER overrides HARD_DENY (rm -rf stays denied)', () => {
+    const grants = makeGrantStore()
+    grants.record('bash', 'always')
+    const policy = makeSafetyPolicy({ grants })
+    const verdict = policy.evaluate(call('bash', { cmd: 'rm -rf /' }), [operatorSpan()])
+    expect(verdict.decision).toBe('deny')
+    if (verdict.decision === 'deny') expect(verdict.rule).toBe('FS_DESTRUCTION_RM_RF')
+  })
+
+  it('a grant NEVER overrides the tainted-args deny', () => {
+    const grants = makeGrantStore()
+    grants.record('bash', 'always')
+    const policy = makeSafetyPolicy({ grants })
+    const tainted: ToolCall = { ...call('bash', { cmd: 'echo hi' }), argsTainted: true }
+    const verdict = policy.evaluate(tainted, [operatorSpan()])
+    expect(verdict.decision).toBe('deny')
+    if (verdict.decision === 'deny') expect(verdict.rule).toBe('TAINTED_ARGS')
+  })
+
+  it('a grant NEVER overrides the narrowed-outbound deny', () => {
+    const grants = makeGrantStore()
+    grants.record('telegram.send', 'always')
+    const policy = makeSafetyPolicy({ grants })
+    const verdict = policy.evaluate(call('telegram.send', { text: 'hi' }), [untrustedSpan()])
+    expect(verdict.decision).toBe('deny')
+    if (verdict.decision === 'deny') expect(verdict.rule).toBe('NARROWED_OUTBOUND')
+  })
+
+  it('Tier-3 is never suppressed by a grant (step-up every time)', () => {
+    const grants = makeGrantStore()
+    grants.record('db.drop-database', 'always')
+    const policy = makeSafetyPolicy({ grants })
+    const verdict = policy.evaluate(call('db.drop-database', { name: 'prod' }), [operatorSpan()])
+    expect(verdict.decision).toBe('ask')
+    if (verdict.decision === 'ask') expect(verdict.tier).toBe(3)
   })
 })
 

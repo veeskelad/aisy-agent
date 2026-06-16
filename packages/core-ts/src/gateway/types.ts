@@ -33,16 +33,24 @@ export interface PendingAction {
   summary: string              // human-readable diff/summary for the card
 }
 
+/**
+ * Scope of an approval (ADR-0047). 'once' = this action only; 'session' /
+ * 'always' ask the safety layer to remember the grant for the tool. Tier-3
+ * (step-up) cards never carry a remembered scope — the confirmer drops it.
+ */
+export type ApprovalScope = 'once' | 'session' | 'always'
+
 export interface CardTap {
   cardId: CardId
   nonce: string                // single-use, issued with the card
   presentedActionHash: string  // echoed from the card payload
   chatId: number
   stepUpProof?: string         // passphrase/TOTP/retyped text when required
+  approvalScope?: ApprovalScope // which button was tapped (default 'once')
 }
 
 export type ApprovalResult =
-  | { decision: 'confirmed'; actionId: string }
+  | { decision: 'confirmed'; actionId: string; scope?: 'session' | 'always' }
   | { decision: 'rejected'; reason: string }
 
 /**

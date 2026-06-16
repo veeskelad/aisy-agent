@@ -132,6 +132,30 @@ export interface SafetyPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// Scoped approval grants — "session / always" (ADR-0047)
+// A grant may only suppress a tier-based `ask`; it can NEVER override a `deny`.
+// Granularity is per base tool. Tier-3 is never grantable (step-up every time).
+// ---------------------------------------------------------------------------
+
+export type GrantScope = 'session' | 'always'
+
+/** Persistence for "always" grants only; session grants live in-memory. */
+export interface GrantPersistencePort {
+  loadAlways(): string[]
+  saveAlways(tools: string[]): void
+}
+
+export interface GrantStore {
+  /** True if a live session OR persisted always grant covers this tool. */
+  has(tool: string): boolean
+  /** Record a grant. 'always' is promoted over an existing session grant. */
+  record(tool: string, scope: GrantScope): void
+  revoke(tool: string): void
+  revokeAll(): void
+  list(): { tool: string; scope: GrantScope }[]
+}
+
+// ---------------------------------------------------------------------------
 // Safety classifier (convenience wrapper used in tests)
 // ---------------------------------------------------------------------------
 

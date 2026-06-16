@@ -9,6 +9,7 @@ import type {
   CardId,
   CardTap,
   ApprovalResult,
+  ApprovalScope,
   IssuedCardView,
   Channel,
   Provenance,
@@ -23,6 +24,7 @@ export type {
   CardId,
   CardTap,
   ApprovalResult,
+  ApprovalScope,
   IssuedCardView,
   Provenance,
   Channel,
@@ -388,7 +390,15 @@ export function makeGateway(deps: GatewayDeps): Gateway {
       // step 5 "mark nonce consumed atomically").
       consumedTaps.add(tapKey)
       cards.delete(tap.cardId)
-      return { decision: 'confirmed', actionId: card.actionId }
+      // Echo a remembered scope (ADR-0047) so the caller can record the grant.
+      // Tier-3 / step-up cards NEVER carry a remembered scope — drop to 'once'
+      // even if a buggy/hostile client sent session/always (defense-in-depth).
+      const scope = tap.approvalScope
+      const remembered =
+        !card.requiresStepUp && (scope === 'session' || scope === 'always') ? scope : undefined
+      return remembered
+        ? { decision: 'confirmed', actionId: card.actionId, scope: remembered }
+        : { decision: 'confirmed', actionId: card.actionId }
     },
   }
 }

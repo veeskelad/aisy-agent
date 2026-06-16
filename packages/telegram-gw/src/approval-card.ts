@@ -14,14 +14,24 @@ export const CALLBACK_PREFIX = 'atap'
 export const CALLBACK_MAX_BYTES = 64
 const DELIM = '|'
 
-export type CardVerb = 'confirm' | 'reject' | 'info'
+// confirm = approve once; session/always = approve + remember the grant for the
+// tool (ADR-0047); reject = decline; info = show details.
+export type CardVerb = 'confirm' | 'session' | 'always' | 'reject' | 'info'
 
 const VERB_CODE: Record<CardVerb, string> = {
   confirm: 'y',
+  session: 's',
+  always: 'a',
   reject: 'n',
   info: 'i',
 }
-const CODE_VERB: Record<string, CardVerb> = { y: 'confirm', n: 'reject', i: 'info' }
+const CODE_VERB: Record<string, CardVerb> = {
+  y: 'confirm',
+  s: 'session',
+  a: 'always',
+  n: 'reject',
+  i: 'info',
+}
 
 export interface CardCallback {
   cardId: string
@@ -78,9 +88,13 @@ function header(tier: PendingAction['tier']): string {
 }
 
 /**
- * Build the inline keyboard with real callback_data for an issued card. The
- * verbs present depend on tier and step-up state (tier 3 hides confirm until
- * step-up succeeds).
+ * Build the inline keyboard with real callback_data for an issued card.
+ *
+ * - Tier-2: 4 buttons (2×2) — Подтвердить / На сессию / Навсегда / Отменить.
+ *   "session"/"always" remember the grant (ADR-0047).
+ * - Tier-3: only Подтвердить / Отменить, and Подтвердить appears solely after
+ *   step-up — a step-up action is NEVER remembered.
+ * - Tier-0/1: Подтвердить / Отменить (defensive; these tiers do not card).
  */
 export function makeCardButtons(
   action: PendingAction,
@@ -88,16 +102,25 @@ export function makeCardButtons(
   nonce: string,
   opts?: { stepUpReady?: boolean },
 ): InlineButton[][] {
-  const row: InlineButton[] = []
-  const confirmable = action.tier !== 3 || opts?.stepUpReady === true
-  if (confirmable) {
-    row.push({ text: '✅ Подтвердить', data: encodeCallback({ cardId, nonce, verb: 'confirm' }) })
-  }
-  row.push({ text: '❌ Отклонить', data: encodeCallback({ cardId, nonce, verb: 'reject' }) })
+  const btn = (text: string, verb: CardVerb): InlineButton => ({
+    text,
+    data: encodeCallback({ cardId, nonce, verb }),
+  })
+
   if (action.tier === 2) {
-    row.push({ text: 'ℹ️ Подробнее', data: encodeCallback({ cardId, nonce, verb: 'info' }) })
+    return [
+      [btn('✅ Подтвердить', 'confirm'), btn('🔄 На сессию', 'session')],
+      [btn('♾️ Навсегда', 'always'), btn('❌ Отменить', 'reject')],
+    ]
   }
-  return [row]
+
+  if (action.tier === 3) {
+    return opts?.stepUpReady === true
+      ? [[btn('✅ Подтвердить', 'confirm'), btn('❌ Отклонить', 'reject')]]
+      : [[btn('❌ Отклонить', 'reject')]]
+  }
+
+  return [[btn('✅ Подтвердить', 'confirm'), btn('❌ Отклонить', 'reject')]]
 }
 
 /** Render the tier-colored approval card body. Buttons are added by the issuer. */

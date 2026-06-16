@@ -14,12 +14,13 @@ import {
   StepUpFailed,
   NoSuchPendingAction,
 } from '@aisy/core'
-import type { Gateway, PendingAction, CardTap } from '@aisy/core'
+import type { Gateway, PendingAction, CardTap, ApprovalScope } from '@aisy/core'
 import { renderResolved } from './approval-card.js'
 import type { CardCallback } from './approval-card.js'
 
 export type TapOutcome =
-  | { kind: 'confirmed'; actionId: string; footer: string }
+  // scope present (session/always) when the user chose to remember the grant
+  | { kind: 'confirmed'; actionId: string; footer: string; scope?: 'session' | 'always' }
   | { kind: 'rejected'; footer: string }
   | { kind: 'info' }
   | { kind: 'stepup_required' }
@@ -51,24 +52,30 @@ export async function resolveTap(
     return { kind: 'rejected', footer: renderResolved(action, 'rejected', deps.now()) }
   }
 
-  // confirm
+  // confirm / session / always all confirm; the verb chooses the remember-scope.
   if (deps.gateway.getIssuedCard(cb.cardId) === null) return { kind: 'expired' }
+
+  const approvalScope: ApprovalScope =
+    cb.verb === 'session' ? 'session' : cb.verb === 'always' ? 'always' : 'once'
 
   const tap: CardTap = {
     cardId: cb.cardId,
     nonce: cb.nonce, // echo the nonce the tapped button carried (anti-stale)
     presentedActionHash: action.actionHash, // echo the hash shown on the card
     chatId,
+    approvalScope,
     ...(opts?.stepUpProof !== undefined ? { stepUpProof: opts.stepUpProof } : {}),
   }
 
   try {
     const result = await deps.gateway.handleCardTap(tap)
     if (result.decision === 'confirmed') {
+      // scope is the gateway's echo (post Tier-3 drop-guard), not our request.
       return {
         kind: 'confirmed',
         actionId: result.actionId,
         footer: renderResolved(action, 'confirmed', deps.now()),
+        ...(result.scope ? { scope: result.scope } : {}),
       }
     }
     return { kind: 'rejected', footer: renderResolved(action, 'rejected', deps.now()) }

@@ -27,7 +27,7 @@ describe('callback encoding', () => {
   })
 
   it('round-trips every verb', () => {
-    for (const verb of ['confirm', 'reject', 'info'] as const) {
+    for (const verb of ['confirm', 'session', 'always', 'reject', 'info'] as const) {
       const data = encodeCallback({ cardId: 'c', nonce: 'n', verb })
       expect(decodeCallback(data)?.verb).toBe(verb)
     }
@@ -66,13 +66,16 @@ describe('makeCardButtons', () => {
     expect(rows[0]!.map((b) => b.text)).toEqual(['✅ Подтвердить', '❌ Отклонить'])
   })
 
-  it('tier 2: adds an info button', () => {
+  it('tier 2: 4 buttons (2×2) — confirm / session / always / cancel', () => {
     const rows = makeCardButtons(action({ tier: 2 }), 'c', 'n')
-    expect(rows[0]!.map((b) => b.text)).toEqual([
-      '✅ Подтвердить',
-      '❌ Отклонить',
-      'ℹ️ Подробнее',
+    expect(rows.map((r) => r.map((b) => b.text))).toEqual([
+      ['✅ Подтвердить', '🔄 На сессию'],
+      ['♾️ Навсегда', '❌ Отменить'],
     ])
+    // the session/always buttons encode their remember-verb
+    const flat = rows.flat()
+    expect(decodeCallback(flat[1]!.data)?.verb).toBe('session')
+    expect(decodeCallback(flat[2]!.data)?.verb).toBe('always')
   })
 
   it('tier 3 without step-up: reject only', () => {

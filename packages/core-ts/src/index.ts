@@ -14,6 +14,7 @@ export type {
   CardId,
   CardTap,
   ApprovalResult,
+  ApprovalScope,
   IssuedCardView,
   Provenance,
   Channel,

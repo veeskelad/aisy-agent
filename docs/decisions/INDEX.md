@@ -53,6 +53,7 @@ in this index so cross-references stay stable.
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Proposed | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Proposed | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0047 | Accepted  | 2026-06-16 | [Scoped Approval Grants — once / session / always](./2026-06-16-scoped-approval-grants.md) | safety, gateway, telegram, approvals |
 | ADR-0046 | Accepted  | 2026-06-16 | [Gateway `getIssuedCard` Read-Accessor for Transport Adapters](./2026-06-16-gateway-issued-card-view-accessor.md) | gateway, telegram, approval-cards, api-surface |
 | ADR-0044 | Accepted  | 2026-06-15 | [Agent-Loop Per-Session Seq — Won't Fix](./2026-06-15-agent-loop-per-session-seq-wont-fix.md) | agent-loop, observability, single-user |
 | ADR-0043 | Proposed  | 2026-06-15 | [Personality SHA-256 Domain-Separator and Hash Migration Plan](./2026-06-15-personality-hash-migration-plan.md) | personality, security, migration |

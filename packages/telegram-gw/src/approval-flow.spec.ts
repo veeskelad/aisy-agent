@@ -83,8 +83,40 @@ describe('resolveTap', () => {
       nonce: 'nonce-1',
       presentedActionHash: 'sha256-abc',
       chatId: 42,
+      approvalScope: 'once',
       stepUpProof: 'correct-horse',
     })
+  })
+
+  it('session verb confirms and carries scope=session (tap + outcome)', async () => {
+    const { deps, taps } = makeDeps(async (tap) => ({
+      decision: 'confirmed',
+      actionId: 'act-001',
+      ...(tap.approvalScope === 'session' || tap.approvalScope === 'always'
+        ? { scope: tap.approvalScope }
+        : {}),
+    }))
+    const out = await resolveTap({ ...confirmCb, verb: 'session' }, 42, action(), deps)
+    expect(out.kind).toBe('confirmed')
+    if (out.kind === 'confirmed') expect(out.scope).toBe('session')
+    expect(taps[0]!.approvalScope).toBe('session')
+  })
+
+  it('always verb carries scope=always', async () => {
+    const { deps } = makeDeps(async (tap) => ({
+      decision: 'confirmed',
+      actionId: 'act-001',
+      ...(tap.approvalScope === 'always' ? { scope: 'always' as const } : {}),
+    }))
+    const out = await resolveTap({ ...confirmCb, verb: 'always' }, 42, action(), deps)
+    if (out.kind === 'confirmed') expect(out.scope).toBe('always')
+  })
+
+  it('plain confirm sends approvalScope=once and yields no remembered scope', async () => {
+    const { deps, taps } = makeDeps(async () => ({ decision: 'confirmed', actionId: 'act-001' }))
+    const out = await resolveTap(confirmCb, 42, action(), deps)
+    expect(taps[0]!.approvalScope).toBe('once')
+    if (out.kind === 'confirmed') expect(out.scope).toBeUndefined()
   })
 
   it('omits stepUpProof when not provided', async () => {

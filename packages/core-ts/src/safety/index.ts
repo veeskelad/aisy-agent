@@ -47,7 +47,14 @@ export type {
   LethalTrifectaState,
   LethalTrifectaResult,
   LethalTrifectaDetector,
+  // Scoped approval grants (ADR-0047)
+  GrantScope,
+  GrantStore,
+  GrantPersistencePort,
 } from './types.js'
+
+export { makeGrantStore } from './grants.js'
+export type { GrantStoreDeps } from './grants.js'
 
 import type {
   SafetyClassifier,
@@ -76,6 +83,7 @@ import type {
   Tier,
   ToolCall,
   Verdict,
+  GrantStore,
 } from './types.js'
 
 // ---------------------------------------------------------------------------
@@ -160,6 +168,12 @@ export interface SafetyPolicyDeps {
   ready?: boolean
   /** Last sandbox probe; degraded mode denies high-risk tools (ADR-0012). */
   sandboxSecurityLevel?: SandboxSecurityLevel
+  /**
+   * Scoped approval grants (ADR-0047). When present, a per-tool grant suppresses
+   * the Tier-2 `ask` (only after every deny check; never for Tier-3). Absent ⇒
+   * no grants ⇒ baseline behavior.
+   */
+  grants?: GrantStore
 }
 
 export function makeSafetyPolicy(deps: SafetyPolicyDeps = {}): SafetyPolicy {
@@ -214,10 +228,19 @@ export function makeSafetyPolicy(deps: SafetyPolicyDeps = {}): SafetyPolicy {
         return { decision: 'deny', rule: 'DEGRADED_SANDBOX', reason: 'gVisor unavailable — high-risk tool denied' }
       }
 
-      // Autonomy gradient (ADR-0011): Tier-3 always asks via the red card;
-      // Tier-2 asks below Delegation (the default autonomy level).
+      // Autonomy gradient (ADR-0011): Tier-3 always asks via the red card and
+      // is NEVER suppressible by a grant (step-up every time, ADR-0047).
+      // Tier-2 asks, unless a per-tool scoped grant remembers the approval —
+      // checked HERE, after every deny above, so a grant can never override a
+      // deny. Tier-0/1 auto-allow.
       const tier = tierOf(call)
-      if (tier >= 2) {
+      if (tier === 3) {
+        return { decision: 'ask', tier, card: makeCard(call, tier) }
+      }
+      if (tier === 2) {
+        if (deps.grants?.has(call.tool) === true) {
+          return { decision: 'allow' }
+        }
         return { decision: 'ask', tier, card: makeCard(call, tier) }
       }
       return { decision: 'allow' }

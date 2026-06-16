@@ -84,6 +84,70 @@ async function* tokenStream(tokens: string[]): AsyncIterable<string> {
 }
 
 // ---------------------------------------------------------------------------
+// ADR-0047: handleCardTap echoes a remembered scope, never on a step-up card
+// ---------------------------------------------------------------------------
+
+describe('ADR-0047: approval scope echo', () => {
+  it('echoes scope=always for a non-step-up card', async () => {
+    const gw = makeGateway(makeDeps())
+    const action = makePendingAction({ tier: 2, requiresStepUp: false })
+    const cardId = await gw.issueCard(action)
+    const result = await gw.handleCardTap({
+      cardId,
+      nonce: MINTED_NONCE,
+      presentedActionHash: action.actionHash,
+      chatId: 42,
+      approvalScope: 'always',
+    })
+    expect(result.decision).toBe('confirmed')
+    if (result.decision === 'confirmed') expect(result.scope).toBe('always')
+  })
+
+  it('echoes scope=session', async () => {
+    const gw = makeGateway(makeDeps())
+    const action = makePendingAction({ tier: 2 })
+    const cardId = await gw.issueCard(action)
+    const result = await gw.handleCardTap({
+      cardId,
+      nonce: MINTED_NONCE,
+      presentedActionHash: action.actionHash,
+      chatId: 42,
+      approvalScope: 'session',
+    })
+    if (result.decision === 'confirmed') expect(result.scope).toBe('session')
+  })
+
+  it('omits scope when the tap is "once" / absent', async () => {
+    const gw = makeGateway(makeDeps())
+    const action = makePendingAction({ tier: 2 })
+    const cardId = await gw.issueCard(action)
+    const result = await gw.handleCardTap({
+      cardId,
+      nonce: MINTED_NONCE,
+      presentedActionHash: action.actionHash,
+      chatId: 42,
+    })
+    if (result.decision === 'confirmed') expect(result.scope).toBeUndefined()
+  })
+
+  it('DROPS a remembered scope on a step-up (Tier-3) card', async () => {
+    const gw = makeGateway(makeDeps())
+    const action = makePendingAction({ tier: 3, requiresStepUp: true })
+    const cardId = await gw.issueCard(action)
+    const result = await gw.handleCardTap({
+      cardId,
+      nonce: MINTED_NONCE,
+      presentedActionHash: action.actionHash,
+      chatId: 42,
+      stepUpProof: 'correct',
+      approvalScope: 'always',
+    })
+    expect(result.decision).toBe('confirmed')
+    if (result.decision === 'confirmed') expect(result.scope).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // AC-02-1: Allowlisted operator text → operator provenance
 // ---------------------------------------------------------------------------
 
