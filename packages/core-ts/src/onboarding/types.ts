@@ -214,6 +214,15 @@ export interface CredentialValidators {
   /** Recent inbound updates — used for terminal pairing (capture the chat that
    *  sends the pairing code). Optional: absent ⇒ pairing falls back to manual. */
   telegramGetUpdates?(token: string): Promise<{ ok: boolean; updates?: TelegramPairUpdate[] }>
+  /** Provider-aware reachability ping for the catalog picker (additive, ADR-0050).
+   *  The runtime resolves the provider's family/endpoint from its id; CLI
+   *  providers carry no key and are skipped by the caller. Absent ⇒ the catalog
+   *  flow records the key without a live validation. */
+  pingCatalogProvider?(opts: {
+    providerId: string
+    baseUrl?: string
+    key: string
+  }): Promise<{ ok: boolean; httpStatus?: number }>
 }
 
 /** A minimal inbound update for pairing: who sent what. */
@@ -234,6 +243,47 @@ export interface PromptPort {
   confirm(question: string, opts?: { default?: boolean }): Promise<boolean>
   /** Print an informational line to the operator. */
   info(message: string): void
+}
+
+// ---------------------------------------------------------------------------
+// Provider catalog picker (ADR-0050) — onboarding stays decoupled from the
+// runtime provider internals: the catalog is INJECTED as plain data, and the
+// chosen config is persisted through a port. Absent ⇒ init keeps the legacy
+// per-tier key prompts.
+// ---------------------------------------------------------------------------
+
+/** A provider as offered by the interactive picker (mapped from the runtime
+ *  PROVIDER_CATALOG so this module never imports provider internals). */
+export interface ProviderCatalogEntry {
+  id: string
+  label: string
+  /** false for CLI providers (no API key is prompted or validated). */
+  needsKey: boolean
+  /** Suggested base URL (OpenAI-compat); when absent the picker prompts for one. */
+  defaultBaseUrl?: string
+  /** Vault key name for the API key (absent for CLI providers). */
+  keyEnv?: string
+  /** Suggested model ids; the first is offered as the prompt default. */
+  defaultModels?: string[]
+}
+
+/** One provider+model choice. */
+export interface ProviderSelection {
+  provider: string
+  model: string
+}
+
+/** Persisted provider config (`~/.aisy/providers.json`). `tiers` absent ⇒ the
+ *  single `default` model serves every tier (the "one model" simple mode). */
+export interface ProvidersConfig {
+  default?: ProviderSelection
+  tiers?: Record<RouteTier, ProviderSelection>
+}
+
+/** Port that persists the chosen ProvidersConfig (the node adapter writes
+ *  `~/.aisy/providers.json`). */
+export interface ProvidersOutPort {
+  write(config: ProvidersConfig): void
 }
 
 /** Memory port (Memory 03) — init triggers rebuild; doctor checks integrity. */
@@ -388,6 +438,13 @@ export interface OnboardingDeps {
   /** Interactive terminal I/O. Present + a TTY ⇒ init prompts for missing
    *  secrets and runs Telegram pairing; absent ⇒ env-driven (current behavior). */
   prompt?: PromptPort
+  /** Provider catalog for the interactive picker (ADR-0050). Present together
+   *  with providersOut ⇒ init offers a provider/model selection (single or
+   *  per-tier) and persists providers.json instead of prompting per-tier keys.
+   *  Absent ⇒ the legacy per-tier key prompts run. */
+  providerCatalog?: readonly ProviderCatalogEntry[]
+  /** Persists the chosen ProvidersConfig (providers.json). */
+  providersOut?: ProvidersOutPort
   /** Event sink (Observability 12). */
   events?: EventSink
   /** Disk free bytes probe; default healthy. */

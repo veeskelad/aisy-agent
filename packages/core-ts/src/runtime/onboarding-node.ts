@@ -13,7 +13,13 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { makeOnboardingOps } from '../onboarding/index.js'
-import type { PromptPort, TelegramPairUpdate } from '../onboarding/types.js'
+import type {
+  PromptPort,
+  TelegramPairUpdate,
+  ProviderCatalogEntry,
+  ProvidersConfig,
+} from '../onboarding/types.js'
+import { PROVIDER_CATALOG, findProvider } from './providers.js'
 
 /** Readline-backed interactive prompt; secret() mutes echo for token entry. */
 function makeReadlinePrompt(): PromptPort {
@@ -159,6 +165,54 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
         return { ok: false }
       }
     },
+    // Provider-aware reachability for the catalog picker (ADR-0050). Resolves
+    // the family/endpoint from the catalog id; CLI providers skip (no key).
+    async pingCatalogProvider(opts: {
+      providerId: string
+      baseUrl?: string
+      key: string
+    }): Promise<{ ok: boolean; httpStatus?: number }> {
+      const entry = findProvider(opts.providerId)
+      if (!entry) return { ok: false }
+      if (entry.kind === 'cli') return { ok: true }
+      if (!opts.key) return { ok: false }
+      try {
+        if (entry.kind === 'anthropic') {
+          const base = opts.baseUrl ?? 'https://api.anthropic.com/v1'
+          const res = await fetch(`${base}/models`, {
+            headers: { 'x-api-key': opts.key, 'anthropic-version': '2023-06-01' },
+            signal: AbortSignal.timeout(8000),
+          })
+          return { ok: res.status < 400, httpStatus: res.status }
+        }
+        const base = opts.baseUrl ?? entry.defaultBaseUrl
+        if (!base) return { ok: false }
+        const res = await fetch(`${base}/models`, {
+          headers: { Authorization: `Bearer ${opts.key}` },
+          signal: AbortSignal.timeout(8000),
+        })
+        return { ok: res.status < 400, httpStatus: res.status }
+      } catch {
+        return { ok: false }
+      }
+    },
+  }
+
+  // Provider catalog for the interactive picker — mapped to the onboarding's
+  // decoupled shape (needsKey instead of provider-kind internals).
+  const providerCatalog: ProviderCatalogEntry[] = PROVIDER_CATALOG.map((e) => ({
+    id: e.id,
+    label: e.label,
+    needsKey: e.kind !== 'cli',
+    ...(e.defaultBaseUrl ? { defaultBaseUrl: e.defaultBaseUrl } : {}),
+    ...(e.keyEnv ? { keyEnv: e.keyEnv } : {}),
+    ...(e.defaultModels ? { defaultModels: e.defaultModels } : {}),
+  }))
+
+  const providersOut = {
+    write(config: ProvidersConfig): void {
+      writeFileSync(join(base, 'providers.json'), JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 })
+    },
   }
 
   const openDb = (): Db | null => {
@@ -288,6 +342,8 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
     nightly,
     harnessVersion,
     env,
+    providerCatalog,
+    providersOut,
     // Interactive only on a real TTY; piped/non-interactive stays env-driven.
     ...(process.stdin.isTTY ? { prompt: makeReadlinePrompt() } : {}),
   })

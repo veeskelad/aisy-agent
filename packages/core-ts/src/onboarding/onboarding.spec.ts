@@ -24,6 +24,9 @@ import type {
   ContextItem,
   BootstrapSpan,
   PromptPort,
+  ProviderCatalogEntry,
+  ProvidersConfig,
+  ProvidersOutPort,
 } from './types.js'
 import type { PendingAction } from '../gateway/types.js'
 
@@ -818,5 +821,143 @@ describe('interactive init (ADR-0049)', () => {
     await makeOnboardingOps(deps).init({ nonInteractive: true })
     // the interactive intro line is never printed ⇒ no prompting occurred
     expect(prompt.infos).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Interactive init — provider catalog picker (ADR-0050, Phase 1c)
+// ---------------------------------------------------------------------------
+
+/** Catalog-flow prompt double: confirm() returns `single`; ask()/secret()
+ *  replay their scripted queues in order. */
+function catalogPrompt(opts: {
+  single: boolean
+  asks: string[]
+  secrets: string[]
+}): PromptPort & { infos: string[] } {
+  let ai = 0
+  let si = 0
+  const infos: string[] = []
+  return {
+    infos,
+    ask: async () => opts.asks[ai++] ?? '',
+    secret: async () => opts.secrets[si++] ?? '',
+    confirm: async () => opts.single,
+    info: (m) => void infos.push(m),
+  }
+}
+
+function captureProvidersOut(): { port: ProvidersOutPort; written: ProvidersConfig[] } {
+  const written: ProvidersConfig[] = []
+  return { port: { write: (c) => void written.push(c) }, written }
+}
+
+const DEEPSEEK_ENTRY: ProviderCatalogEntry = {
+  id: 'deepseek',
+  label: 'DeepSeek',
+  needsKey: true,
+  keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY',
+  defaultBaseUrl: 'https://api.deepseek.com/v1',
+  defaultModels: ['deepseek-chat'],
+}
+
+// Telegram + memory provided via env so only the catalog prompts run.
+const PRESENT_ENV: Record<string, string> = {
+  AISY_TELEGRAM_BOT_TOKEN: 'tok',
+  AISY_TELEGRAM_CHAT_ID: '42',
+  AISY_MEMORY_ROOT: '/m',
+  AISY_DB_PATH: '/db',
+}
+
+describe('interactive init — provider catalog (ADR-0050)', () => {
+  it('single-model mode: writes providers.json default and seeds the provider key', async () => {
+    const vault = makeFakeVault()
+    const out = captureProvidersOut()
+    const prompt = catalogPrompt({ single: true, asks: ['1', ''], secrets: ['dk-secret'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault,
+      prompt,
+      providerCatalog: [DEEPSEEK_ENTRY],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
+    expect((vault as ReturnType<typeof makeFakeVault>).seeded['AISY_PROVIDER_DEEPSEEK_KEY']).toBe('dk-secret')
+    // The legacy per-tier ping is NOT used; provider validation is keyed by id.
+    expect(res.outcomes.some((o) => o.step === 'validate.provider.deepseek' && o.result === 'done')).toBe(true)
+  })
+
+  it('per-tier mode: writes providers.json tiers', async () => {
+    const out = captureProvidersOut()
+    const prompt = catalogPrompt({ single: false, asks: ['1', '', '1', '', '1', ''], secrets: ['k1', 'k2', 'k3'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [DEEPSEEK_ENTRY],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    const sel = { provider: 'deepseek', model: 'deepseek-chat' }
+    expect(out.written[0]).toEqual({ tiers: { reasoning: sel, critique: sel, routine: sel } })
+  })
+
+  it('validates the chosen provider via the provider-aware ping (custom endpoint)', async () => {
+    const seen: { providerId: string; baseUrl?: string; key: string }[] = []
+    const validators: CredentialValidators = {
+      ...makeFakeValidators(),
+      pingCatalogProvider: async (o) => {
+        seen.push(o)
+        return { ok: true, httpStatus: 200 }
+      },
+    }
+    const out = captureProvidersOut()
+    const custom: ProviderCatalogEntry = {
+      id: 'openai-compat',
+      label: 'Custom (OpenAI-compatible)',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_CUSTOM_KEY',
+    }
+    const prompt = catalogPrompt({ single: true, asks: ['1', 'my-model', 'https://x/v1'], secrets: ['ck'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [custom],
+      providersOut: out.port,
+      validators,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(seen[0]).toEqual({ providerId: 'openai-compat', key: 'ck', baseUrl: 'https://x/v1' })
+    expect(out.written[0]).toEqual({ default: { provider: 'openai-compat', model: 'my-model' } })
+  })
+
+  it('skips key validation for CLI providers (no key prompted)', async () => {
+    const out = captureProvidersOut()
+    const cli: ProviderCatalogEntry = { id: 'claude-cli', label: 'Claude CLI', needsKey: false }
+    const prompt = catalogPrompt({ single: true, asks: ['1', 'sonnet'], secrets: [] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [cli],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'claude-cli', model: 'sonnet' } })
+    expect(res.outcomes.some((o) => o.step === 'validate.provider.claude-cli' && o.result === 'done')).toBe(true)
   })
 })

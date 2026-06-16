@@ -22,6 +22,8 @@ import type {
   Clock,
   RouteTier,
   CostChargedEvent,
+  ProviderSelection,
+  ProvidersConfig,
 } from './types.js'
 import { REQUIRED_ENV_KEYS, SCAFFOLD_FILES, MEMORY_TREE_FILES, MEMORY_TREE_DIRS } from './types.js'
 import type { PendingAction } from '../gateway/types.js'
@@ -65,6 +67,10 @@ export type {
   ContextInventoryPort,
   EventSink,
   CardPort,
+  ProviderCatalogEntry,
+  ProviderSelection,
+  ProvidersConfig,
+  ProvidersOutPort,
 } from './types.js'
 export {
   REQUIRED_ENV_KEYS,
@@ -132,17 +138,67 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // rest of init (validation, vault seed). Already-set keys are not re-asked.
     const collected: Record<string, string> = {}
     const valueOf = (key: string): string => collected[key] ?? envValueOf(key)
+    // ADR-0050: when a provider catalog is injected, the interactive flow offers
+    // a provider/model picker (single model or per-tier) and persists
+    // providers.json, instead of the legacy per-tier key prompts.
+    // catalogSelections drives provider-aware validation in step [2].
+    let catalogSelections: ProviderSelection[] = []
     const interactive = deps.prompt !== undefined && opts.nonInteractive !== true && opts.yes !== true
     if (interactive && deps.prompt) {
       const p = deps.prompt
       p.info('Настройка Aisy — отвечай на вопросы (Enter — пропустить шаг).')
-      for (const tier of TIERS) {
-        const key = `AISY_PROVIDER_${tier.toUpperCase()}_KEY`
-        if (valueOf(key).length === 0) {
-          const v = (await p.secret(`API-ключ провайдера (${tier}):`)).trim()
-          if (v.length > 0) collected[key] = v
+
+      const catalog = deps.providerCatalog
+      if (catalog && catalog.length > 0 && deps.providersOut) {
+        p.info('Доступные провайдеры:')
+        catalog.forEach((e, i) => p.info(`  ${i + 1}. ${e.label}`))
+
+        const pickOne = async (prefix: string): Promise<ProviderSelection> => {
+          const raw = (await p.ask(`${prefix}провайдер (номер)`, { default: '1' })).trim()
+          const n = Number.parseInt(raw, 10)
+          const idx = Number.isFinite(n) && n >= 1 && n <= catalog.length ? n - 1 : 0
+          const entry = catalog[idx]!
+          const defModel = entry.defaultModels?.[0]
+          const model =
+            (await p.ask(`Модель (${entry.label})`, defModel ? { default: defModel } : {})).trim() || (defModel ?? '')
+          if (entry.needsKey && entry.keyEnv) {
+            const key = (await p.secret(`API-ключ (${entry.label}):`)).trim()
+            if (key.length > 0) collected[entry.keyEnv] = key
+            // Known providers carry a catalog default base URL (buildProvider
+            // falls back to it); only a custom endpoint must be asked.
+            if (entry.defaultBaseUrl === undefined) {
+              const bu = (await p.ask(`Base URL (${entry.label})`)).trim()
+              if (bu.length > 0) collected[`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`] = bu
+            }
+          }
+          return { provider: entry.id, model }
+        }
+
+        const single = await p.confirm('Одна модель для всех тиров?', { default: true })
+        let config: ProvidersConfig
+        if (single) {
+          const sel = await pickOne('')
+          config = { default: sel }
+          catalogSelections = [sel]
+        } else {
+          const reasoning = await pickOne('reasoning · ')
+          const critique = await pickOne('critique · ')
+          const routine = await pickOne('routine · ')
+          config = { tiers: { reasoning, critique, routine } }
+          catalogSelections = [reasoning, critique, routine]
+        }
+        deps.providersOut.write(config)
+      } else {
+        // Legacy: prompt the per-tier provider keys (no catalog injected).
+        for (const tier of TIERS) {
+          const key = `AISY_PROVIDER_${tier.toUpperCase()}_KEY`
+          if (valueOf(key).length === 0) {
+            const v = (await p.secret(`API-ключ провайдера (${tier}):`)).trim()
+            if (v.length > 0) collected[key] = v
+          }
         }
       }
+
       if (valueOf('AISY_TELEGRAM_BOT_TOKEN').length === 0) {
         const t = (await p.secret('Telegram bot token:')).trim()
         if (t.length > 0) collected['AISY_TELEGRAM_BOT_TOKEN'] = t
@@ -179,6 +235,11 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       const value = valueOf(key)
       if (value.length > 0) envSecretValues.add(value)
     }
+    // Catalog-collected provider keys live outside REQUIRED_ENV_KEYS — mask them
+    // too so a rejection detail can never echo a provider secret (CSO-M3).
+    for (const value of Object.values(collected)) {
+      if (value.length > 0) envSecretValues.add(value)
+    }
     const redactInit = (s: string): string => redactWith(envSecretValues, s)
 
     // [1] Detect prerequisites — fail-closed with an actionable message (§7).
@@ -194,18 +255,49 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
 
     // [2] Validate credentials via INJECTED validators (no real network).
     // A secret VALUE is never written into detail — only status (AC-13-4/5).
-    for (const tier of TIERS) {
-      const key = valueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
-      const ping = await deps.validators.pingProvider(tier, key)
-      if (ping.ok) {
-        outcomes.push({ step: `validate.provider.${tier}`, result: 'done' })
-      } else {
-        outcomes.push({
-          step: `validate.provider.${tier}`,
-          result: 'failed',
-          detail: redactInit(`${tier}-tier key rejected (HTTP ${ping.httpStatus ?? '???'})`),
-        })
-        failed = true
+    if (catalogSelections.length > 0) {
+      // Catalog picker (ADR-0050): validate each DISTINCT chosen provider via the
+      // provider-aware ping. CLI providers carry no key and are skipped.
+      const catalog = deps.providerCatalog ?? []
+      const seen = new Set<string>()
+      for (const sel of catalogSelections) {
+        if (seen.has(sel.provider)) continue
+        seen.add(sel.provider)
+        const entry = catalog.find((e) => e.id === sel.provider)
+        if (!entry || !entry.needsKey || !entry.keyEnv) {
+          outcomes.push({ step: `validate.provider.${sel.provider}`, result: 'done' })
+          continue
+        }
+        const key = valueOf(entry.keyEnv)
+        const baseUrl = valueOf(`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`) || entry.defaultBaseUrl
+        const ping = deps.validators.pingCatalogProvider
+          ? await deps.validators.pingCatalogProvider({ providerId: sel.provider, key, ...(baseUrl ? { baseUrl } : {}) })
+          : { ok: key.length > 0 }
+        if (ping.ok) {
+          outcomes.push({ step: `validate.provider.${sel.provider}`, result: 'done' })
+        } else {
+          outcomes.push({
+            step: `validate.provider.${sel.provider}`,
+            result: 'failed',
+            detail: redactInit(`${sel.provider} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
+          })
+          failed = true
+        }
+      }
+    } else {
+      for (const tier of TIERS) {
+        const key = valueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
+        const ping = await deps.validators.pingProvider(tier, key)
+        if (ping.ok) {
+          outcomes.push({ step: `validate.provider.${tier}`, result: 'done' })
+        } else {
+          outcomes.push({
+            step: `validate.provider.${tier}`,
+            result: 'failed',
+            detail: redactInit(`${tier}-tier key rejected (HTTP ${ping.httpStatus ?? '???'})`),
+          })
+          failed = true
+        }
       }
     }
     {
@@ -264,6 +356,13 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       for (const key of REQUIRED_ENV_KEYS) {
         const value = valueOf(key)
         if (value.length > 0) deps.vault.seed(key, value)
+      }
+      // Catalog picker (ADR-0050) collects provider keys / base URLs under
+      // names outside REQUIRED_ENV_KEYS (e.g. AISY_PROVIDER_DEEPSEEK_KEY); seed
+      // those too so `aisy run` can resolve them from the vault.
+      const required: readonly string[] = REQUIRED_ENV_KEYS
+      for (const [key, value] of Object.entries(collected)) {
+        if (value.length > 0 && !required.includes(key)) deps.vault.seed(key, value)
       }
       outcomes.push({ step: 'vault.seed', result: 'done' })
     } else {
