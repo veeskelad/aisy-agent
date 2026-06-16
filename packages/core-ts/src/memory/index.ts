@@ -15,7 +15,7 @@ import type {
 } from './types.js'
 import { CorruptIndexError, ForgetListTamperError } from './types.js'
 
-export type { Memory as MemoryStore, MemoryStoreDeps, MemoryFact } from './types.js'
+export type { Memory, Memory as MemoryStore, MemoryStoreDeps, MemoryFact } from './types.js'
 
 export type {
   FactKey,
