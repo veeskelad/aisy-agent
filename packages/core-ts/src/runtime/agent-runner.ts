@@ -37,6 +37,13 @@ export interface AgentRunnerDeps {
   sandboxSecurityLevel?: SandboxSecurityLevel
   maxReplans?: number
   maxTotalToolCalls?: number
+  /** Mid-turn budget probe forwarded to the loop (ADR-0051). */
+  budgetCheck?: (usage: {
+    sessionId: string
+    inputTokens: number
+    outputTokens: number
+    dollars: number
+  }) => boolean | Promise<boolean>
 }
 
 export interface AgentRunner {
@@ -65,6 +72,7 @@ export function makeAgentRunner(deps: AgentRunnerDeps): AgentRunner {
     executeTool: deps.executeTool,
     ...(deps.maxReplans !== undefined ? { maxReplans: deps.maxReplans } : {}),
     ...(deps.maxTotalToolCalls !== undefined ? { maxTotalToolCalls: deps.maxTotalToolCalls } : {}),
+    ...(deps.budgetCheck !== undefined ? { budgetCheck: deps.budgetCheck } : {}),
   })
 
   return {

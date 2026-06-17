@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { makeAgentRunner, type AgentRunnerDeps } from './agent-runner.js'
 import { makeGrantStore } from '../safety/index.js'
+import { makeGuardian } from './guardian.js'
 import type { ApprovalDecision } from './hook-gate.js'
 import type {
   ProviderAdapter,
@@ -125,5 +126,24 @@ describe('makeAgentRunner.handle', () => {
     await s.runner.handle(turn())
     expect(s.approvals).toBe(1) // second bash allowed by the recorded grant
     expect(s.executed.map((c) => c.args['cmd'])).toEqual(['a', 'b'])
+  })
+
+  it('forwards budgetCheck to the loop (halts with budget-capped)', async () => {
+    const provider: ProviderAdapter = {
+      async complete() { return { reply: 'hi', usage: { inputTokens: 10, outputTokens: 5, dollars: 1 } } },
+    }
+    const runner = makeAgentRunner({
+      provider,
+      memory: { async snapshot() { return { prefixBytes: new Uint8Array(0), prefixHash: 'h', breakpoints: [], takenAt: '2026-01-01T00:00:00.000Z' } }, async forget() {} },
+      grants: makeGrantStore({ persistence: { loadAlways: () => [], saveAlways: () => {} } }),
+      executeTool: () => ({ ok: true }),
+      approve: async () => ({ decision: 'rejected' }),
+      guardian: makeGuardian(),
+      sessionLog: { append() {}, resume: () => null },
+      budgetCheck: () => true,
+    })
+    const result = await runner.handle({ sessionId: 's', spans: [{ role: 'user', provenance: 'operator', text: 'hi' }] })
+    expect(result.state).toBe('halted')
+    expect(result.haltReason).toBe('budget-capped')
   })
 })
