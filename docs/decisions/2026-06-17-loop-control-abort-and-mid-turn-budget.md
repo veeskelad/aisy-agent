@@ -58,7 +58,10 @@ truthful gateway-egress guard.
   adapters updated). Abort granularity is per-model-call and per-dispatch, not
   truly preemptive inside a running tool. `budgetCheck` sees the in-flight turn's
   usage plus ledger spend, so the cap is enforced approximately at the call that
-  crosses it (the crossing call's tokens are already spent).
+  crosses it (the crossing call's tokens are already spent). The halted turn now
+  carries that usage on its result so the transport records it to the ledger,
+  keeping the cap and cost view honest; a halted turn also reports `narrowed` so
+  the outbound lockout persists correctly when a narrowed turn hits a halt.
 - **Follow-ups:** the bot mirrors `result.narrowed` into `isOutboundLocked` after
   the turn, so the gateway flag trails the in-turn state by one turn — acceptable
   because the bot's own reply hold uses the fresh `result.narrowed` and the gateway

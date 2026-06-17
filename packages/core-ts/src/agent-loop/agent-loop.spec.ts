@@ -823,4 +823,25 @@ describe('Tier-2 loop control seams', () => {
     expect(result.state).toBe('halted')
     expect(result.haltReason).toBe('stopped')
   })
+
+  it('#5: a budget-capped halt still carries the turn usage (so the bot records it and the cap advances)', async () => {
+    const loop = makeAgentLoop(makeDeps({
+      provider: makeProviderFakeWithResponse({ usage: { inputTokens: 100, outputTokens: 50, dollars: 2 } }),
+      budgetCheck: () => true,
+    }))
+    const result = await loop.runTurn(makeTurnInput())
+    expect(result.state).toBe('halted')
+    expect(result.haltReason).toBe('budget-capped')
+    expect(result.usage).toEqual({ inputTokens: 100, outputTokens: 50, dollars: 2 })
+  })
+
+  it('#6: a narrowed turn that halts still reports narrowed (outbound lockout persists)', async () => {
+    const loop = makeAgentLoop(makeDeps({
+      provider: makeProviderFakeWithResponse({ usage: { inputTokens: 10, outputTokens: 5, dollars: 1 } }),
+      budgetCheck: () => true,
+    }))
+    const result = await loop.runTurn(makeTurnInput({ spans: [makeUntrustedSpan()] }))
+    expect(result.state).toBe('halted')
+    expect(result.narrowed).toBe(true)
+  })
 })

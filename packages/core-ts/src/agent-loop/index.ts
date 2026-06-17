@@ -416,7 +416,15 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       } catch (err) {
         if (err instanceof Halt) {
           log('turn.end', { state: 'halted', haltReason: err.reason })
-          return { reply: '', state: 'halted', haltReason: err.reason }
+          return {
+            reply: '',
+            state: 'halted',
+            haltReason: err.reason,
+            narrowed: s.narrowed,
+            ...(usageIn > 0 || usageOut > 0
+              ? { usage: { inputTokens: usageIn, outputTokens: usageOut, dollars: usageDollars } }
+              : {}),
+          }
         }
         throw err
       }
