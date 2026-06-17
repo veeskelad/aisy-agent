@@ -204,6 +204,11 @@ const executeTool = makeToolExecutor({
   ...(runBash ? { runBash } : {}),
 })
 
+// Live outbound-lockout source (ADR-0051): mirrors the loop's narrowed state so
+// the gateway egress guard (streamReply) is truthful in the live binary, not a
+// hardcoded false. The bot updates it after each turn from TurnResult.narrowed.
+let outboundLocked = false
+
 const gateway = makeGateway({
   getAllowedChatId: async () => allowedChatId,
   getBotToken: async () => token,
@@ -211,7 +216,7 @@ const gateway = makeGateway({
   transcribeVoice: async () => {
     throw new VoiceUnavailable('voice transcription not configured')
   },
-  isOutboundLocked: () => false,
+  isOutboundLocked: () => outboundLocked,
   isSafetyAvailable: () => true,
 })
 
@@ -262,6 +267,7 @@ const bot = makeTelegramBot({
   settings,
   spend,
   budget,
+  setOutboundLocked: (locked) => { outboundLocked = locked },
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
     makeAgentRunner({
       provider,

@@ -4,9 +4,12 @@
 // coalescing of rapid messages, a steer queue for mid-turn input, and Tier-3
 // step-up code capture.
 //
-// Not yet wired (need a core source, see ADR-0048): outbound-lockout enforcement
-// via streamReply and the event-bridge alert stream (budget/cost/narrowed) —
-// those require Safety's narrowed/cost state surfaced to the transport.
+// Outbound lockout is live: a turn that ran with untrusted context returns
+// narrowed=true; the reply is held here behind an allow/block tap
+// (presentOutboundLockout, ADR-0048) AND the narrowed verdict is mirrored to the
+// gateway's egress guard via setOutboundLocked, so streamReply fails closed while
+// narrowed (ADR-0051). Still deferred: streaming partial replies and a push-style
+// alert stream for budget/cost events.
 
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy'
 import type {
@@ -58,6 +61,8 @@ export interface TelegramBotDeps {
   /** Per-agent budget tracker; when settings.budgetEnabled, a turn is refused
    *  once the main agent is over its cap (ADR-0050 Phase 3). */
   budget?: BudgetTracker
+  /** Mirror the loop's narrowed state to the gateway egress guard (ADR-0051). */
+  setOutboundLocked?: (locked: boolean) => void
   now?: () => string
   /** Debounce window for coalescing a rapid message burst. Default 1200ms. */
   debounceMs?: number
@@ -248,6 +253,9 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
         spans: spans.map((s) => ({ role: 'user', provenance: s.provenance, text: s.text })),
         signal: abort.signal,
       })
+      // Keep the gateway egress lockout truthful: this turn's narrowed verdict
+      // is the live outbound-lockout state (self-clears on a clean operator turn).
+      deps.setOutboundLocked?.(result.narrowed === true)
       if (result.state === 'halted' && result.haltReason === 'stopped') {
         // Operator /stop already acked ("⏹ Остановлено."); stay silent.
       } else if (result.state === 'halted' && result.haltReason === 'budget-capped') {

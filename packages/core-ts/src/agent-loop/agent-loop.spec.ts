@@ -803,6 +803,12 @@ describe('Tier-2 loop control seams', () => {
     expect(seen).toEqual([0.1])
   })
 
+  it('#6: a turn with an untrusted span returns narrowed (feeds the outbound-lockout source)', async () => {
+    const loop = makeAgentLoop(makeDeps())
+    const result = await loop.runTurn(makeTurnInput({ spans: [makeUntrustedSpan()] }))
+    expect(result.narrowed).toBe(true)
+  })
+
   it('#4: aborting between tool calls halts with stopped before the next dispatch', async () => {
     const controller = new AbortController()
     const provider = makeProviderFakeWithResponse({
