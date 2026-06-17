@@ -105,6 +105,8 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
   let pendingStepUp: { cb: CardCallback; card: PendingCard } | null = null
   // A reply held by the outbound lockout, awaiting an allow/block tap.
   let pendingOutbound: { reply: string; messageId: number } | null = null
+  // The in-flight turn's abort controller; /stop fires it for a hard-kill.
+  let currentAbort: AbortController | null = null
 
   // Single-operator allowlist: silently drop anything off the allowed chat.
   bot.use(async (ctx, next) => {
@@ -238,12 +240,27 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
       return
     }
     agentState = 'running'
+    const abort = new AbortController()
+    currentAbort = abort
     try {
       const result = await runner.handle({
         sessionId,
         spans: spans.map((s) => ({ role: 'user', provenance: s.provenance, text: s.text })),
+        signal: abort.signal,
       })
-      if (result.narrowed === true) {
+      if (result.state === 'halted' && result.haltReason === 'stopped') {
+        // Operator /stop already acked ("⏹ Остановлено."); stay silent.
+      } else if (result.state === 'halted' && result.haltReason === 'budget-capped') {
+        await sendPanel(
+          renderEvent({
+            kind: 'budget.capped',
+            limitUsd: deps.budget?.capFor('main') ?? 0,
+            spentUsd: deps.budget?.spentFor('main') ?? 0,
+            stepsDone: 0,
+            stepsTotal: 0,
+          }),
+        )
+      } else if (result.narrowed === true) {
         await presentOutboundLockout(result.reply)
       } else {
         await sendReply(result.reply)
@@ -270,6 +287,7 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
       }
     } finally {
       agentState = 'idle'
+      currentAbort = null
       // Drain mid-turn steer input (newest-first) and run it as the next turn.
       if (!steer.isEmpty) {
         const texts = steer.drain().flatMap((i) => i.texts)
@@ -317,10 +335,10 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     await ctx.reply(MENU_GREETING, { reply_markup: mainMenuKeyboard() })
   })
 
-  // TODO: /stop should hard-kill the in-flight turn (needs a runner abort seam).
   bot.command('stop', async (ctx) => {
     buffered = []
     if (flushTimer) clearTimeout(flushTimer)
+    currentAbort?.abort()
     await ctx.reply('⏹ Остановлено.')
   })
 

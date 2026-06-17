@@ -263,7 +263,24 @@ const bot = makeTelegramBot({
   spend,
   budget,
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
-    makeAgentRunner({ provider, memory, grants, executeTool, approve, guardian: makeGuardian(), sessionLog, maxTotalToolCalls: 50 }),
+    makeAgentRunner({
+      provider,
+      memory,
+      grants,
+      executeTool,
+      approve,
+      guardian: makeGuardian(),
+      sessionLog,
+      maxTotalToolCalls: 50,
+      // Mid-turn budget (ADR-0051): when enforcement is on and this turn's
+      // running spend would cross the main agent's cap, halt the turn.
+      budgetCheck: (usage) => {
+        if (settings.get().budgetEnabled !== true) return false
+        const cap = budget.capFor('main')
+        if (cap <= 0) return false
+        return budget.spentFor('main') + usage.dollars >= cap
+      },
+    }),
 })
 
 process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${modelLabel})…\n`)
