@@ -58,4 +58,13 @@ describe('makeTieredProvider', () => {
     const tp = makeTieredProvider({ reasoning: stub('R'), critique: stub('C'), routine: stub('T') })
     expect((await tp.complete(req)).reply).toBe('R')
   })
+
+  it('makeTieredProvider forwards the abort signal to the delegated tier adapter', async () => {
+    let seen: AbortSignal | undefined
+    const adapter: ProviderAdapter = { async complete(_req, signal) { seen = signal; return { reply: 'ok' } } }
+    const tiered = makeTieredProvider({ reasoning: adapter, critique: adapter, routine: adapter })
+    const controller = new AbortController()
+    await tiered.complete({ sessionId: 's', prefixBytes: new Uint8Array(0), spans: [] }, controller.signal)
+    expect(seen).toBe(controller.signal)
+  })
 })

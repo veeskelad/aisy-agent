@@ -96,6 +96,6 @@ export function makeTieredProvider(
 ): ProviderAdapter {
   const pick = classify ?? ((): RouteTier => 'reasoning')
   return {
-    complete: (req) => byTier[pick(req)].complete(req),
+    complete: (req, signal) => byTier[pick(req)].complete(req, signal),
   }
 }

@@ -149,7 +149,7 @@ export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdap
   const timeoutMs = deps.timeoutMs ?? 60_000
 
   return {
-    async complete(req: ModelRequest): Promise<ModelResponse> {
+    async complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
       const prefix = req.prefixBytes.byteLength > 0 ? Buffer.from(req.prefixBytes).toString('utf8') : ''
       const { system, messages } = spansToMessages(req.spans, prefix)
 
@@ -171,7 +171,7 @@ export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdap
             'content-type': 'application/json',
           },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
         })
       } catch (err) {
         const kind = (err as Error)?.name === 'TimeoutError' ? 'timeout' : 'server-error'

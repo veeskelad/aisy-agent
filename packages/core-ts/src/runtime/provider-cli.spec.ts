@@ -58,4 +58,15 @@ describe('makeCliProvider.complete', () => {
     })
     await expect(provider.complete(req([span('user', 'x')]))).rejects.toMatchObject({ kind: 'server-error' })
   })
+
+  it('forwards the abort signal to the injected run', async () => {
+    let seen: AbortSignal | undefined
+    const p = makeCliProvider({
+      command: ['claude', '-p'],
+      run: async (_argv, _input, signal) => { seen = signal; return { stdout: 'hi', exitCode: 0 } },
+    })
+    const controller = new AbortController()
+    await p.complete({ sessionId: 's', prefixBytes: new Uint8Array(0), spans: [] }, controller.signal)
+    expect(seen).toBe(controller.signal)
+  })
 })

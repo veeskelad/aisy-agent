@@ -26,7 +26,7 @@ export interface CliProviderDeps {
   /** Optional model flag appended as `--model <model>` when set. */
   model?: string
   /** Run argv with `input` on stdin → stdout/exit. Injected for tests. */
-  run?: (argv: string[], input: string) => Promise<CliRunResult>
+  run?: (argv: string[], input: string, signal?: AbortSignal) => Promise<CliRunResult>
   timeoutMs?: number
 }
 
@@ -48,8 +48,8 @@ export function promptFromSpans(spans: ContextSpan[], prefix: string): string {
   return parts.join('\n\n')
 }
 
-function defaultRun(timeoutMs: number): (argv: string[], input: string) => Promise<CliRunResult> {
-  return (argv, input) =>
+function defaultRun(timeoutMs: number): (argv: string[], input: string, signal?: AbortSignal) => Promise<CliRunResult> {
+  return (argv, input, signal) =>
     new Promise<CliRunResult>((resolve, reject) => {
       const [cmd, ...args] = argv
       if (!cmd) {
@@ -57,10 +57,21 @@ function defaultRun(timeoutMs: number): (argv: string[], input: string) => Promi
         return
       }
       const child = spawn(cmd, args, { timeout: timeoutMs })
+      const onAbort = (): void => { child.kill() }
+      if (signal) {
+        if (signal.aborted) child.kill()
+        else signal.addEventListener('abort', onAbort, { once: true })
+      }
       let stdout = ''
       child.stdout.on('data', (d) => (stdout += String(d)))
-      child.on('error', (e) => reject(new CliError('server-error', `CLI spawn failed: ${e.message}`)))
-      child.on('close', (code) => resolve({ stdout, exitCode: code ?? 0 }))
+      child.on('error', (e) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+        reject(new CliError('server-error', `CLI spawn failed: ${e.message}`))
+      })
+      child.on('close', (code) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+        resolve({ stdout, exitCode: code ?? 0 })
+      })
       child.stdin.end(input)
     })
 }
@@ -70,10 +81,10 @@ export function makeCliProvider(deps: CliProviderDeps): ProviderAdapter {
   const argv = deps.model ? [...deps.command, '--model', deps.model] : [...deps.command]
 
   return {
-    async complete(req: ModelRequest): Promise<ModelResponse> {
+    async complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
       const prefix = req.prefixBytes.byteLength > 0 ? Buffer.from(req.prefixBytes).toString('utf8') : ''
       const prompt = promptFromSpans(req.spans, prefix)
-      const r = await run(argv, prompt)
+      const r = await run(argv, prompt, signal)
       if (r.exitCode !== 0) {
         throw new CliError('server-error', `CLI exited ${r.exitCode}`)
       }

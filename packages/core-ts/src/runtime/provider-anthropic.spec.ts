@@ -166,4 +166,22 @@ describe('makeAnthropicProvider.complete', () => {
       kind: 'timeout',
     })
   })
+
+  it('threads an external abort signal into the fetch (composite with timeout)', async () => {
+    let seen: AbortSignal | undefined
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen = init?.signal ?? undefined
+      return new Response(JSON.stringify({ content: [{ type: 'text', text: 'hi' }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const controller = new AbortController()
+    const p = makeAnthropicProvider({ apiKey: 'k', model: 'claude-sonnet-4-6', fetchImpl })
+    await p.complete(
+      { sessionId: 's', prefixBytes: new Uint8Array(0), spans: [{ role: 'user', provenance: 'operator', text: 'hi' }] },
+      controller.signal,
+    )
+    expect(seen).toBeInstanceOf(AbortSignal)
+    expect(seen!.aborted).toBe(false)
+    controller.abort()
+    expect(seen!.aborted).toBe(true)
+  })
 })

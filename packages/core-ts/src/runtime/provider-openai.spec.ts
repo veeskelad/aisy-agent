@@ -111,4 +111,21 @@ describe('makeOpenAICompatProvider.complete', () => {
     const p = makeOpenAICompatProvider({ apiKey: 'K', model: 'm', baseUrl: 'https://x/v1', fetchImpl: timeoutImpl })
     await expect(p.complete(req([span('user', 'x')]))).rejects.toMatchObject({ kind: 'timeout' })
   })
+
+  it('threads an external abort signal into the fetch (composite with timeout)', async () => {
+    let seen: AbortSignal | undefined
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen = init?.signal ?? undefined
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'hi' } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const controller = new AbortController()
+    const p = makeOpenAICompatProvider({ apiKey: 'k', model: 'gpt-4o', baseUrl: 'https://x/v1', fetchImpl })
+    await p.complete(
+      { sessionId: 's', prefixBytes: new Uint8Array(0), spans: [{ role: 'user', provenance: 'operator', text: 'hi' }] },
+      controller.signal,
+    )
+    expect(seen).toBeInstanceOf(AbortSignal)
+    controller.abort()
+    expect(seen!.aborted).toBe(true)
+  })
 })
