@@ -29,16 +29,17 @@ Shipped in commits `1634b61` (memory adapters), `2c2c2d3` (session log), `ffd46b
 `b8ebe57` (bin wiring), `67d9526` (graceful `search_memory`). 658 core tests green.
 Residual surfaced in final review → folded into Tier 2 #4b below.
 
-### Tier 2 — control & safety on the phone (shared loop abort-seam)
-| # | Task | Effort | Risk | Depends |
-|---|------|--------|------|---------|
-| 4 | `/stop` hard-kill: `AbortSignal` through loop → provider | M | med (loop) | — |
-| 4b | ✅ **done** (`be837ee`) — catch-all in `bot.ts` `runTurn`: a throwing turn now surfaces an error message + resets state instead of an unhandled rejection. (Found in Tier-1 final review.) Residual: error-detail secret redaction on this path not yet wired. | S | low | — |
-| 5 | Mid-turn budget: `Halt('budget-capped')` + budget port in loop | M | med (loop) | shares #4 seam |
-| 6 | Live outbound-lockout: `isOutboundLocked`/`narrowed` from safety (UI exists) | M | med | safety (built) |
-| 7 | Voice: Whisper sidecar → `transcribeVoice` | M | med | sidecars-py |
+### Tier 2 — control & safety on the phone (shared loop abort-seam) — ✅ DONE (#4–#6)
+| # | Task | Effort | Risk | Depends | Status |
+|---|------|--------|------|---------|--------|
+| 4 | `/stop` hard-kill: `AbortSignal` through loop → provider | M | med (loop) | — | ✅ done |
+| 4b | Catch-all in `bot.ts` `runTurn`: a throwing turn now surfaces an error message + resets state instead of an unhandled rejection. (Found in Tier-1 final review.) Residual: error-detail secret redaction on this path not yet wired. | S | low | — | ✅ done |
+| 5 | Mid-turn budget: `Halt('budget-capped')` + budget port in loop | M | med (loop) | shares #4 seam | ✅ done |
+| 6 | Live outbound-lockout: `isOutboundLocked`/`narrowed` from safety (UI exists) | M | med | safety (built) | ✅ done |
+| 7 | Voice: Whisper sidecar → `transcribeVoice` | M | med | sidecars-py | split to own plan |
 
-→ Plan: TBD (one writing-plans plan when Tier 2 starts; #4+#5 share the abort/loop seam → plan together).
+→ **Plan:** [`docs/superpowers/plans/2026-06-17-tier2-loop-control.md`](./superpowers/plans/2026-06-17-tier2-loop-control.md) — #4/#5 via ADR-0051 loop seams; #6 wires the live `isOutboundLocked` source (bot mirrors `narrowed` → gateway egress guard) on top of the existing transport-layer hold. #7 (voice) split to its own plan.
+Shipped in commits `e5c2408`+`18e65d6`+`92517b5` (#4 abort), `e5c2408`+`53be608`+`92517b5` (#5 budget), `ef09cf3` (#6 outbound-lockout). `be837ee` (#4b catch-all).
 
 ### Tier 3 — sub-agents (delegation) — the big capability
 | # | Task | Effort | Risk | Depends |
