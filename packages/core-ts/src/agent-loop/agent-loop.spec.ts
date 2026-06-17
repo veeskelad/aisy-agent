@@ -140,6 +140,20 @@ function makeAllDownProvider(): ProviderAdapter {
   }
 }
 
+/** Provider that rejects (AbortError) iff the external signal is already aborted. */
+function makeAbortAwareProvider(): ProviderAdapter {
+  return {
+    async complete(_req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+      if (signal?.aborted) {
+        const e = new Error('aborted') as Error & { name: string }
+        e.name = 'AbortError'
+        throw e
+      }
+      return { reply: 'ok', toolCalls: [] }
+    },
+  }
+}
+
 function makeExecSpy(): { calls: ToolCall[]; fn: (call: ToolCall) => unknown } {
   const calls: ToolCall[] = []
   return {
@@ -743,4 +757,64 @@ describe('AgentLoop', () => {
     expect(result.haltReason).toBe('cap-exceeded')
   })
 
+})
+
+describe('Tier-2 loop control seams', () => {
+  it('#4: an already-aborted signal halts the turn with stopped (clean, not error)', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const loop = makeAgentLoop(makeDeps({ provider: makeAbortAwareProvider() }))
+    const result = await loop.runTurn(makeTurnInput({ signal: controller.signal }))
+    expect(result.state).toBe('halted')
+    expect(result.haltReason).toBe('stopped')
+    expect(result.reply).toBe('')
+  })
+
+  it('#4: passes the signal down to provider.complete', async () => {
+    let seen: AbortSignal | undefined
+    const provider: ProviderAdapter = {
+      async complete(_req, signal) { seen = signal; return { reply: 'ok', toolCalls: [] } },
+    }
+    const controller = new AbortController()
+    const loop = makeAgentLoop(makeDeps({ provider }))
+    await loop.runTurn(makeTurnInput({ signal: controller.signal }))
+    expect(seen).toBe(controller.signal)
+  })
+
+  it('#5: budgetCheck returning true halts the turn with budget-capped', async () => {
+    const loop = makeAgentLoop(makeDeps({
+      provider: makeProviderFakeWithResponse({ usage: { inputTokens: 100, outputTokens: 50, dollars: 1 } }),
+      budgetCheck: () => true,
+    }))
+    const result = await loop.runTurn(makeTurnInput())
+    expect(result.state).toBe('halted')
+    expect(result.haltReason).toBe('budget-capped')
+  })
+
+  it('#5: budgetCheck sees accumulated usage and false lets the turn finish ok', async () => {
+    const seen: number[] = []
+    const loop = makeAgentLoop(makeDeps({
+      provider: makeProviderFakeWithResponse({ reply: 'done', usage: { inputTokens: 10, outputTokens: 5, dollars: 0.1 } }),
+      budgetCheck: (u) => { seen.push(u.dollars); return false },
+    }))
+    const result = await loop.runTurn(makeTurnInput())
+    expect(result.state).toBe('ok')
+    expect(result.reply).toBe('done')
+    expect(seen).toEqual([0.1])
+  })
+
+  it('#4: aborting between tool calls halts with stopped before the next dispatch', async () => {
+    const controller = new AbortController()
+    const provider = makeProviderFakeWithResponse({
+      reply: 'ok',
+      toolCalls: [{ name: 'read_file', args: {} }, { name: 'read_file', args: {} }],
+    })
+    const loop = makeAgentLoop(makeDeps({
+      provider,
+      executeTool: () => { controller.abort(); return { ok: true } }, // abort during first dispatch
+    }))
+    const result = await loop.runTurn(makeTurnInput({ signal: controller.signal }))
+    expect(result.state).toBe('halted')
+    expect(result.haltReason).toBe('stopped')
+  })
 })

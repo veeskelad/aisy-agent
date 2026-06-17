@@ -63,13 +63,16 @@ export interface TurnInput {
   spans: ContextSpan[]
   /** Optional approval token for Tier-3 plans (AC-01-17) */
   approvalToken?: string
+  /** Per-turn cancellation (ADR-0051): /stop aborts the in-flight turn. The loop
+   *  maps an abort to a clean Halt('stopped'), never an error. */
+  signal?: AbortSignal
 }
 
 export type TurnState =
   | { status: "ok" }
   | { status: "awaiting-clarification" }
   | { status: "awaiting-approval" }
-  | { status: "halted"; reason: "loop-guardian" | "all-providers-down" | "plan-lint-failed" | "cap-exceeded" }
+  | { status: "halted"; reason: "loop-guardian" | "all-providers-down" | "plan-lint-failed" | "cap-exceeded" | "budget-capped" | "stopped" }
   | { status: "in-progress"; nextStepIndex: number }
 
 /** Token + dollar usage for a turn (or a single model call). */
@@ -82,7 +85,7 @@ export interface TurnUsage {
 export interface TurnResult {
   reply: string
   state: "ok" | "awaiting-clarification" | "awaiting-approval" | "halted"
-  haltReason?: "loop-guardian" | "all-providers-down" | "plan-lint-failed" | "cap-exceeded"
+  haltReason?: "loop-guardian" | "all-providers-down" | "plan-lint-failed" | "cap-exceeded" | "budget-capped" | "stopped"
   /** On state "awaiting-approval", the hash of the pending Tier-3 plan; the caller must
    *  echo it back as approvalToken so a swapped plan cannot reuse a prior token (§5, AC-01-17). */
   planHash?: string
@@ -131,7 +134,7 @@ export interface ProviderError extends Error {
 }
 
 export interface ProviderAdapter {
-  complete(req: ModelRequest): Promise<ModelResponse>
+  complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>
 }
 
 export interface HookCtx {
@@ -182,4 +185,12 @@ export interface AgentLoopDeps {
   probeRunner?: (trace: VerificationTrace) => boolean | Promise<boolean>
   /** Executes an allowed tool call; injectable test seam. Default: no-op. */
   executeTool?: (call: ToolCall) => unknown | Promise<unknown>
+  /** Post-model-call budget probe (ADR-0051): given the turn's running usage,
+   *  return true to halt the turn with budget-capped. Default: never halts. */
+  budgetCheck?: (usage: {
+    sessionId: string
+    inputTokens: number
+    outputTokens: number
+    dollars: number
+  }) => boolean | Promise<boolean>
 }

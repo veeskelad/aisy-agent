@@ -229,18 +229,37 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         // Eng-7 durability: the recorded intent is fsync'd BEFORE the dispatch.
         log('step.intent', { kind: 'model-call' })
         try {
-          const r = await deps.provider.complete({
-            sessionId: input.sessionId,
-            prefixBytes: snapshot.prefixBytes,
-            spans: input.spans,
-          })
+          const r = await deps.provider.complete(
+            {
+              sessionId: input.sessionId,
+              prefixBytes: snapshot.prefixBytes,
+              spans: input.spans,
+            },
+            input.signal,
+          )
           if (r.usage) {
             usageIn += r.usage.inputTokens
             usageOut += r.usage.outputTokens
             usageDollars += r.usage.dollars
           }
+          // ADR-0051 mid-turn budget: consult the injected probe with the turn's
+          // running usage; a positive verdict halts before any further dispatch.
+          if (deps.budgetCheck) {
+            const capped = await deps.budgetCheck({
+              sessionId: input.sessionId,
+              inputTokens: usageIn,
+              outputTokens: usageOut,
+              dollars: usageDollars,
+            })
+            if (capped) throw new Halt('budget-capped')
+          }
           return r
         } catch (err) {
+          // A Halt raised in the try (budget) is control flow, not an error — re-throw as-is.
+          if (err instanceof Halt) throw err
+          // A /stop abort surfaces as a fetch/spawn rejection; map it to a clean
+          // halt so the transport stays quiet (the /stop handler already acked).
+          if (input.signal?.aborted) throw new Halt('stopped')
           if ((err as Partial<ProviderError>).kind === 'all-exhausted') {
             log('provider.exhausted', {})
             throw new Halt('all-providers-down')
@@ -259,6 +278,8 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       }
 
       const dispatch = async (call: ToolCall): Promise<void> => {
+        // ADR-0051: /stop interrupts between tool calls too, not only at model calls.
+        if (input.signal?.aborted) throw new Halt('stopped')
         s.totalToolCalls++
         if (deps.maxTotalToolCalls !== undefined && s.totalToolCalls > deps.maxTotalToolCalls) {
           throw new Halt('cap-exceeded')
