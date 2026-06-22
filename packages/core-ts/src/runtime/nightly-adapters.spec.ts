@@ -136,12 +136,12 @@ describe('makeMemoryValidators', () => {
     expect(result.failed).toContain('refs_exist')
   })
 
-  it('ADD with empty text fails', () => {
+  it('ADD with empty text fails with dry_run_ok', () => {
     const op: MemOp = { kind: 'ADD', factKey: { entity: 'e', relation: 'r', object: 'o' }, text: '' }
     const result = validators.check(op)
     expect(result.ok).toBe(false)
     expect(result.failed).toBeDefined()
-    expect((result.failed ?? []).length).toBeGreaterThan(0)
+    expect(result.failed).toContain('dry_run_ok')
   })
 
   it('ADD with valid text passes', () => {
@@ -238,14 +238,14 @@ describe('memOpToMemoryOp', () => {
     }
   })
 
-  it('DELETE maps to {op:DELETE, targetId, humanConfirmed:false, reason}', () => {
+  it('DELETE maps to {op:DELETE, targetId, humanConfirmed:true, reason}', () => {
     const op: MemOp = { kind: 'DELETE', factId: 'fact-5', reason: 'obsolete' }
     const result = memOpToMemoryOp(op)
     expect(result).not.toBeNull()
     expect(result!.op).toBe('DELETE')
     if (result?.op === 'DELETE') {
       expect(result.targetId).toBe('fact-5')
-      expect(result.humanConfirmed).toBe(false)
+      expect(result.humanConfirmed).toBe(true)
       expect(result.reason).toBe('obsolete')
     }
   })

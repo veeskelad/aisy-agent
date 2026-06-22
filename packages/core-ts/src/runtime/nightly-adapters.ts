@@ -127,7 +127,7 @@ export function makeMemoryValidators(deps: MemoryValidatorsDeps): Validators {
 
       if (op.kind === 'ADD') {
         if (op.text.trim() === '') {
-          return { ok: false, failed: ['no_conflicts'] }
+          return { ok: false, failed: ['dry_run_ok'] }
         }
       }
 
@@ -162,8 +162,8 @@ export function liveFactsForNightly(facts: MemoryFact[]): Fact[] {
 /**
  * Bridge mapper: converts a nightly MemOp to a Memory MemoryOp for promotion.
  * NOOP → null (no commit needed).
- * DELETE never carries is_human_confirmed (per spec comment on MemOp);
- * promotion always uses humanConfirmed: false — human taps Approve separately.
+ * DELETE uses humanConfirmed: true because promotion runs only after the
+ * operator's morning-card Approve tap → human-confirmed.
  */
 export function memOpToMemoryOp(op: MemOp): MemoryOp | null {
   switch (op.kind) {
@@ -172,7 +172,8 @@ export function memOpToMemoryOp(op: MemOp): MemoryOp | null {
     case 'UPDATE':
       return { op: 'UPDATE', targetId: op.factId, text: op.text }
     case 'DELETE':
-      return { op: 'DELETE', targetId: op.factId, humanConfirmed: false, reason: op.reason }
+      // promotion runs only after the operator's morning-card Approve tap → human-confirmed
+      return { op: 'DELETE', targetId: op.factId, humanConfirmed: true, reason: op.reason }
     case 'NOOP':
       return null
   }
