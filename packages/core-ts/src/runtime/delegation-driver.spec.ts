@@ -207,6 +207,56 @@ describe('runDelegation', () => {
     expect(cascadeEvents.length).toBeGreaterThan(0)
   })
 
+  // Scenario 5: a throwing runTask degrades to a failure, emits task-error, and cascade-skips downstream.
+  it('degrades a throwing runTask to a failure, emits task-error, and cascade-skips downstream', async () => {
+    const dag: PlanDAG = {
+      nodes: [
+        makeTask({ taskId: 'THROW', scope: { owns: ['throw/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+        makeTask({ taskId: 'CHILD', dependsOn: ['THROW'], scope: { owns: ['child/**'], doNotTouch: [], taskClass: 'reasoning' } }),
+      ],
+      edges: [{ from: 'THROW', to: 'CHILD' }],
+    }
+
+    const manager = makeDelegationManager(dag, makeDeps())
+    const invoked = new Set<string>()
+    const errorEvents: unknown[] = []
+    const cascadeEvents: unknown[] = []
+
+    const deps: DelegationDriverDeps = {
+      manager,
+      runTask: async (_handle: DelegationHandle, task: DelegationTask) => {
+        invoked.add(task.taskId)
+        await barrier()
+        // THROW's runTask rejects instead of calling handle.fail/complete.
+        throw new Error(`runTask exploded for ${task.taskId}`)
+      },
+      onEvent: (e) => {
+        if (e.kind === 'task-error') errorEvents.push(e)
+        if (e.kind === 'cascade-skip') cascadeEvents.push(e)
+      },
+    }
+
+    // Must NOT reject — degraded to partial results.
+    const observations = await runDelegation(deps)
+
+    // THROW was attempted; CHILD was never invoked (cascade-skipped).
+    expect(invoked.has('THROW')).toBe(true)
+    expect(invoked.has('CHILD')).toBe(false)
+
+    // The driver emitted a task-error event for THROW.
+    expect(errorEvents).toHaveLength(1)
+    const ev = errorEvents[0] as { kind: string; detail: { taskId: string; error: string } }
+    expect(ev.detail.taskId).toBe('THROW')
+    expect(ev.detail.error).toContain('runTask exploded')
+
+    // The failed task produces a 'failed' observation (from handle.fail inside the driver).
+    expect(observations).toHaveLength(1)
+    expect(observations[0]!.status).toBe('failed')
+
+    // A cascade-skip event was emitted for CHILD.
+    expect(cascadeEvents.length).toBeGreaterThan(0)
+  })
+
   // Bonus: returns empty array when plan has no tasks.
   it('returns empty observations for an empty plan', async () => {
     const dag: PlanDAG = { nodes: [], edges: [] }

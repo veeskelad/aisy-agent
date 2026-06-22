@@ -103,10 +103,23 @@ export async function runDelegation(deps: DelegationDriverDeps): Promise<TaskObs
 
     for (const batch of batches) {
       for (const t of batch) attempted.add(t.taskId)
-      const results = await Promise.all(
-        batch.map(t => runTask(manager.spawn(t.taskId), t)),
+      const settled = await Promise.allSettled(
+        batch.map(async (t) => {
+          const handle = manager.spawn(t.taskId)
+          try {
+            return await runTask(handle, t)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            onEvent?.({ kind: 'task-error', detail: { taskId: t.taskId, error: msg } })
+            // Convert an uncaught runTask error into a proper delegation failure so
+            // the manager cascade-skips downstream; the driver never leaves a task open.
+            return handle.fail(msg, { iterations: 0, spendUsd: 0, wallMs: 0 })
+          }
+        }),
       )
-      observations.push(...results)
+      for (const r of settled) {
+        if (r.status === 'fulfilled') observations.push(r.value)
+      }
     }
 
     // Advance state + record cascade-skips.
