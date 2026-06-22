@@ -9,7 +9,7 @@
 // Tier-1 wiring). Full crash-resume (SessionLog.resume) is still deferred.
 
 import { existsSync, readFileSync, writeFileSync, readdirSync, appendFileSync, unlinkSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -51,6 +51,7 @@ import {
   type Settings,
   type TaskObservation,
   type LogEntry,
+  type VerificationTrace,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
 import { makeJsonlJournal } from '../journal.js'
@@ -411,6 +412,39 @@ async function buildNightlyRunner() {
   })
 }
 
+// --- Tier-4 D2: helpers for trigger command parsing ---
+
+/** Parse a relative or absolute time string into an ISO-8601 string, or null. */
+function parseWhen(when?: string): string | null {
+  if (!when) return null
+  const rel = /^(\d+)(m|h|d)$/.exec(when)
+  if (rel) {
+    const n = Number(rel[1])
+    const unit = rel[2]!
+    const ms = unit === 'm' ? n * 60_000 : unit === 'h' ? n * 3_600_000 : n * 86_400_000
+    return new Date(Date.now() + ms).toISOString()
+  }
+  const parsed = Date.parse(when)
+  if (!isNaN(parsed)) return new Date(parsed).toISOString()
+  return null
+}
+
+/** Parse a probe shorthand (file:<path> or http:<url>) into a VerificationTrace, or null. */
+function parseProbe(p?: string): VerificationTrace | null {
+  if (!p) return null
+  if (p.startsWith('file:')) {
+    const path = p.slice('file:'.length)
+    if (!path) return null
+    return { kind: 'file', path, existsExpected: true }
+  }
+  if (p.startsWith('http:')) {
+    const url = p.slice('http:'.length)
+    if (!url) return null
+    return { kind: 'http', method: 'GET', url, expectStatus: 200 }
+  }
+  return null
+}
+
 // sendProactive is resolved after makeTelegramBot; runNightly captures it via closure.
 let sendProactiveRef: ((text: string) => Promise<void>) | null = null
 
@@ -447,6 +481,28 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
     const r = await buildNightlyRunner()
     await r.approveStagedItem(id)
   },
+  onRegisterTrigger: async (input) => {
+    try {
+      const budget = { tokenCeiling: 50000, dollarCeiling: 0.5, tokensSpent: 0, dollarsSpent: 0 }
+      if (input.kind === 'remind') {
+        const fireAt = parseWhen(input.when)
+        if (!fireAt) return { ok: false, error: 'Не понял время. Примеры: 30m, 2h, 1d, или ISO-8601.' }
+        const spec = await triggerEngine.register({ id: randomUUID(), kind: 'remind', createdBy: 'operator', prompt: input.prompt, fireAt, budget })
+        return { ok: true, id: spec.id }
+      }
+      if (input.kind === 'schedule') {
+        const spec = await triggerEngine.register({ id: randomUUID(), kind: 'schedule', createdBy: 'operator', prompt: input.prompt, cron: input.cron!, budget })
+        return { ok: true, id: spec.id }
+      }
+      // watch
+      const probe = parseProbe(input.probe)
+      if (!probe) return { ok: false, error: 'Не понял пробу. Примеры: file:/path, http:https://…' }
+      const spec = await triggerEngine.register({ id: randomUUID(), kind: 'watch', createdBy: 'operator', prompt: input.prompt, probe, intervalMs: 60000, budget })
+      return { ok: true, id: spec.id }
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : 'ошибка' } }
+  },
+  onListTriggers: async () => (await triggerEngine.list()).map((t) => ({ id: t.id, kind: t.kind, prompt: t.prompt })),
+  onCancelTrigger: async (id) => { try { await triggerEngine.cancel(id); return true } catch { return false } },
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => {
     approveRef = approve
     return makeAgentRunner({

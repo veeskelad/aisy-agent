@@ -73,6 +73,18 @@ export interface TelegramBotDeps {
   getStaging?: () => Promise<{ id: string; preview: string; judged: boolean }[]>
   /** Promote a staged memory patch by id (Tier-4 C2). */
   onApproveNightly?: (stagedItemId: string) => Promise<void>
+  /** Register a new trigger — decoupled shape, no trigger types (Tier-4 D2). */
+  onRegisterTrigger?: (input: {
+    kind: 'remind' | 'schedule' | 'watch'
+    prompt: string
+    when?: string
+    cron?: string
+    probe?: string
+  }) => Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  /** List active triggers — decoupled shape (Tier-4 D2). */
+  onListTriggers?: () => Promise<{ id: string; kind: string; prompt: string }[]>
+  /** Cancel a trigger by id — returns true if found (Tier-4 D2). */
+  onCancelTrigger?: (id: string) => Promise<boolean>
 }
 
 interface PendingCard {
@@ -369,6 +381,66 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     }
     const rows = items.map((it) => [{ text: `${it.judged ? '✅' : '⏳'} ${it.preview}`, data: it.judged ? `nightly:approve:${it.id}` : 'nightly:unjudged' }])
     await bot.api.sendMessage(deps.allowedChatId, 'Staged правки памяти (tap = одобрить):', { reply_markup: toInlineKeyboard(rows) })
+  })
+
+  // --- trigger commands (Tier-4 D2) ---
+  bot.command('remind', async (ctx) => {
+    const args = (ctx.match ?? '').trim().split(/\s+/)
+    const when = args[0]
+    const prompt = args.slice(1).join(' ')
+    if (!when || !prompt) {
+      await ctx.reply('Использование: /remind <30m|2h|ISO> <текст>')
+      return
+    }
+    const res = await deps.onRegisterTrigger?.({ kind: 'remind', prompt, when })
+    if (!res) { await ctx.reply('❌ Триггеры не настроены.'); return }
+    await ctx.reply(res.ok ? `✅ Напоминание создано (id ${res.id})` : `❌ ${res.error}`)
+  })
+
+  bot.command('schedule', async (ctx) => {
+    const args = (ctx.match ?? '').trim().split(/\s+/)
+    const cron = args[0]
+    const prompt = args.slice(1).join(' ')
+    if (!cron || !prompt) {
+      await ctx.reply('Использование: /schedule <@daily|@hourly|HH:MM> <текст>')
+      return
+    }
+    const res = await deps.onRegisterTrigger?.({ kind: 'schedule', prompt, cron })
+    if (!res) { await ctx.reply('❌ Триггеры не настроены.'); return }
+    await ctx.reply(res.ok ? `✅ Расписание создано (id ${res.id})` : `❌ ${res.error}`)
+  })
+
+  bot.command('watch', async (ctx) => {
+    const args = (ctx.match ?? '').trim().split(/\s+/)
+    const probe = args[0]
+    const prompt = args.slice(1).join(' ')
+    if (!probe || !prompt) {
+      await ctx.reply('Использование: /watch <file:PATH|http:URL> <текст>')
+      return
+    }
+    const res = await deps.onRegisterTrigger?.({ kind: 'watch', prompt, probe })
+    if (!res) { await ctx.reply('❌ Триггеры не настроены.'); return }
+    await ctx.reply(res.ok ? `✅ Наблюдение создано (id ${res.id})` : `❌ ${res.error}`)
+  })
+
+  bot.command('triggers', async (ctx) => {
+    const list = (await deps.onListTriggers?.()) ?? []
+    if (list.length === 0) {
+      await ctx.reply('Триггеров нет.')
+      return
+    }
+    const text = list.map((t, i) => `${i + 1}. ${t.id} · ${t.kind} · ${t.prompt}`).join('\n')
+    await ctx.reply(text)
+  })
+
+  bot.command('untrigger', async (ctx) => {
+    const id = (ctx.match ?? '').trim()
+    if (!id) {
+      await ctx.reply('Использование: /untrigger <id>')
+      return
+    }
+    const ok = await deps.onCancelTrigger?.(id)
+    await ctx.reply(ok === true ? '✅ Снят' : '❌ Не найден')
   })
 
   // --- approval card taps ---
