@@ -78,7 +78,12 @@ Promotion to live memory happens exclusively when the operator taps Approve on a
 morning-card item → `approveStagedItem`, which re-runs the TOCTOU check and the
 resurrection guard before writing. A DELETE is recorded as human-confirmed at that
 moment (the Approve tap is the confirmation). Only items that passed the judge receive
-an Approve button.
+an Approve button. Promotion applies the approved op to live memory through a
+`commitOp` port on `ConsolidationDeps` (the app wires it to `memoryStore.commit`/`forget`
+via `memOpToMemoryOp`, then reindexes the resulting fact id); `commitOp` is reachable
+ONLY from `approveStagedItem`, after the judge-gate + TOCTOU + resurrection-guard.
+The runner is a single bin-scope instance so its in-memory staging persists across
+stage → /staging → Approve.
 
 ## Consequences
 
@@ -102,6 +107,9 @@ an Approve button.
 The following are explicitly deferred and do not block this decision:
 
 - Real `draftSkills` (currently returns `[]`).
+- Live fact freshness — the nightly's facts + validators are captured at process boot
+  (a long-running process consolidates only facts known at boot until restart); a
+  facts-thunk for per-run freshness is a follow-up.
 - Full hash-chained, redacting AuditLog (Component 12) — the JSONL journal is
   an interim observability layer.
 - SQL watch probes (phase-1 probe set: file/http/exit shipped; sql deferred).

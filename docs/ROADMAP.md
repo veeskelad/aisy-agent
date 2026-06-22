@@ -58,9 +58,9 @@ Follow-ups: auto-delegation from a coordinator-emitted multi-task plan; real `sk
 | 10 | Triggers/proactivity: `TriggerEngine` tick loop → operator `/remind` `/schedule` `/watch` `/triggers` `/untrigger` commands → budget-capped proactive turns via bot seam | M–L | med | a scheduler | ✅ done |
 
 → **Plan:** [`docs/superpowers/plans/2026-06-22-tier4-proactivity.md`](./superpowers/plans/2026-06-22-tier4-proactivity.md)
-Shipped across phases A–E (journal sink + scheduler seam, `Memory.listLive()`, Generator/Judge LLM adapters + bridge, `ConsolidationRunner` + scheduler + morning card, trigger commands + `startTurn` proactive seam). ADR-0053 captures all four decisions; ADR-0038 promoted to Accepted.
+Shipped across phases A–E (journal sink + scheduler seam, `Memory.listLive()`, Generator/Judge LLM adapters + bridge, `ConsolidationRunner` + scheduler + morning card, trigger commands + `startTurn` proactive seam). ADR-0053 captures all four decisions; ADR-0038 promoted to Accepted. Final-review fixes: `52e10f4` (real commit-on-approve + single shared runner), `4c783f71` (trigger budget debit + proactive-turn concurrency guard).
 v1 scope: in-process scheduler + missed-slot catch-up; LLM Generator/Judge with defensive parse + fail-safe staging; staging-gated nightly (Approve tap → `approveStagedItem` + TOCTOU + resurrection-guard); operator trigger commands (`/remind`, `/schedule`, `/watch`, `/triggers`, `/untrigger`); JSONL observability journal (`~/.aisy/journal.jsonl`); phase-1 probes (file/http/exit).
-Follow-ups: real `draftSkills`; full hash-chained AuditLog (Component 12); SQL watch probes; `propose_trigger` agent tool; nightly git/hygiene/archive effect seams; judge==generator single-provider fallback; `/watch http:https://…` double-scheme UX.
+Follow-ups: real `draftSkills`; full hash-chained AuditLog (Component 12); SQL watch probes; `propose_trigger` agent tool; nightly git/hygiene/archive effect seams; judge==generator single-provider fallback; `/watch http:https://…` double-scheme UX; live fact freshness (nightly facts/validators are boot-time-captured until restart).
 
 ### Tier 5 — UX polish & small tails (quick wins)
 | # | Task | Effort |
