@@ -33,6 +33,7 @@ import {
   makeDelegationManager,
   runDelegation,
   makeSubAgentRunner,
+  normalizeSpawnPlan,
   DEFAULT_GENERAL_CARD,
   runCli,
   harnessVersion,
@@ -48,8 +49,6 @@ import {
   type SpendEntry,
   type Settings,
   type TaskObservation,
-  type LinearPlanLike,
-  type PlanDAG,
   type LogEntry,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
@@ -297,15 +296,19 @@ function selectionForAgent(agentId: string): ProviderSel {
 let approveRef: ((action: PendingAction) => Promise<ApprovalDecision>) | null = null
 
 const spawnSubagent = async (planJson: string): Promise<TaskObservation[]> => {
-  let plan: LinearPlanLike | PlanDAG
-  try { plan = JSON.parse(planJson) as LinearPlanLike | PlanDAG }
+  let parsed: unknown
+  try { parsed = JSON.parse(planJson) }
   catch { return [] }
-  const manager = makeDelegationManager(plan, {
-    resolveCard: (name) => cardResolver.resolve(name) ?? cardResolver.resolve(DEFAULT_GENERAL_CARD.name) ?? DEFAULT_GENERAL_CARD,
-    skillTouchedPaths: () => [],   // Skills (06) not live yet — default card declares none
-    mcpWritable: () => false,      // MCP (07) not live yet
-    emit: () => {},                // Observability journal wired in Tier 4
-  })
+  const plan = normalizeSpawnPlan(parsed, DEFAULT_GENERAL_CARD.name)
+  let manager
+  try {
+    manager = makeDelegationManager(plan, {
+      resolveCard: (name) => cardResolver.resolve(name) ?? cardResolver.resolve(DEFAULT_GENERAL_CARD.name) ?? DEFAULT_GENERAL_CARD,
+      skillTouchedPaths: () => [],   // Skills (06) not live yet — default card declares none
+      mcpWritable: () => false,      // MCP (07) not live yet
+      emit: () => {},                // Observability journal wired in Tier 4
+    })
+  } catch { return [] }
   return runDelegation({
     manager,
     runTask: async (handle, task) => {

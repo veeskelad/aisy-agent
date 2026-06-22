@@ -146,3 +146,6 @@ export type {
 // --- Sub-agent runner (Tier-3 sub-agent delegation, ADR-0052) ---
 export { makeSubAgentRunner } from './runtime/sub-agent-runner.js'
 export type { SubAgentRunnerDeps } from './runtime/sub-agent-runner.js'
+
+// --- Plan normalizer (Tier-3 fix: ensures every node has non-null assignedTo) ---
+export { normalizeSpawnPlan } from './runtime/spawn-plan.js'

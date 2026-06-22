@@ -105,7 +105,23 @@ export async function runDelegation(deps: DelegationDriverDeps): Promise<TaskObs
       for (const t of batch) attempted.add(t.taskId)
       const settled = await Promise.allSettled(
         batch.map(async (t) => {
-          const handle = manager.spawn(t.taskId)
+          let handle
+          try {
+            handle = manager.spawn(t.taskId)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            onEvent?.({ kind: 'task-error', detail: { taskId: t.taskId, error: msg } })
+            // spawn() threw (e.g. null assignedTo, unknown card) — synthesise a failed
+            // observation so the manager can cascade-skip downstream tasks.
+            return {
+              delegationId: t.taskId,
+              status: 'failed' as const,
+              summary: msg,
+              touched: [],
+              result: null,
+              cost: { iterations: 0, spendUsd: 0, wallMs: 0 },
+            }
+          }
           try {
             return await runTask(handle, t)
           } catch (err) {

@@ -268,4 +268,39 @@ describe('runDelegation', () => {
     const observations = await runDelegation(deps)
     expect(observations).toHaveLength(0)
   })
+
+  // FIX B: a spawn-failing task (null assignedTo) surfaces as ONE failed observation
+  // instead of being silently discarded as a Promise.allSettled 'rejected' result.
+  it('surfaces a spawn failure as a failed observation (null assignedTo → spawn throws)', async () => {
+    // Build a manager with a task that has null assignedTo so spawn() throws.
+    const dag: PlanDAG = {
+      nodes: [
+        makeTask({ taskId: 't1', intent: 'x', assignedTo: null as unknown as string }),
+      ],
+      edges: [],
+    }
+    const manager = makeDelegationManager(dag, makeDeps())
+    const errorEvents: unknown[] = []
+
+    const deps: DelegationDriverDeps = {
+      manager,
+      runTask: async (handle, task) => handle.complete('done', {}, COST),
+      onEvent: (e) => {
+        if (e.kind === 'task-error') errorEvents.push(e)
+      },
+    }
+
+    // Must NOT reject — spawn failure is degraded to a failed observation.
+    const observations = await runDelegation(deps)
+
+    // One observation, status 'failed' — not empty (the silent-discard bug).
+    expect(observations).toHaveLength(1)
+    expect(observations[0]!.status).toBe('failed')
+
+    // A task-error event was emitted for the spawn failure.
+    expect(errorEvents).toHaveLength(1)
+    const ev = errorEvents[0] as { kind: string; detail: { taskId: string; error: string } }
+    expect(ev.detail.taskId).toBe('t1')
+    expect(ev.detail.error).toContain('no assigned AgentCard')
+  })
 })
