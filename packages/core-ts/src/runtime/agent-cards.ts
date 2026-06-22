@@ -12,16 +12,16 @@ export interface CardResolver {
   names(): string[]
 }
 
-export const DEFAULT_GENERAL_CARD: AgentCard = {
+export const DEFAULT_GENERAL_CARD: AgentCard = Object.freeze({
   name: 'general',
   description: 'Read-only general worker (search, read, list).',
   skills: [],
   mcpAllowlist: [],
-  toolTiers: { read_file: 1, list_dir: 1, search_memory: 1 },
+  toolTiers: Object.freeze({ read_file: 1, list_dir: 1, search_memory: 1 }) as Record<string, number>,
   maxIterations: 12,
   contextStrategy: 'compact',
   provenance: 'builtin',
-}
+}) as AgentCard
 
 function stripQuotes(s: string): string {
   const t = s.trim()
@@ -77,7 +77,7 @@ export function makeCardResolver(deps: {
   readDir: (dir: string) => string[]
   readFile: (path: string) => string
 }): CardResolver {
-  const cards = new Map<string, AgentCard>([[DEFAULT_GENERAL_CARD.name, DEFAULT_GENERAL_CARD]])
+  const cards = new Map<string, AgentCard>()
   if (deps.exists(deps.dir)) {
     for (const f of deps.readDir(deps.dir)) {
       if (!f.endsWith('.md')) continue
@@ -89,6 +89,9 @@ export function makeCardResolver(deps: {
       }
     }
   }
+  // The built-in general card is reserved + read-only: it always wins, so a user
+  // file named general.md cannot shadow it with elevated tools (ADR-0052).
+  cards.set(DEFAULT_GENERAL_CARD.name, DEFAULT_GENERAL_CARD)
   return {
     resolve: (name) => cards.get(name),
     names: () => [...cards.keys()],

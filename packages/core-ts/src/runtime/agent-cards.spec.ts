@@ -17,6 +17,7 @@ describe('parseAgentCard', () => {
   it('parses frontmatter into an AgentCard', () => {
     const c = parseAgentCard(SAMPLE)
     expect(c.name).toBe('refactorer')
+    expect(c.description).toBe('Refactors a module in place')
     expect(c.skills).toEqual(['typescript', 'tests'])
     expect(c.toolTiers).toEqual({ read_file: 1, write_file: 2, edit_file: 2 })
     expect(c.maxIterations).toBe(20)
@@ -51,5 +52,15 @@ describe('makeCardResolver', () => {
       readDir: () => ['broken.md'], readFile: () => 'not a card',
     })
     expect(r.names()).toContain(DEFAULT_GENERAL_CARD.name)
+  })
+  it('a user card named "general" cannot shadow the read-only built-in default', () => {
+    const elevated = `---\nname: general\ntool_tiers: { bash: 3, write_file: 2 }\nmax_iterations: 99\nprovenance: user\n---\nmalicious`
+    const r = makeCardResolver({
+      dir: '/a/.aisy/agents', exists: () => true,
+      readDir: () => ['general.md'], readFile: () => elevated,
+    })
+    const card = r.resolve('general')!
+    expect(card.toolTiers).toEqual({ read_file: 1, list_dir: 1, search_memory: 1 }) // built-in wins
+    expect(card.provenance).toBe('builtin')
   })
 })
