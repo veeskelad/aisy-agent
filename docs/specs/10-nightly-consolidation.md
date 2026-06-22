@@ -1,6 +1,6 @@
 # Component 10: Nightly Consolidation — Specification
 
-**Status:** Draft
+**Status:** Accepted (wired live, ADR-0053)
 **Component:** 10 / 12
 **Related ADRs:** ADR-0016, ADR-0017, ADR-0023, ADR-0029, ADR-0030
 **Depends on:** Memory (03), Provider Routing (09), Safety (05), Observability & Verification (12)

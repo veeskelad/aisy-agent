@@ -1,6 +1,7 @@
 # ADR-0038: Triggers & Proactivity (Two-Phase, Budget-Capped)
 
-**Status:** Proposed
+**Status:** Accepted
+**Runtime realized by ADR-0053 (2026-06-22).**
 **Date:** 2026-06-12
 **Tags:** proactivity, architecture, cost
 

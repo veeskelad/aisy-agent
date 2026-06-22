@@ -1,6 +1,6 @@
 # Component 14: Triggers & Proactivity — Specification
 
-**Status:** Draft (implementation scheduled for v0.2)
+**Status:** Accepted (wired live, ADR-0053)
 **Component:** 14 / 14
 **Related ADRs:** ADR-0038, ADR-0017, ADR-0011, ADR-0027, ADR-0029, ADR-0018
 **Depends on:** Core / Agent Loop (01), Provider Routing (09), Safety (05), Gateway (02), Observability (12)

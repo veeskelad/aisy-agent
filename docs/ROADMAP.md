@@ -51,13 +51,16 @@ Shipped in commits implementing phases A–E (export + `makeSubAgentRunner`, sco
 v1 scope: explicit `spawn_subagent` tool (single-task or goal-DAG); concurrent-with-reverify execution; card-scoped isolation (fresh empty GrantStore, `toolTiers` from card, writes confined to `owns` lane); bundled read-only reserved `general` default card; narrowing inherited via the Tier-2 `outboundLocked` mirror (one-turn-stale).
 Follow-ups: auto-delegation from a coordinator-emitted multi-task plan; real `skillTouchedPaths`/`mcpWritable` resolution when specs 06/07 go live; precise live narrowing (loop→executor seam); mid-sub-turn budget enforcement.
 
-### Tier 4 — proactivity (after real memory)
-| # | Task | Effort | Risk | Depends |
-|---|------|--------|------|---------|
-| 9 | Nightly consolidation: cron/timer → `ConsolidationRunner` → staging gate (`/consolidate` already builds the PendingAction) | M | low | #1 (memory) |
-| 10 | Triggers/proactivity: `TriggerEngine` → watch/scheduler → fire | M–L | med | a scheduler |
+### Tier 4 — proactivity (after real memory) — ✅ DONE (#9–#10)
+| # | Task | Effort | Risk | Depends | Status |
+|---|------|--------|------|---------|--------|
+| 9 | Nightly consolidation: in-process scheduler + missed-slot catch-up → `ConsolidationRunner` → LLM Generator/Judge (fail-safe) → staging gate (`approveStagedItem`) | M | low | #1 (memory) | ✅ done |
+| 10 | Triggers/proactivity: `TriggerEngine` tick loop → operator `/remind` `/schedule` `/watch` `/triggers` `/untrigger` commands → budget-capped proactive turns via bot seam | M–L | med | a scheduler | ✅ done |
 
-→ Plan: TBD.
+→ **Plan:** [`docs/superpowers/plans/2026-06-22-tier4-proactivity.md`](./superpowers/plans/2026-06-22-tier4-proactivity.md)
+Shipped across phases A–E (journal sink + scheduler seam, `Memory.listLive()`, Generator/Judge LLM adapters + bridge, `ConsolidationRunner` + scheduler + morning card, trigger commands + `startTurn` proactive seam). ADR-0053 captures all four decisions; ADR-0038 promoted to Accepted.
+v1 scope: in-process scheduler + missed-slot catch-up; LLM Generator/Judge with defensive parse + fail-safe staging; staging-gated nightly (Approve tap → `approveStagedItem` + TOCTOU + resurrection-guard); operator trigger commands (`/remind`, `/schedule`, `/watch`, `/triggers`, `/untrigger`); JSONL observability journal (`~/.aisy/journal.jsonl`); phase-1 probes (file/http/exit).
+Follow-ups: real `draftSkills`; full hash-chained AuditLog (Component 12); SQL watch probes; `propose_trigger` agent tool; nightly git/hygiene/archive effect seams; judge==generator single-provider fallback; `/watch http:https://…` double-scheme UX.
 
 ### Tier 5 — UX polish & small tails (quick wins)
 | # | Task | Effort |
