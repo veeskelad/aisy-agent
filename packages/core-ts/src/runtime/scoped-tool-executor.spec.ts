@@ -24,6 +24,13 @@ describe('makeScopedToolExecutor', () => {
     const exec = makeScopedToolExecutor({ base: okBase, permitsTool: () => true, owns: ['src/**'], doNotTouch: ['src/secrets/**'] })
     const r = await exec({ name: 'write_file', args: { path: 'src/secrets/k.ts', content: 'x' } })
     expect(r.ok).toBe(false)
+    expect(r.output).toContain('scope')
+  })
+
+  it('refuses a write tool with no path arg', async () => {
+    const exec = makeScopedToolExecutor({ base: okBase, permitsTool: () => true, owns: ['src/**'], doNotTouch: [] })
+    const r = await exec({ name: 'write_file', args: {} })
+    expect(r.ok).toBe(false)
   })
 
   it('allows a permitted write inside the owned lane', async () => {

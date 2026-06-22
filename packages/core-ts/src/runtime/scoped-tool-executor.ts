@@ -37,8 +37,8 @@ export function makeScopedToolExecutor(
     }
     if (WRITE_TOOLS.has(call.name)) {
       const p = pathArg(call)
-      if (p !== undefined && !inOwnedLane(p)) {
-        return { ok: false, output: `path '${p}' is outside this sub-agent's owned scope` }
+      if (p === undefined || !inOwnedLane(p)) {
+        return { ok: false, output: `write tool '${call.name}' needs a path inside this sub-agent's owned scope` }
       }
     }
     return deps.base(call)
