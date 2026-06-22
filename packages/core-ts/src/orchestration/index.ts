@@ -126,7 +126,7 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${re}$`)
 }
 
-function globMatches(glob: string, path: string): boolean {
+export function globMatches(glob: string, path: string): boolean {
   return globToRegExp(glob).test(path)
 }
 
