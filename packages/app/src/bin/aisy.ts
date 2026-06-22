@@ -29,6 +29,11 @@ import {
   makeMemoryPort,
   makeMemorySearch,
   makeJsonlSessionLog,
+  makeCardResolver,
+  makeDelegationManager,
+  runDelegation,
+  makeSubAgentRunner,
+  DEFAULT_GENERAL_CARD,
   runCli,
   harnessVersion,
   VoiceUnavailable,
@@ -42,6 +47,10 @@ import {
   type SessionLog,
   type SpendEntry,
   type Settings,
+  type TaskObservation,
+  type LinearPlanLike,
+  type PlanDAG,
+  type LogEntry,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
 
@@ -130,6 +139,7 @@ const TOOLS: AnthropicTool[] = [
   { name: 'list_dir', description: 'List a directory in the workspace', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
   { name: 'bash', description: 'Run a shell command in the sandbox', input_schema: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] } },
   { name: 'search_memory', description: 'Search long-term memory (FTS) for relevant facts', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'spawn_subagent', description: 'Delegate a scoped task or a goal-DAG plan to a sub-agent (AgentCard). Arg: plan = JSON of {steps:[{intent}]} or a PlanDAG.', input_schema: { type: 'object', properties: { plan: { type: 'string' } }, required: ['plan'] } },
 ]
 
 const fsPort: FsPort = {
@@ -202,6 +212,7 @@ const executeTool = makeToolExecutor({
   workspaceRoot,
   searchMemory: makeMemorySearch(memoryStore),
   ...(runBash ? { runBash } : {}),
+  spawnSubagent: (planJson) => spawnSubagent(planJson),  // thunk → const defined below (after budget)
 })
 
 // Live outbound-lockout source (ADR-0051): mirrors the loop's narrowed state so
@@ -258,6 +269,75 @@ const budget = makeBudgetTracker({
   spent: (agentId) => spend.byAgent().find((a) => a.agentId === agentId)?.dollars ?? 0,
 })
 
+// --- Tier-3 sub-agent delegation wiring ---
+const cardResolver = makeCardResolver({
+  dir: join(base, 'agents'),
+  exists: (p) => existsSync(p),
+  readDir: (d) => (existsSync(d) ? readdirSync(d) : []),
+  readFile: (p) => readFileSync(p, 'utf8'),
+})
+
+// Sub-agents use a base executor WITHOUT spawn_subagent — no nested delegation in v1.
+const subAgentBaseExecutor = makeToolExecutor({
+  fs: fsPort,
+  workspaceRoot,
+  searchMemory: makeMemorySearch(memoryStore),
+  ...(runBash ? { runBash } : {}),
+})
+
+// Per-(sub)agent model selection from providers.json:agents; fall back to the default.
+function selectionForAgent(agentId: string): ProviderSel {
+  const a = providersCfg.agents?.[agentId]
+  return a?.provider != null && a.model != null ? { provider: a.provider, model: a.model } : defaultSel
+}
+
+// The bot supplies the human approval port inside buildRunner; capture it for sub-agents.
+let approveRef: ((action: PendingAction) => Promise<ApprovalDecision>) | null = null
+
+const spawnSubagent = async (planJson: string): Promise<TaskObservation[]> => {
+  let plan: LinearPlanLike | PlanDAG
+  try { plan = JSON.parse(planJson) as LinearPlanLike | PlanDAG }
+  catch { return [] }
+  const manager = makeDelegationManager(plan, {
+    resolveCard: (name) => cardResolver.resolve(name) ?? cardResolver.resolve(DEFAULT_GENERAL_CARD.name),
+    skillTouchedPaths: () => [],   // Skills (06) not live yet — default card declares none
+    mcpWritable: () => false,      // MCP (07) not live yet
+    emit: () => {},                // Observability journal wired in Tier 4
+  })
+  return runDelegation({
+    manager,
+    runTask: async (handle, task) => {
+      const agentId = task.assignedTo ?? handle.card.name
+      const sel = selectionForAgent(agentId)
+      const shardLog: SessionLog = {
+        append: (e: LogEntry) => { handle.append(e.kind, e.payload) },
+        resume: () => null,
+      }
+      const subRunner = makeSubAgentRunner({
+        handle,
+        provider: adapterFor(sel),
+        baseExecuteTool: subAgentBaseExecutor,
+        approve: approveRef ?? (async () => ({ decision: 'rejected' as const })),
+        memory,
+        sessionLog: shardLog,
+        parentNarrowed: outboundLocked,   // Tier-2 narrowed mirror (one-turn-stale, ADR-0052)
+        doNotTouch: task.scope.doNotTouch,
+      })
+      const result = await subRunner.handle({
+        sessionId: handle.delegationId,
+        spans: [{ role: 'user', provenance: 'operator', text: task.intent }],
+      })
+      if (result.usage != null) {
+        spend.record({ model: sel.model, agentId, usage: result.usage })
+      }
+      const cost = { iterations: 1, spendUsd: result.usage?.dollars ?? 0, wallMs: 0 }
+      return result.state === 'halted'
+        ? handle.fail(result.haltReason ?? 'halted', cost)
+        : handle.complete(result.reply, result.reply, cost)
+    },
+  })
+}
+
 const bot = makeTelegramBot({
   token,
   allowedChatId,
@@ -268,8 +348,9 @@ const bot = makeTelegramBot({
   spend,
   budget,
   setOutboundLocked: (locked) => { outboundLocked = locked },
-  buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) =>
-    makeAgentRunner({
+  buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => {
+    approveRef = approve
+    return makeAgentRunner({
       provider,
       memory,
       grants,
@@ -286,7 +367,8 @@ const bot = makeTelegramBot({
         if (cap <= 0) return false
         return budget.spentFor('main') + usage.dollars >= cap
       },
-    }),
+    })
+  },
 })
 
 process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${modelLabel})…\n`)

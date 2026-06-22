@@ -142,3 +142,7 @@ export type {
   BudgetSlice,
   IterationCost,
 } from './orchestration/index.js'
+
+// --- Sub-agent runner (Tier-3 sub-agent delegation, ADR-0052) ---
+export { makeSubAgentRunner } from './runtime/sub-agent-runner.js'
+export type { SubAgentRunnerDeps } from './runtime/sub-agent-runner.js'
