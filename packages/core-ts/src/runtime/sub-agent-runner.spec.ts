@@ -116,11 +116,17 @@ describe('makeSubAgentRunner', () => {
   })
 
   it('caps the sub-agent at card.maxIterations (passed as maxTotalToolCalls)', async () => {
+    // Use distinct args per call so the guardian (cycle-detector) never trips —
+    // only the tool-call cap should fire.
+    let callIndex = 0
     const provider: ProviderAdapter = {
       async complete() {
         return {
           reply: 'x',
-          toolCalls: Array.from({ length: 10 }, () => ({ name: 'read_file', args: {} })),
+          toolCalls: Array.from({ length: 10 }, (_, i) => ({
+            name: 'read_file',
+            args: { n: callIndex++ * 10 + i },
+          })),
         }
       },
     }

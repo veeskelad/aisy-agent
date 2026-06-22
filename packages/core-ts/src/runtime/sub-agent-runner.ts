@@ -9,7 +9,8 @@
 import { makeAgentRunner, type AgentRunnerDeps, type AgentRunner } from './agent-runner.js'
 import { makeGrantStore } from '../safety/index.js'
 import { makeScopedToolExecutor } from './scoped-tool-executor.js'
-import type { LoopGuardian, ProviderAdapter, MemoryPort, SessionLog, ToolCall, TurnInput, TurnResult } from '../agent-loop/types.js'
+import { makeGuardian } from './guardian.js'
+import type { ProviderAdapter, MemoryPort, SessionLog, ToolCall, TurnInput, TurnResult } from '../agent-loop/types.js'
 import type { ApprovalDecision } from './hook-gate.js'
 import type { PendingAction } from '../gateway/index.js'
 import type { DelegationHandle } from '../orchestration/index.js'
@@ -38,11 +39,10 @@ export function makeSubAgentRunner(deps: SubAgentRunnerDeps): AgentRunner {
     doNotTouch: deps.doNotTouch,
   })
 
-  // The DelegationHandle.guardian is the orchestration-layer LoopGuardian (check/reset),
-  // but makeAgentRunner requires the agent-loop LoopGuardian shape (observe/note).
-  // Cast via unknown: in production, the DelegationHandle will be backed by an adapter
-  // that implements both shapes; in tests, fakeHandle provides the observe/note shape.
-  const guardian = deps.handle.guardian as unknown as LoopGuardian
+  // The sub-agent runs its own agent-loop, so it needs its own agent-loop guardian
+  // (observe/note shape). The DelegationHandle.guardian is the orchestration-layer
+  // guardian (check/reset) — a different, incompatible type. Build a fresh one.
+  const guardian = makeGuardian()
 
   const runner = makeAgentRunner({
     provider: deps.provider,
