@@ -91,4 +91,23 @@ describe('makeToolExecutor', () => {
     expect(r.ok).toBe(false)
     expect(r.output).toContain('unsupported tool: telepathy')
   })
+
+  it('spawn_subagent dispatches to the injected delegation runner and returns observations', async () => {
+    const seen: string[] = []
+    const e = exec({
+      spawnSubagent: async (planJson) => {
+        seen.push(planJson)
+        return [{ delegationId: 'd1', status: 'completed', summary: 'ok', touched: [], result: null, cost: { iterations: 1, spendUsd: 0, wallMs: 1 } }]
+      },
+    })
+    const r = await e(call('spawn_subagent', { plan: '{"steps":[{"intent":"do it"}]}' }))
+    expect(r.ok).toBe(true)
+    expect(seen).toHaveLength(1)
+    expect(r.output).toContain('completed')
+  })
+
+  it('spawn_subagent reports unavailable when no delegation runner is wired', async () => {
+    const r = await exec()(call('spawn_subagent', { plan: '{}' }))
+    expect(r.ok).toBe(false)
+  })
 })

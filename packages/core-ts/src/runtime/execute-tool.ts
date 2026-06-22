@@ -8,6 +8,7 @@
 
 import { isAbsolute, normalize, resolve } from 'node:path'
 import type { ToolCall } from '../agent-loop/types.js'
+import type { TaskObservation } from '../orchestration/index.js'
 
 export interface ToolResult {
   ok: boolean
@@ -29,6 +30,8 @@ export interface ExecuteToolDeps {
   runBash?: (cmd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
   /** Memory FTS read port. Absent ⇒ search_memory reports unavailable. */
   searchMemory?: (query: string) => Promise<string> | string
+  /** Sub-agent delegation runner. Absent ⇒ spawn_subagent reports unavailable. */
+  spawnSubagent?: (planJson: string) => Promise<TaskObservation[]>
 }
 
 function arg(call: ToolCall, key: string): string {
@@ -82,6 +85,14 @@ export function makeToolExecutor(
       case 'search_memory': {
         if (!deps.searchMemory) return { ok: false, output: 'search_memory: unavailable' }
         return { ok: true, output: await deps.searchMemory(arg(call, 'query')) }
+      }
+
+      case 'spawn_subagent': {
+        if (!deps.spawnSubagent) return { ok: false, output: 'spawn_subagent: delegation not available' }
+        const planArg = arg(call, 'plan')
+        if (planArg.length === 0) return { ok: false, output: 'spawn_subagent: plan must be a JSON string' }
+        const observations = await deps.spawnSubagent(planArg)
+        return { ok: true, output: JSON.stringify(observations) }
       }
 
       default:
