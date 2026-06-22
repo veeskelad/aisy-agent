@@ -17,48 +17,95 @@ function wrapSlug(slug: string): FactKey {
 }
 
 /**
- * Extract the first top-level JSON array from a string that may contain prose.
- * Finds the first '[' and matches the corresponding ']' by tracking bracket depth.
- * Returns the raw substring or null if not found.
+ * Scan `text` starting at `from`, tracking JSON string-literal context.
+ * Returns the index of the next occurrence of `open` that is NOT inside a
+ * JSON string, or -1 if none found.
  */
-function extractFirstJsonArray(text: string): string | null {
-  const start = text.indexOf('[')
-  if (start === -1) return null
+function indexOfOutsideString(text: string, open: string, from: number): number {
+  let inString = false
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i]!
+    if (inString) {
+      if (ch === '\\') { i++; continue }   // skip escaped char
+      if (ch === '"') inString = false
+    } else {
+      if (ch === '"') { inString = true; continue }
+      if (ch === open) return i
+    }
+  }
+  return -1
+}
 
+/**
+ * Starting at `start` (which must be the opening bracket `open`), scan to the
+ * matching close bracket, respecting JSON string-literal context so brackets
+ * inside strings are not counted.  Returns the index of the matching close, or
+ * -1 if the text ends before the brackets balance.
+ */
+function matchingClose(text: string, start: number, open: string, close: string): number {
+  let inString = false
   let depth = 0
   for (let i = start; i < text.length; i++) {
     const ch = text[i]!
-    if (ch === '[') depth++
-    else if (ch === ']') {
-      depth--
-      if (depth === 0) {
-        return text.slice(start, i + 1)
+    if (inString) {
+      if (ch === '\\') { i++; continue }
+      if (ch === '"') inString = false
+    } else {
+      if (ch === '"') { inString = true; continue }
+      if (ch === open) depth++
+      else if (ch === close) {
+        depth--
+        if (depth === 0) return i
       }
     }
   }
-  return null
+  return -1
+}
+
+/**
+ * Extract the first top-level JSON array from a string that may contain prose.
+ * String-aware: brackets inside JSON string literals are not counted.
+ * If a candidate substring fails JSON.parse, scanning resumes after that '['.
+ * Returns the raw substring or null if no valid JSON array is found.
+ */
+function extractFirstJsonArray(text: string): string | null {
+  let searchFrom = 0
+  while (true) {
+    const start = indexOfOutsideString(text, '[', searchFrom)
+    if (start === -1) return null
+    const end = matchingClose(text, start, '[', ']')
+    if (end === -1) return null
+    const candidate = text.slice(start, end + 1)
+    try {
+      JSON.parse(candidate)
+      return candidate
+    } catch {
+      searchFrom = start + 1   // this '[' is junk prose; try the next one
+    }
+  }
 }
 
 /**
  * Extract the first top-level JSON object from a string that may contain prose.
+ * String-aware: brackets inside JSON string literals are not counted.
+ * If a candidate substring fails JSON.parse, scanning resumes after that '{'.
  * Used by the judge to parse { verdict: ... }.
  */
 function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf('{')
-  if (start === -1) return null
-
-  let depth = 0
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]!
-    if (ch === '{') depth++
-    else if (ch === '}') {
-      depth--
-      if (depth === 0) {
-        return text.slice(start, i + 1)
-      }
+  let searchFrom = 0
+  while (true) {
+    const start = indexOfOutsideString(text, '{', searchFrom)
+    if (start === -1) return null
+    const end = matchingClose(text, start, '{', '}')
+    if (end === -1) return null
+    const candidate = text.slice(start, end + 1)
+    try {
+      JSON.parse(candidate)
+      return candidate
+    } catch {
+      searchFrom = start + 1   // this '{' is junk prose; try the next one
     }
   }
-  return null
 }
 
 const MAX_OPS = 50

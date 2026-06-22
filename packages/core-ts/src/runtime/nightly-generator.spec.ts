@@ -118,6 +118,28 @@ describe('makeNightlyGenerator – proposeMemoryOps', () => {
       expect(op.factKey).toEqual({ entity: 'fact', relation: 'asserts', object: 'user-location' })
     }
   })
+
+  it('case 7: provider REJECTS → {ops:[], empty diff} (never rejects)', async () => {
+    const throwingProvider: ProviderAdapter = {
+      complete: async () => { throw new Error('provider unavailable') },
+    }
+    const gen = makeNightlyGenerator({ provider: throwingProvider, nowIso: () => '2026-06-22T03:30:00Z' })
+    const result = await gen.proposeMemoryOps(emptyLog, liveFacts)
+    expect(result).toEqual({ ops: [], diff: { added: [], removed: [], updated: [] } })
+  })
+
+  it('case 8: preamble with brackets in string — correct array extracted (string-aware parse)', async () => {
+    // The first "[" is inside a plain-text string, not JSON — the real array follows
+    const payload = 'Sure! Here are [my notes]: [{"kind":"NOOP","factId":"f1"}]'
+    const gen = makeNightlyGenerator({ provider: fakeProvider(payload), nowIso: () => '2026-06-22T03:30:00Z' })
+    const { ops } = await gen.proposeMemoryOps(emptyLog, liveFacts)
+    expect(ops).toHaveLength(1)
+    const op = ops[0]!
+    expect(op.kind).toBe('NOOP')
+    if (op.kind === 'NOOP') {
+      expect(op.factId).toBe('f1')
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
