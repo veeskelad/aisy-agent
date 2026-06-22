@@ -119,6 +119,10 @@ export type {
   HookCtx,
 } from './agent-loop/types.js'
 
+// --- AgentCard loader (Tier-3, ADR-0039/0052) ---
+export { makeCardResolver, parseAgentCard, DEFAULT_GENERAL_CARD } from './runtime/agent-cards.js'
+export type { CardResolver } from './runtime/agent-cards.js'
+
 // --- Delegation (Tier-3 sub-agent delegation, ADR-0039) ---
 export { makeDelegationManager, ScopeConflictError, ScopeViolationError } from './orchestration/index.js'
 export type {
