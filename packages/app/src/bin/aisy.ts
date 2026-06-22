@@ -52,6 +52,7 @@ import {
   type LogEntry,
 } from '@aisy/core'
 import { makeTelegramBot } from '../bot.js'
+import { makeJsonlJournal } from '../journal.js'
 
 const argv = process.argv.slice(2)
 
@@ -165,11 +166,17 @@ const grantPersistence: GrantPersistencePort = {
 const nowIso = (): string => new Date().toISOString()
 const memoryRoot = vault['AISY_MEMORY_ROOT'] ?? process.env['AISY_MEMORY_ROOT'] ?? join(base, 'memory')
 const dbPath = vault['AISY_DB_PATH'] ?? process.env['AISY_DB_PATH'] ?? join(base, 'memory.db')
+
+const journalPath = join(base, 'journal.jsonl')
+const journal = makeJsonlJournal({
+  appendLine: (line) => appendFileSync(journalPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
+  nowIso,
+})
+
 const memoryStore = makeMemoryStore({
   memoryRoot,
   dbPath,
-  // Observability journal is wired in Tier 4; a no-op keeps commit fail-open today.
-  emitEvent: async () => {},
+  emitEvent: async (event, payload) => journal.append('memory', event, payload),
   nowIso,
 })
 const memory: MemoryPort = makeMemoryPort(memoryStore, nowIso)
