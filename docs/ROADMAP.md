@@ -76,6 +76,13 @@ Follow-ups: auto-delegation from a coordinator-emitted multi-task plan; real `sk
 | 16 | CI (lint + build + test gate) | M |
 | 17 | Packaging / distribution (ADR-0035) | M |
 
+### Tier 7 — goal-driven loop (`/goal`) — requested 2026-06-22, after Tier 4
+| # | Task | Effort | Risk |
+|---|------|--------|------|
+| 18 | Persistent session objective + verify-until-done loop on top of `runTurn` (à la Claude Code `/goal`; ANIMA persistent-agent model). Completion-condition reuses the existing `VerificationTrace`; budget/guardian/`Halt` + the Tier-4 scheduler (`/loop every 10m`) already exist. **New ADR-0054** (loop contract: turn-based → goal-driven). Own arc: brainstorming → ADR → plan. | L | high (loop) |
+
+→ Plan: TBD (own arc after Tier 4). Distinct from the goal-DAG (orchestration, ADR-0039 — per-spawn delegation decomposition, not a top-level session goal).
+
 ## Dependency notes
 
 - **#4 + #5** share one loop abort/interrupt seam — implement together.
