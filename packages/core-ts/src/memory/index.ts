@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 
 import type {
   Memory,
+  MemoryFact,
   MemoryStoreDeps,
   MemoryOp,
   CommitResult,
@@ -115,6 +116,16 @@ interface FactRow {
   valid_at: string
   invalid_at: string | null
   is_human_confirmed: number
+}
+
+/** Extended row shape that includes all columns needed for MemoryFact mapping. */
+interface FullFactRow extends FactRow {
+  source_authority: number | null
+  confidence: number | null
+  provenance: string
+  supersedes: string | null
+  contradicts: string | null
+  extends_key: string | null
 }
 
 interface DnrRow {
@@ -329,6 +340,33 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
       if (step === 'annotation') return row.text.slice(0, 200)
       if (step === 'overview') return row.text.slice(0, 2000)
       return row.text
+    },
+
+    // ENUMERATE — all live facts through the same forget filter as search() (Tier-4 B1)
+    async listLive(): Promise<MemoryFact[]> {
+      const d = openForRead()
+      const chain = verifyForgetChain(d)
+      if (!chain.ok) throw new ForgetListTamperError(chain.detail ?? 'hash chain break')
+      const rows = d.prepare(
+        `SELECT id, text, fact_key, valid_at, invalid_at, is_human_confirmed,
+                source_authority, confidence, provenance, supersedes, contradicts, extends_key
+         FROM facts WHERE ${LIVE_FILTER}
+         ORDER BY valid_at, id`,
+      ).all() as FullFactRow[]
+      return rows.map((r): MemoryFact => ({
+        id: r.id,
+        text: r.text,
+        factKey: r.fact_key,
+        validAt: r.valid_at,
+        invalidAt: r.invalid_at,
+        isHumanConfirmed: r.is_human_confirmed !== 0,
+        sourceAuthority: r.source_authority,
+        confidence: r.confidence,
+        provenance: r.provenance,
+        ...(r.supersedes != null ? { supersedes: r.supersedes } : {}),
+        ...(r.contradicts != null ? { contradicts: r.contradicts } : {}),
+        ...(r.extends_key != null ? { extends: r.extends_key } : {}),
+      }))
     },
 
     // SESSION SNAPSHOT — read once, frozen for the store's lifetime (ADR-0007)

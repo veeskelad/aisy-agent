@@ -135,6 +135,10 @@ export interface Memory {
   search(query: string, opts?: { limit?: number }): Promise<RankedHit[]>  // FTS5/BM25 ~20ms
   load(hitId: string, step: LazyLoadStep): Promise<string>
 
+  /** Enumerate live facts (invalid_at IS NULL, not forgotten) through the read-path
+   *  forget filter. Used by nightly consolidation (Tier-4). */
+  listLive(): Promise<MemoryFact[]>
+
   // SESSION SNAPSHOT — read once at session start, frozen for the session
   readFrozenSnapshot(): Promise<FrozenSnapshot>
 

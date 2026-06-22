@@ -718,6 +718,93 @@ describe('§3 events emitted match the spec vocabulary (Observability binding co
 })
 
 // ---------------------------------------------------------------------------
+// AC-B1: listLive() enumerate API — Tier-4 nightly consolidation (B1)
+// ---------------------------------------------------------------------------
+
+describe('AC-B1: listLive() returns all live facts not on the forget-list', () => {
+  it('AC-B1a: two live facts + one superseded — listLive() returns exactly the two live ones', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    const a = await store.commit({ op: 'ADD', text: 'I was born in Hamburg' }, { withinSession: false })
+    const b = await store.commit({ op: 'ADD', text: 'My favourite language is TypeScript' }, { withinSession: false })
+    const c = await store.commit({ op: 'ADD', text: 'My role is engineer' }, { withinSession: false })
+
+    // Supersede c (sets invalid_at) — it should not appear in listLive()
+    await store.commit(
+      { op: 'UPDATE', targetId: c.factId!, text: 'My role is tech lead' },
+      { withinSession: false },
+    )
+
+    const live = await store.listLive()
+    const ids = live.map(f => f.id)
+
+    expect(ids).toContain(a.factId)
+    expect(ids).toContain(b.factId)
+    expect(ids).not.toContain(c.factId)
+    // The superseder itself is live
+    expect(live.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('AC-B1b: a forgotten (humanConfirmed) fact is absent from listLive()', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    const kept = await store.commit({ op: 'ADD', text: 'I like coffee' }, { withinSession: false })
+    const gone = await store.commit({ op: 'ADD', text: 'My PIN is 1234' }, { withinSession: false })
+
+    await store.forget(gone.factId!, 'PII removal', true)
+
+    const live = await store.listLive()
+    const ids = live.map(f => f.id)
+
+    expect(ids).toContain(kept.factId)
+    expect(ids).not.toContain(gone.factId)
+  })
+
+  it('AC-B1c: listLive() maps all MemoryFact fields from the DB row', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    const result = await store.commit({ op: 'ADD', text: 'Field mapping check' }, { withinSession: false })
+    const live = await store.listLive()
+    const fact = live.find(f => f.id === result.factId)
+
+    expect(fact).toBeDefined()
+    expect(typeof fact!.id).toBe('string')
+    expect(typeof fact!.text).toBe('string')
+    expect(typeof fact!.factKey).toBe('string')
+    expect(typeof fact!.validAt).toBe('string')
+    expect(fact!.invalidAt).toBeNull()
+    expect(typeof fact!.isHumanConfirmed).toBe('boolean')
+    expect(typeof fact!.provenance).toBe('string')
+  })
+
+  it('AC-B1d: cold start — listLive() throws CorruptIndexError when no index exists', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    // No write, no rebuildFromFiles — mirrors cold-start behaviour of search()
+    await expect(store.listLive()).rejects.toThrow(CorruptIndexError)
+  })
+
+  it('AC-B1e: listLive() throws ForgetListTamperError when the forget-list chain is broken', async () => {
+    const { deps } = makeDeps()
+    const store = makeMemoryStore(deps)
+
+    const { factId } = await store.commit({ op: 'ADD', text: 'tamper test fact' }, { withinSession: false })
+    await store.forget(factId!, 'test', true)
+
+    // Tamper the forget-list chain
+    const raw = new Database(deps.dbPath)
+    raw.prepare("UPDATE do_not_remember SET reason = 'hacked' WHERE rowid = 1").run()
+    raw.close()
+
+    await expect(store.listLive()).rejects.toThrow(ForgetListTamperError)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Three-layer structure invariants (§1 / §2)
 // ---------------------------------------------------------------------------
 
