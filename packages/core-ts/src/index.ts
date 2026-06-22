@@ -118,3 +118,21 @@ export type {
   HookGate,
   HookCtx,
 } from './agent-loop/types.js'
+
+// --- Delegation (Tier-3 sub-agent delegation, ADR-0039) ---
+export { makeDelegationManager, ScopeConflictError, ScopeViolationError } from './orchestration/index.js'
+export type {
+  DelegationManager,
+  DelegationHandle,
+  DelegationDeps,
+  DelegationTask,
+  DelegationScope,
+  PlanDAG,
+  LinearPlanLike,
+  AgentCard,
+  CapabilityRequest,
+  TaskObservation,
+  ScheduleResult,
+  BudgetSlice,
+  IterationCost,
+} from './orchestration/index.js'
