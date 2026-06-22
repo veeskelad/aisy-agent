@@ -403,6 +403,10 @@ export interface ConsolidationDeps {
   stagingWrite?(path: string): void
   /** Event sink (AC-10-20 held_too_long). */
   emit?(event: string): void
+  /** Apply an approved op to LIVE memory at promotion; returns the resulting fact
+   *  id (or null for a no-op). Wired by the app to memory.commit/forget. The model
+   *  never reaches this — only the human Approve tap does (staging discipline). */
+  commitOp?(op: MemOp): Promise<string | null>
 }
 
 export interface ConsolidationRunner {

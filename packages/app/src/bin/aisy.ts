@@ -63,6 +63,7 @@ import {
   makeFileRunLock,
   makeMemoryValidators,
   liveFactsForNightly,
+  memOpToMemoryOp,
   makeNightlyGenerator,
   makeNightlyJudge,
   makeTriggerEngine,
@@ -387,30 +388,41 @@ if (genSel === judgeSel) {
 const bootStamp = nowIso()
 const processStartTime = Date.now()
 
-async function buildNightlyRunner() {
-  const liveFacts = await memoryStore.listLive()
-  return makeConsolidationRunner({
-    clock: { now: () => new Date(nowIso()) },
-    generator: makeNightlyGenerator({ provider: adapterFor(genSel), nowIso }),
-    judge: makeNightlyJudge({ provider: adapterFor(judgeSel) }),
-    validators: makeMemoryValidators({ liveFactIds: new Set(liveFacts.map((f) => f.id)) }),
-    lock: makeFileRunLock({
-      lockPath: join(base, 'nightly.lock'),
-      readFile: (p) => readFileSync(p, 'utf8'),
-      writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
-      exists: (p) => existsSync(p),
-      removeFile: (p) => { try { unlinkSync(p) } catch { /* stale lock already gone */ } },
-      pid: process.pid,
-      bootId: bootStamp,
-      startTime: processStartTime,
-      now: () => Date.now(),
-    }),
-    facts: liveFactsForNightly(liveFacts),
-    memoryTxn: async (apply) => { await apply() },
-    reindex: (factId) => { void memoryStore.reindex({ ids: [factId] }) },
-    emit: (event) => journal.append('nightly', event, {}),
-  })
-}
+// v1 limitation: facts/validators are captured at process boot; facts added during
+// the session are consolidated only after a restart — a facts-thunk for live
+// freshness is a follow-up. Both facts AND validators are boot-time → internally consistent.
+const bootLiveFacts = await memoryStore.listLive()
+const nightlyRunner = makeConsolidationRunner({
+  clock: { now: () => new Date(nowIso()) },
+  generator: makeNightlyGenerator({ provider: adapterFor(genSel), nowIso }),
+  judge: makeNightlyJudge({ provider: adapterFor(judgeSel) }),
+  validators: makeMemoryValidators({ liveFactIds: new Set(bootLiveFacts.map((f) => f.id)) }),
+  lock: makeFileRunLock({
+    lockPath: join(base, 'nightly.lock'),
+    readFile: (p) => readFileSync(p, 'utf8'),
+    writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
+    exists: (p) => existsSync(p),
+    removeFile: (p) => { try { unlinkSync(p) } catch { /* stale lock already gone */ } },
+    pid: process.pid,
+    bootId: bootStamp,
+    startTime: processStartTime,
+    now: () => Date.now(),
+  }),
+  facts: liveFactsForNightly(bootLiveFacts),
+  memoryTxn: async (apply) => { await apply() },
+  reindex: (factId) => { void memoryStore.reindex({ ids: [factId] }) },
+  emit: (event) => journal.append('nightly', event, {}),
+  commitOp: async (op) => {
+    const mop = memOpToMemoryOp(op)
+    if (!mop) return null
+    if (mop.op === 'DELETE') {
+      await memoryStore.forget(mop.targetId, mop.reason, mop.humanConfirmed)
+      return mop.targetId
+    }
+    const r = await memoryStore.commit(mop, { withinSession: false })
+    return r.factId ?? null
+  },
+})
 
 // --- Tier-4 D2: helpers for trigger command parsing ---
 
@@ -449,8 +461,7 @@ function parseProbe(p?: string): VerificationTrace | null {
 let sendProactiveRef: ((text: string) => Promise<void>) | null = null
 
 async function runNightly(): Promise<void> {
-  const runner = await buildNightlyRunner()
-  const result = await runner.run(nightlyConfig)
+  const result = await nightlyRunner.run(nightlyConfig)
   await gateway.issueCard({
     actionId: `nightly-${result.runDate}`,
     actionHash: createHash('sha256').update(`nightly:${result.runDate}`).digest('hex'),
@@ -473,13 +484,11 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
   setOutboundLocked: (locked) => { outboundLocked = locked },
   onConsolidate: runNightly,
   getStaging: async () => {
-    const r = await buildNightlyRunner()
-    const area = await r.getStagedProposals()
+    const area = await nightlyRunner.getStagedProposals()
     return area.memoryPatches.map((p) => ({ id: p.id, preview: p.body.slice(0, 80), judged: p.judged }))
   },
   onApproveNightly: async (id: string) => {
-    const r = await buildNightlyRunner()
-    await r.approveStagedItem(id)
+    await nightlyRunner.approveStagedItem(id)
   },
   onRegisterTrigger: async (input) => {
     try {

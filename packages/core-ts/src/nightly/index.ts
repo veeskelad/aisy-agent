@@ -543,12 +543,13 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
       // COMMIT ORDER (Eng-7): (1) atomic SQLite txn flips invalid_at + reindex,
       // (2) git commit/push only AFTER the txn durably commits (AC-10-15).
       const applyTxn = async (): Promise<void> => {
-        deps.reindex?.(patch.id)
+        const committedId = deps.commitOp && patch.op ? await deps.commitOp(patch.op) : null
+        if (committedId) deps.reindex?.(committedId)   // memory.commit already reindexes; this is a harmless extra FTS sync
         deps.journal?.record({
           runDate: deps.clock.now().toISOString().slice(0, 10),
           stage: 'consolidation',
           op: patch.op ?? { kind: 'NOOP', factId: patch.id },
-          factIds: [patch.id],
+          factIds: committedId ? [committedId] : [patch.id],
           snapshotRef: patch.hashAtAccept,
           reindexDone: true,
           state: 'reindexed',

@@ -426,20 +426,27 @@ describe('Nightly Consolidation', () => {
       draftSkills: async () => [],
     }
     const order: string[] = []
+    const commitOpArgs: MemOp[] = []
+    const fakeCommittedId = 'fake-committed-id'
     const runner = makeConsolidationRunner({
       ...deps,
       generator,
       memoryTxn: async (apply) => { order.push('txn-begin'); await apply(); order.push('txn-commit') },
       reindex: () => { order.push('reindex') },
       git: { commitAndPush: async () => { order.push('git-push'); return { ok: true, commitHash: 'c1' } } },
+      commitOp: async (o) => { order.push('commitOp'); commitOpArgs.push(o); return fakeCommittedId },
     })
     await runner.run(defaultConfig)
     const staging = await runner.getStagedProposals()
     // The promotion path is the subject under test — clear any night-backup noise.
     order.length = 0
+    commitOpArgs.length = 0
     await runner.approveStagedItem(staging.memoryPatches[0]!.id)
-    // Reindex happens inside the txn; git push only after the txn commits.
-    expect(order).toEqual(['txn-begin', 'reindex', 'txn-commit', 'git-push'])
+    // commitOp and reindex happen inside the txn; git push only after the txn commits.
+    expect(order).toEqual(['txn-begin', 'commitOp', 'reindex', 'txn-commit', 'git-push'])
+    // commitOp was called with the original op
+    expect(commitOpArgs).toHaveLength(1)
+    expect(commitOpArgs[0]).toMatchObject({ kind: 'ADD', text: 'atomic fact' })
   })
 
   it('AC-10-16: crash after memory txn but before git push — on restart resumes at git step; exactly one git commit produced', async () => {
