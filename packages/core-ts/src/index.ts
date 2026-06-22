@@ -117,6 +117,7 @@ export type {
   Clock,
   HookGate,
   HookCtx,
+  VerificationTrace,
 } from './agent-loop/types.js'
 
 // --- AgentCard loader (Tier-3, ADR-0039/0052) ---
@@ -149,6 +150,17 @@ export type { SubAgentRunnerDeps } from './runtime/sub-agent-runner.js'
 
 // --- Plan normalizer (Tier-3 fix: ensures every node has non-null assignedTo) ---
 export { normalizeSpawnPlan } from './runtime/spawn-plan.js'
+
+// --- Tier-4 triggers ---
+export { makeTriggerEngine } from './triggers/index.js'
+export type {
+  TriggerEngine,
+  TriggerEngineDeps,
+  TriggerSpec,
+  TriggerStore,
+  TriggerBudget,
+  TriggerFiring,
+} from './triggers/index.js'
 
 // --- Tier-4 nightly consolidation (runner + adapters + LLM generator/judge) ---
 export { makeConsolidationRunner } from './nightly/index.js'

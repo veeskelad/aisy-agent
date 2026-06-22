@@ -55,6 +55,8 @@ import {
 import { makeTelegramBot } from '../bot.js'
 import { makeJsonlJournal } from '../journal.js'
 import { makeScheduler } from '../scheduler.js'
+import { makeTriggerStore } from '../trigger-store.js'
+import { makeTriggerProbeRunner } from '../trigger-probe.js'
 import {
   makeConsolidationRunner,
   makeFileRunLock,
@@ -62,7 +64,9 @@ import {
   liveFactsForNightly,
   makeNightlyGenerator,
   makeNightlyJudge,
+  makeTriggerEngine,
   type NightlyConfig,
+  type TriggerBudget,
 } from '@aisy/core'
 
 const argv = process.argv.slice(2)
@@ -467,6 +471,35 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
 })
 sendProactiveRef = sendProactive
 
+// --- Tier-4 triggers ---
+const triggerStore = makeTriggerStore({
+  path: join(base, 'triggers.json'),
+  readFile: (p) => readFileSync(p, 'utf8'),
+  writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
+  exists: (p) => existsSync(p),
+})
+const triggerProbe = makeTriggerProbeRunner({
+  exists: (p) => existsSync(p),
+  ...(runBash ? { runBash: async (cmd) => { const r = await runBash(cmd); return { exitCode: r.exitCode } } } : {}),
+})
+const triggerBudget: TriggerBudget = {
+  tokenCeiling: 200000,
+  dollarCeiling: Number(process.env['AISY_TRIGGER_BUDGET_USD'] ?? '1') || 1,
+  tokensSpent: 0,
+  dollarsSpent: 0,
+}
+const triggerEngine = makeTriggerEngine({
+  clock: { now: () => nowIso() },
+  probeRunner: triggerProbe,
+  startTurn: async ({ prompt, spans }) => {
+    const provenance = spans.some((s) => s.provenance === 'untrusted') ? 'untrusted' as const : 'operator' as const
+    await runProactiveTurn(prompt, { provenance })
+  },
+  store: triggerStore,
+  emitEvent: (event, payload) => { journal.append('triggers', event, payload) },
+  globalBackgroundBudget: triggerBudget,
+})
+
 // --- Scheduler: drives nightly + trigger tick (triggers wired in Phase D) ---
 const lastRunPath = join(base, 'nightly-last.json')
 const scheduler = makeScheduler({
@@ -485,7 +518,7 @@ const scheduler = makeScheduler({
     } catch { /* non-fatal */ }
   },
   runNightly,
-  tickTriggers: async () => {},   // Phase D replaces this with triggerEngine.tick()
+  tickTriggers: async () => { await triggerEngine.tick() },
 })
 scheduler.start()
 
