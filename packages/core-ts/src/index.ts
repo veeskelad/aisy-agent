@@ -149,3 +149,18 @@ export type { SubAgentRunnerDeps } from './runtime/sub-agent-runner.js'
 
 // --- Plan normalizer (Tier-3 fix: ensures every node has non-null assignedTo) ---
 export { normalizeSpawnPlan } from './runtime/spawn-plan.js'
+
+// --- Tier-4 nightly consolidation (runner + adapters + LLM generator/judge) ---
+export { makeConsolidationRunner } from './nightly/index.js'
+export type {
+  ConsolidationRunner,
+  ConsolidationDeps,
+  NightlyConfig,
+  NightResult,
+  MorningCard,
+  MemOp,
+  Fact,
+} from './nightly/index.js'
+export { makeFileRunLock, makeMemoryValidators, liveFactsForNightly, memOpToMemoryOp } from './runtime/nightly-adapters.js'
+export type { FileRunLockDeps, MemoryValidatorsDeps } from './runtime/nightly-adapters.js'
+export { makeNightlyGenerator, makeNightlyJudge } from './runtime/nightly-generator.js'
