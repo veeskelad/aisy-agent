@@ -118,8 +118,14 @@ interface FactRow {
   is_human_confirmed: number
 }
 
-/** Extended row shape that includes all columns needed for MemoryFact mapping. */
-interface FullFactRow extends FactRow {
+/** Exact columns returned by the listLive SELECT — no inherited phantom fields. */
+interface ListLiveRow {
+  id: string
+  text: string
+  fact_key: string
+  valid_at: string
+  invalid_at: string | null
+  is_human_confirmed: number
   source_authority: number | null
   confidence: number | null
   provenance: string
@@ -352,7 +358,7 @@ export function makeMemoryStore(deps: MemoryStoreDeps): Memory {
                 source_authority, confidence, provenance, supersedes, contradicts, extends_key
          FROM facts WHERE ${LIVE_FILTER}
          ORDER BY valid_at, id`,
-      ).all() as FullFactRow[]
+      ).all() as ListLiveRow[]
       return rows.map((r): MemoryFact => ({
         id: r.id,
         text: r.text,
