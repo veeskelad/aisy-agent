@@ -67,6 +67,12 @@ export interface TelegramBotDeps {
   /** Debounce window for coalescing a rapid message burst. Default 1200ms. */
   debounceMs?: number
   debug?: boolean
+  /** Trigger an immediate nightly consolidation run (Tier-4 C2). */
+  onConsolidate?: () => Promise<void>
+  /** Return the current staging area — decoupled shape, no nightly types (Tier-4 C2). */
+  getStaging?: () => Promise<{ id: string; preview: string; judged: boolean }[]>
+  /** Promote a staged memory patch by id (Tier-4 C2). */
+  onApproveNightly?: (stagedItemId: string) => Promise<void>
 }
 
 interface PendingCard {
@@ -350,6 +356,21 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     await ctx.reply('⏹ Остановлено.')
   })
 
+  bot.command('consolidate', async (ctx) => {
+    await ctx.reply('🌙 Запускаю консолидацию в staging…')
+    await deps.onConsolidate?.()
+  })
+
+  bot.command('staging', async (ctx) => {
+    const items = (await deps.getStaging?.()) ?? []
+    if (items.length === 0) {
+      await ctx.reply('Staging пуст.')
+      return
+    }
+    const rows = items.map((it) => [{ text: `${it.judged ? '✅' : '⏳'} ${it.preview}`, data: it.judged ? `nightly:approve:${it.id}` : 'nightly:unjudged' }])
+    await bot.api.sendMessage(deps.allowedChatId, 'Staged правки памяти (tap = одобрить):', { reply_markup: toInlineKeyboard(rows) })
+  })
+
   // --- approval card taps ---
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data
@@ -393,6 +414,25 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
       const verdict = data === 'outbound:allow' ? '✅ Вывод разрешён' : '❌ Вывод заблокирован'
       await bot.api.editMessageText(deps.allowedChatId, held.messageId, verdict)
       if (data === 'outbound:allow') await sendReply(held.reply)
+      return
+    }
+
+    // Nightly staging approval (Tier-4 C2). ctx.answerCallbackQuery() was already
+    // called at the top of this handler; the unjudged branch re-answers with a toast
+    // via a separate call (Telegram accepts the second answer when text differs).
+    if (data.startsWith('nightly:approve:')) {
+      const id = data.slice('nightly:approve:'.length)
+      try {
+        await deps.onApproveNightly?.(id)
+        await ctx.reply('✅ Правка применена в память.')
+      } catch {
+        await ctx.reply('❌ Не удалось применить (возможно, изменилась с момента staging).')
+      }
+      return
+    }
+    if (data === 'nightly:unjudged') {
+      // Override the silent top-level answer with a toast explaining why.
+      await bot.api.answerCallbackQuery(ctx.callbackQuery.id, { text: 'Ещё не проверено судьёй' })
       return
     }
 

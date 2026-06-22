@@ -361,6 +361,68 @@ const spawnSubagent = async (planJson: string): Promise<TaskObservation[]> => {
   })
 }
 
+// --- Tier-4 nightly consolidation ---
+const nightlyAt = process.env['AISY_NIGHTLY_AT'] ?? '03:30'
+const nightlyConfig: NightlyConfig = {
+  runAt: nightlyAt,
+  maxHeldMs: 2 * 60 * 60 * 1000,
+  lintStaleDays: 30,
+  backupRemote: process.env['AISY_BACKUP_REMOTE'] ?? '',
+  stagingDir: join(base, 'staging'),
+  archiveDir: join(base, 'archive'),
+}
+
+// Generator on the routine tier; judge on critique. Single-provider fallback logged.
+const genSel = providersCfg.tiers?.routine ?? defaultSel
+const judgeSel = providersCfg.tiers?.critique ?? defaultSel
+if (genSel === judgeSel) {
+  process.stdout.write('aisy run: nightly judge uses the same provider as the generator (single-provider config)\n')
+}
+
+const bootStamp = nowIso()
+const processStartTime = Date.now()
+
+async function buildNightlyRunner() {
+  const liveFacts = await memoryStore.listLive()
+  return makeConsolidationRunner({
+    clock: { now: () => new Date(nowIso()) },
+    generator: makeNightlyGenerator({ provider: adapterFor(genSel), nowIso }),
+    judge: makeNightlyJudge({ provider: adapterFor(judgeSel) }),
+    validators: makeMemoryValidators({ liveFactIds: new Set(liveFacts.map((f) => f.id)) }),
+    lock: makeFileRunLock({
+      lockPath: join(base, 'nightly.lock'),
+      readFile: (p) => readFileSync(p, 'utf8'),
+      writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
+      exists: (p) => existsSync(p),
+      removeFile: (p) => { try { unlinkSync(p) } catch { /* stale lock already gone */ } },
+      pid: process.pid,
+      bootId: bootStamp,
+      startTime: processStartTime,
+      now: () => Date.now(),
+    }),
+    facts: liveFactsForNightly(liveFacts),
+    memoryTxn: async (apply) => { await apply() },
+    reindex: (factId) => { void memoryStore.reindex({ ids: [factId] }) },
+    emit: (event) => journal.append('nightly', event, {}),
+  })
+}
+
+// sendProactive is resolved after makeTelegramBot; runNightly captures it via closure.
+let sendProactiveRef: ((text: string) => Promise<void>) | null = null
+
+async function runNightly(): Promise<void> {
+  const runner = await buildNightlyRunner()
+  const result = await runner.run(nightlyConfig)
+  await gateway.issueCard({
+    actionId: `nightly-${result.runDate}`,
+    actionHash: createHash('sha256').update(`nightly:${result.runDate}`).digest('hex'),
+    tier: 1,
+    requiresStepUp: false,
+    summary: `🌅 Ночная консолидация ${result.runDate}: ${result.card.memoryEdits.length} правок памяти на одобрение.`,
+  })
+  await sendProactiveRef?.(`🌅 Ночная консолидация ${result.runDate} готова — ${result.card.memoryEdits.length} правок в staging. Открой карту для одобрения.`)
+}
+
 const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
   token,
   allowedChatId,
@@ -371,6 +433,16 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
   spend,
   budget,
   setOutboundLocked: (locked) => { outboundLocked = locked },
+  onConsolidate: runNightly,
+  getStaging: async () => {
+    const r = await buildNightlyRunner()
+    const area = await r.getStagedProposals()
+    return area.memoryPatches.map((p) => ({ id: p.id, preview: p.body.slice(0, 80), judged: p.judged }))
+  },
+  onApproveNightly: async (id: string) => {
+    const r = await buildNightlyRunner()
+    await r.approveStagedItem(id)
+  },
   buildRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => {
     approveRef = approve
     return makeAgentRunner({
@@ -393,61 +465,7 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
     })
   },
 })
-
-// --- Tier-4 nightly consolidation ---
-const nightlyAt = process.env['AISY_NIGHTLY_AT'] ?? '03:30'
-const nightlyConfig: NightlyConfig = {
-  runAt: nightlyAt,
-  maxHeldMs: 2 * 60 * 60 * 1000,
-  lintStaleDays: 30,
-  backupRemote: process.env['AISY_BACKUP_REMOTE'] ?? '',
-  stagingDir: join(base, 'staging'),
-  archiveDir: join(base, 'archive'),
-}
-
-// Generator on the routine tier; judge on critique. Single-provider fallback logged.
-const genSel = providersCfg.tiers?.routine ?? defaultSel
-const judgeSel = providersCfg.tiers?.critique ?? defaultSel
-if (genSel === judgeSel) {
-  process.stdout.write('aisy run: nightly judge uses the same provider as the generator (single-provider config)\n')
-}
-
-const bootStamp = nowIso()
-const processStartTime = Date.now()
-
-const runNightly = async (): Promise<void> => {
-  const liveFacts = await memoryStore.listLive()
-  const runner = makeConsolidationRunner({
-    clock: { now: () => new Date(nowIso()) },
-    generator: makeNightlyGenerator({ provider: adapterFor(genSel), nowIso }),
-    judge: makeNightlyJudge({ provider: adapterFor(judgeSel) }),
-    validators: makeMemoryValidators({ liveFactIds: new Set(liveFacts.map((f) => f.id)) }),
-    lock: makeFileRunLock({
-      lockPath: join(base, 'nightly.lock'),
-      readFile: (p) => readFileSync(p, 'utf8'),
-      writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
-      exists: (p) => existsSync(p),
-      removeFile: (p) => { try { unlinkSync(p) } catch { /* stale lock already gone */ } },
-      pid: process.pid,
-      bootId: bootStamp,
-      startTime: processStartTime,
-      now: () => Date.now(),
-    }),
-    facts: liveFactsForNightly(liveFacts),
-    memoryTxn: async (apply) => { await apply() },
-    reindex: (factId) => { void memoryStore.reindex({ ids: [factId] }) },
-    emit: (event) => journal.append('nightly', event, {}),
-  })
-  const result = await runner.run(nightlyConfig)
-  await gateway.issueCard({
-    actionId: `nightly-${result.runDate}`,
-    actionHash: createHash('sha256').update(`nightly:${result.runDate}`).digest('hex'),
-    tier: 1,
-    requiresStepUp: false,
-    summary: `🌅 Ночная консолидация ${result.runDate}: ${result.card.memoryEdits.length} правок памяти на одобрение.`,
-  })
-  await sendProactive(`🌅 Ночная консолидация ${result.runDate} готова — ${result.card.memoryEdits.length} правок в staging. Открой карту для одобрения.`)
-}
+sendProactiveRef = sendProactive
 
 // --- Scheduler: drives nightly + trigger tick (triggers wired in Phase D) ---
 const lastRunPath = join(base, 'nightly-last.json')
