@@ -558,7 +558,15 @@ const triggerEngine = makeTriggerEngine({
   probeRunner: triggerProbe,
   startTurn: async ({ prompt, spans }) => {
     const provenance = spans.some((s) => s.provenance === 'untrusted') ? 'untrusted' as const : 'operator' as const
+    // Debit the global background budget so budgetExhausted() eventually bites
+    // and pauses further background firings. Per-trigger spec.budget debit needs
+    // store persistence and is a documented follow-up; the shared cap is the key
+    // anti-drain guard for v1.
+    const before = spend.total()
     await runProactiveTurn(prompt, { provenance })
+    const after = spend.total()
+    triggerBudget.tokensSpent += Math.max(0, (after.inputTokens + after.outputTokens) - (before.inputTokens + before.outputTokens))
+    triggerBudget.dollarsSpent += Math.max(0, after.dollars - before.dollars)
   },
   store: triggerStore,
   emitEvent: (event, payload) => { journal.append('triggers', event, payload) },

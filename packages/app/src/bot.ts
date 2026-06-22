@@ -556,8 +556,15 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
 
   return {
     bot,
-    runProactiveTurn: (prompt: string, opts?: { provenance?: Provenance }): Promise<void> =>
-      runTurn([{ text: prompt, provenance: opts?.provenance ?? 'operator' }]),
+    runProactiveTurn: async (prompt: string, opts?: { provenance?: Provenance }): Promise<void> => {
+      // Don't race an in-flight operator turn (it owns currentAbort/pendingOutbound/
+      // pendingStepUp). Wait for idle (bounded ~30s); if still busy, skip this firing.
+      for (let i = 0; i < 60 && agentState === 'running'; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      if (agentState === 'running') return   // rare: operator turn > ~30s — skip; schedule/watch re-fires next tick
+      return runTurn([{ text: prompt, provenance: opts?.provenance ?? 'operator' }])
+    },
     sendProactive: (text: string): Promise<void> => sendReply(text),
   }
 }
