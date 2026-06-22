@@ -207,10 +207,12 @@ const provider: ProviderAdapter = providersCfg.tiers
   : adapterFor(defaultSel)
 const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
 
+const memSearch = makeMemorySearch(memoryStore)
+
 const executeTool = makeToolExecutor({
   fs: fsPort,
   workspaceRoot,
-  searchMemory: makeMemorySearch(memoryStore),
+  searchMemory: memSearch,
   ...(runBash ? { runBash } : {}),
   spawnSubagent: (planJson) => spawnSubagent(planJson),  // thunk → const defined below (after budget)
 })
@@ -281,7 +283,7 @@ const cardResolver = makeCardResolver({
 const subAgentBaseExecutor = makeToolExecutor({
   fs: fsPort,
   workspaceRoot,
-  searchMemory: makeMemorySearch(memoryStore),
+  searchMemory: memSearch,
   ...(runBash ? { runBash } : {}),
 })
 
@@ -299,7 +301,7 @@ const spawnSubagent = async (planJson: string): Promise<TaskObservation[]> => {
   try { plan = JSON.parse(planJson) as LinearPlanLike | PlanDAG }
   catch { return [] }
   const manager = makeDelegationManager(plan, {
-    resolveCard: (name) => cardResolver.resolve(name) ?? cardResolver.resolve(DEFAULT_GENERAL_CARD.name),
+    resolveCard: (name) => cardResolver.resolve(name) ?? cardResolver.resolve(DEFAULT_GENERAL_CARD.name) ?? DEFAULT_GENERAL_CARD,
     skillTouchedPaths: () => [],   // Skills (06) not live yet — default card declares none
     mcpWritable: () => false,      // MCP (07) not live yet
     emit: () => {},                // Observability journal wired in Tier 4
