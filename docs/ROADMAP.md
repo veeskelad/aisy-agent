@@ -41,12 +41,15 @@ Residual surfaced in final review → folded into Tier 2 #4b below.
 → **Plan:** [`docs/superpowers/plans/2026-06-17-tier2-loop-control.md`](./superpowers/plans/2026-06-17-tier2-loop-control.md) — #4/#5 via ADR-0051 loop seams; #6 wires the live `isOutboundLocked` source (bot mirrors `narrowed` → gateway egress guard) on top of the existing transport-layer hold. #7 (voice) split to its own plan.
 Shipped in commits `e5c2408`+`18e65d6`+`92517b5` (#4 abort), `e5c2408`+`53be608`+`92517b5` (#5 budget), `ef09cf3` (#6 outbound-lockout). `be837ee` (#4b catch-all).
 
-### Tier 3 — sub-agents (delegation) — the big capability
-| # | Task | Effort | Risk | Depends |
-|---|------|--------|------|---------|
-| 8 | Export + wire `DelegationManager` into the runner; spawn sub-agents with own model+budget (closes Phase-3 inheritance). **New ADR** for the runner-seam. | L | high | orchestration (built, dormant); budget-tracker keys on agent-id already |
+### Tier 3 — sub-agents (delegation) — the big capability — ✅ DONE (#8)
+| # | Task | Effort | Risk | Depends | Status |
+|---|------|--------|------|---------|--------|
+| 8 | Export + wire `DelegationManager` into the runner; spawn sub-agents with own model+budget (closes Phase-3 inheritance). **New ADR** for the runner-seam. | L | high | orchestration (built, dormant); budget-tracker keys on agent-id already | ✅ done |
 
-→ Plan: TBD (own writing-plans plan + ADR; do as a dedicated arc).
+→ **Plan:** [`docs/superpowers/plans/2026-06-19-tier3-subagent-delegation.md`](./superpowers/plans/2026-06-19-tier3-subagent-delegation.md)
+Shipped in commits implementing phases A–E (export + `makeSubAgentRunner`, scoped executor, `DelegationDriver` + `spawn_subagent` tool, bin wiring, ADR-0052). ADR-0039 promoted to Accepted; ADR-0052 captures the runner-seam and safety model.
+v1 scope: explicit `spawn_subagent` tool (single-task or goal-DAG); concurrent-with-reverify execution; card-scoped isolation (fresh empty GrantStore, `toolTiers` from card, writes confined to `owns` lane); bundled read-only reserved `general` default card; narrowing inherited via the Tier-2 `outboundLocked` mirror (one-turn-stale).
+Follow-ups: auto-delegation from a coordinator-emitted multi-task plan; real `skillTouchedPaths`/`mcpWritable` resolution when specs 06/07 go live; precise live narrowing (loop→executor seam); mid-sub-turn budget enforcement.
 
 ### Tier 4 — proactivity (after real memory)
 | # | Task | Effort | Risk | Depends |

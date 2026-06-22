@@ -1,8 +1,10 @@
 # ADR-0039: First-Class Sub-Agent Delegation & Own-Scope Definition
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-12
 **Tags:** orchestration, delegation, architecture
+
+Runtime realized by ADR-0052 (2026-06-19).
 
 ## Context
 

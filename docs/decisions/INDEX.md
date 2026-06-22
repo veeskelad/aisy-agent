@@ -52,7 +52,8 @@ in this index so cross-references stay stable.
 | ADR-0036 | Proposed | 2026-06-11 | [Cost-Transparency Surfacing](./2026-06-11-cost-transparency-surfacing.md) | cost, observability |
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Proposed | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
-| ADR-0039 | Proposed | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0039 | Accepted | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0052 | Accepted  | 2026-06-19 | [Live Sub-Agent Runner Seam & Safety Model](./2026-06-19-live-subagent-runner-seam-and-safety.md) | orchestration, delegation, safety, runtime |
 | ADR-0051 | Accepted  | 2026-06-17 | [Loop Control Seams — Turn Abort & Mid-Turn Budget](./2026-06-17-loop-control-abort-and-mid-turn-budget.md) | agent-loop, runtime, cost |
 | ADR-0050 | Accepted  | 2026-06-16 | [Multi-Provider Catalog, Per-Agent Budget & On-Demand Spend](./2026-06-16-multi-provider-catalog-and-per-agent-budget.md) | providers, runtime, telegram, cost |
 | ADR-0049 | Accepted  | 2026-06-16 | [Interactive Onboarding + Terminal Telegram Pairing](./2026-06-16-interactive-onboarding-and-telegram-pairing.md) | onboarding, telegram, security, cli |
