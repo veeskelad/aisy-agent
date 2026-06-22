@@ -350,7 +350,7 @@ const spawnSubagent = async (planJson: string): Promise<TaskObservation[]> => {
   })
 }
 
-const bot = makeTelegramBot({
+const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
   token,
   allowedChatId,
   gateway,

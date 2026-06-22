@@ -94,7 +94,7 @@ function mainMenuKeyboard(): Keyboard {
   return kb.resized().persistent()
 }
 
-export function makeTelegramBot(deps: TelegramBotDeps): Bot {
+export function makeTelegramBot(deps: TelegramBotDeps) {
   const now = deps.now ?? ((): string => new Date().toISOString())
   const debounceMs = deps.debounceMs ?? 1200
   const sessionId = String(deps.allowedChatId)
@@ -442,5 +442,10 @@ export function makeTelegramBot(deps: TelegramBotDeps): Bot {
     scheduleFlush()
   })
 
-  return bot
+  return {
+    bot,
+    runProactiveTurn: (prompt: string, opts?: { provenance?: Provenance }): Promise<void> =>
+      runTurn([{ text: prompt, provenance: opts?.provenance ?? 'operator' }]),
+    sendProactive: (text: string): Promise<void> => sendReply(text),
+  }
 }
