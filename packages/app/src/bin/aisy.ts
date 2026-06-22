@@ -62,6 +62,7 @@ import {
   liveFactsForNightly,
   makeNightlyGenerator,
   makeNightlyJudge,
+  type NightlyConfig,
 } from '@aisy/core'
 
 const argv = process.argv.slice(2)
@@ -395,7 +396,7 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
 
 // --- Tier-4 nightly consolidation ---
 const nightlyAt = process.env['AISY_NIGHTLY_AT'] ?? '03:30'
-const nightlyConfig = {
+const nightlyConfig: NightlyConfig = {
   runAt: nightlyAt,
   maxHeldMs: 2 * 60 * 60 * 1000,
   lintStaleDays: 30,
@@ -412,6 +413,7 @@ if (genSel === judgeSel) {
 }
 
 const bootStamp = nowIso()
+const processStartTime = Date.now()
 
 const runNightly = async (): Promise<void> => {
   const liveFacts = await memoryStore.listLive()
@@ -428,7 +430,7 @@ const runNightly = async (): Promise<void> => {
       removeFile: (p) => { try { unlinkSync(p) } catch { /* stale lock already gone */ } },
       pid: process.pid,
       bootId: bootStamp,
-      startTime: Date.now(),
+      startTime: processStartTime,
       now: () => Date.now(),
     }),
     facts: liveFactsForNightly(liveFacts),
