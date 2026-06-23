@@ -30,6 +30,14 @@ export interface OpenAIProviderDeps {
   maxTokens?: number
   fetchImpl?: typeof fetch
   timeoutMs?: number
+  /**
+   * Cache strategy:
+   * - 'auto' (default): plain string content — OpenAI/DeepSeek/Gemini/GLM/Qwen
+   *   auto-cache transparently, no request change needed.
+   * - 'breakpoints': wraps system + last message content in cache_control blocks
+   *   for OpenRouter passthrough to Anthropic.
+   */
+  cache?: 'auto' | 'breakpoints'
 }
 
 class OpenAIError extends Error implements ProviderError {
@@ -98,9 +106,26 @@ export function makeOpenAICompatProvider(deps: OpenAIProviderDeps): ProviderAdap
     async complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
       const prefix = req.prefixBytes.byteLength > 0 ? Buffer.from(req.prefixBytes).toString('utf8') : ''
       const { system, messages } = spansToMessages(req.spans, prefix)
-      const oaMessages: { role: string; content: string }[] = []
-      if (system.length > 0) oaMessages.push({ role: 'system', content: system })
-      oaMessages.push(...messages)
+      const cache = deps.cache ?? 'auto'
+      const oaMessages: { role: string; content: unknown }[] = []
+      if (system.length > 0) {
+        oaMessages.push(
+          cache === 'breakpoints'
+            ? { role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] }
+            : { role: 'system', content: system },
+        )
+      }
+      if (cache === 'breakpoints' && messages.length > 0) {
+        messages.forEach((m, i) =>
+          oaMessages.push(
+            i === messages.length - 1
+              ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] }
+              : { role: m.role, content: m.content },
+          ),
+        )
+      } else {
+        for (const m of messages) oaMessages.push({ role: m.role, content: m.content })
+      }
 
       const payload: Record<string, unknown> = {
         model: deps.model,

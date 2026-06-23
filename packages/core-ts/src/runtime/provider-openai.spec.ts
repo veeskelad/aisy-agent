@@ -128,4 +128,52 @@ describe('makeOpenAICompatProvider.complete', () => {
     controller.abort()
     expect(seen!.aborted).toBe(true)
   })
+
+  it('cache: breakpoints — wraps system + last message in cache_control blocks', async () => {
+    const { impl, calls } = fakeFetch(200, { choices: [{ message: { content: 'pong' } }] })
+    const provider = makeOpenAICompatProvider({
+      apiKey: 'K',
+      model: 'anthropic/claude-sonnet-4-6',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      cache: 'breakpoints',
+      fetchImpl: impl,
+    })
+    await provider.complete(req([span('system', 'sys'), span('user', 'ping')]))
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    expect(sent.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }],
+    })
+    expect(sent.messages[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'ping', cache_control: { type: 'ephemeral' } }],
+    })
+  })
+
+  it('cache: breakpoints — only the last message is block-wrapped; earlier messages stay plain', async () => {
+    const { impl, calls } = fakeFetch(200, { choices: [{ message: { content: 'ok' } }] })
+    const provider = makeOpenAICompatProvider({
+      apiKey: 'K',
+      model: 'anthropic/claude-sonnet-4-6',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      cache: 'breakpoints',
+      fetchImpl: impl,
+    })
+    await provider.complete(req([span('system', 'sys'), span('user', 'a'), span('assistant', 'b'), span('user', 'c')]))
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    // system is wrapped
+    expect(sent.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }],
+    })
+    // intermediate user message: plain string
+    expect(sent.messages[1]).toEqual({ role: 'user', content: 'a' })
+    // intermediate assistant message: plain string
+    expect(sent.messages[2]).toEqual({ role: 'assistant', content: 'b' })
+    // last message: block-wrapped
+    expect(sent.messages[3]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'c', cache_control: { type: 'ephemeral' } }],
+    })
+  })
 })
