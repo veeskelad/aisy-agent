@@ -137,6 +137,16 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
     // Step 5: awaiting-approval (tier-3 plan gate) — re-call once with planHash
     if (r.state === 'awaiting-approval') {
       await sendProgress('⏳ Цель ждёт твоего подтверждения шага (tier-3).')
+
+      // Re-check backstop before the extra turn — approval re-call must not exceed ceiling
+      if (spec.iterationsSpent >= bs.maxIterations) {
+        return 'continue'
+      }
+      const totalTokensAfter = spec.usageSpent.inputTokens + spec.usageSpent.outputTokens
+      if (spec.usageSpent.dollars >= bs.dollarCeiling || totalTokensAfter >= bs.tokenCeiling) {
+        return 'continue'
+      }
+
       const token = r.planHash
       const reCall = await runGoalTurn({
         objective,
@@ -276,16 +286,16 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       if (spec === null) return
       current = spec
 
-      // Re-grant pre-authorized scope (idempotent — GrantStore handles dedup)
-      for (const tool of spec.grantedScope) {
-        recordGrant(tool)
-      }
-
       if (spec.mode.kind !== 'every') {
-        // Re-enter until/budget loop asynchronously (fire & forget — caller manages signal)
+        // start() pre-grants each tool in grantedScope — do NOT recordGrant here too
         void this.start(spec, signal)
+      } else {
+        // For 'every' mode: start() is never called, so grant scope here
+        for (const tool of spec.grantedScope) {
+          recordGrant(tool)
+        }
+        // Leave for the scheduler to call tick()
       }
-      // For 'every' mode: leave for the scheduler to call tick()
     },
   }
 }

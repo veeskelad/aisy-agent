@@ -407,3 +407,85 @@ describe('11. pre-grant', () => {
     expect(deps.grants).toEqual(['read_file', 'bash', 'write_file'])
   })
 })
+
+// ---------------------------------------------------------------------------
+// 12. resume() non-every — grants scope ONCE (not twice)
+// ---------------------------------------------------------------------------
+describe('12. resume() non-every — no double-grant', () => {
+  it('grants read_file exactly once when resuming an until goal', async () => {
+    const spec = makeSpec({
+      mode: { kind: 'until' },
+      grantedScope: ['read_file'],
+      status: 'active',
+    })
+    const deps = makeDeps({ runGoalTurn: async () => okDone() })
+
+    // Seed the store so resume() finds the spec
+    await deps.store.save({ ...spec })
+
+    const orch = makeGoalOrchestrator(deps)
+    const ac = new AbortController()
+    await orch.resume(ac.signal)
+
+    // Allow any microtasks from the void start() to settle
+    await Promise.resolve()
+
+    // 'read_file' must appear exactly once in grants
+    expect(deps.grants.filter(t => t === 'read_file')).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 13. resume() every-mode — grants scope once via the every branch
+// ---------------------------------------------------------------------------
+describe('13. resume() every-mode — grants scope once', () => {
+  it('grants scope once for an every-mode goal on resume', async () => {
+    const spec = makeSpec({
+      mode: { kind: 'every', intervalMs: 60_000 },
+      grantedScope: ['read_file'],
+      status: 'active',
+    })
+    const deps = makeDeps({ runGoalTurn: async () => okContinue() })
+
+    await deps.store.save({ ...spec })
+
+    const orch = makeGoalOrchestrator(deps)
+    const ac = new AbortController()
+    await orch.resume(ac.signal)
+
+    expect(deps.grants.filter(t => t === 'read_file')).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 14. backstop guards the awaiting-approval re-call (Fix 2)
+// ---------------------------------------------------------------------------
+describe('14. backstop guards approval re-call', () => {
+  it('does NOT make the re-call when iterationsSpent is at the backstop ceiling', async () => {
+    // maxIterations = 2; first turn is at iterationsSpent=0 → after turn iterationsSpent=1
+    // second turn starts at iterationsSpent=1 → after turn iterationsSpent=2 (== maxIterations)
+    // the awaiting-approval re-call backstop check: iterationsSpent >= 2 → skip re-call
+    const spec = makeSpec({
+      backstop: { maxIterations: 2, tokenCeiling: 999_999, dollarCeiling: 99 },
+    })
+
+    const runGoalTurn = vi.fn<GoalOrchestratorDeps['runGoalTurn']>()
+      // turn 1 (iterationsSpent→1): ok continue
+      .mockResolvedValueOnce(okContinue())
+      // turn 2 (iterationsSpent→2 == maxIterations): awaiting-approval → backstop should block re-call
+      .mockResolvedValueOnce({ state: 'awaiting-approval', planHash: 'h1', claimedDone: false, reply: 'plan' })
+
+    const deps = makeDeps({ runGoalTurn })
+    const orch = makeGoalOrchestrator(deps)
+    const ac = new AbortController()
+    await orch.start(spec, ac.signal)
+
+    // The approval re-call must NOT have been made (runGoalTurn called exactly 2 times)
+    expect(runGoalTurn).toHaveBeenCalledTimes(2)
+
+    // Goal should eventually halt with max-iterations (next iterate's pre-check)
+    const last = deps.store.saved.at(-1)!
+    expect(last.status).toBe('halted')
+    expect(last.haltReason).toBe('max-iterations')
+  })
+})
