@@ -157,6 +157,7 @@ const TOOLS: AnthropicTool[] = [
   { name: 'bash', description: 'Run a shell command in the sandbox', input_schema: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] } },
   { name: 'search_memory', description: 'Search long-term memory (FTS) for relevant facts', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
   { name: 'spawn_subagent', description: 'Delegate a scoped task or a goal-DAG plan to a sub-agent (AgentCard). Arg: plan = JSON of {steps:[{intent}]} or a PlanDAG.', input_schema: { type: 'object', properties: { plan: { type: 'string' } }, required: ['plan'] } },
+  { name: 'goal_done', description: 'Signal that you believe the active goal objective is now met. A deterministic probe verifies the claim before the goal is closed.', input_schema: { type: 'object', properties: { summary: { type: 'string' } } } },
 ]
 
 const fsPort: FsPort = {

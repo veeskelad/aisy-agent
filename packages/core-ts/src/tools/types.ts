@@ -15,6 +15,7 @@ export type BaseToolName =
   | 'git'            // wrapper; push/force gated by HARD_DENY + outbound tag
   | 'call_mcp'       // single entry to all MCP tools (MCP 07)
   | 'call_skill'     // single entry to skill bodies (Skills 06)
+  | 'goal_done'      // Tier-0 sentinel: model claims active goal is met (Phase C verifies)
 
 // Provenance of a value in context — set only by Core (01); never by the model.
 export type Provenance = 'operator' | 'untrusted'

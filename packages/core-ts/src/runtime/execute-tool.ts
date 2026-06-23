@@ -95,6 +95,12 @@ export function makeToolExecutor(
         return { ok: true, output: JSON.stringify(observations) }
       }
 
+      case 'goal_done':
+        // Tier-0 claim: no side effect. The orchestrator (Phase C) intercepts this
+        // sentinel before it reaches here; this case ensures graceful handling in
+        // any runner that reaches the base executor (e.g. sub-agents).
+        return { ok: true, output: '__goal_done__' }
+
       default:
         return { ok: false, output: `unsupported tool: ${call.name}` }
     }

@@ -110,4 +110,21 @@ describe('makeToolExecutor', () => {
     const r = await exec()(call('spawn_subagent', { plan: '{}' }))
     expect(r.ok).toBe(false)
   })
+
+  it('goal_done returns the sentinel and has no side effect', async () => {
+    const fs = memFs()
+    const writeSpy: string[] = []
+    fs.writeFile = (p, c) => { writeSpy.push(p); void fs.files.set(p, c) }
+    const bashCalls: string[] = []
+    const e = makeToolExecutor({
+      fs,
+      workspaceRoot: ROOT,
+      runBash: async (cmd) => { bashCalls.push(cmd); return { stdout: '', stderr: '', exitCode: 0 } },
+    })
+    const r = await e(call('goal_done', {}))
+    expect(r.ok).toBe(true)
+    expect(r.output).toBe('__goal_done__')
+    expect(writeSpy).toHaveLength(0)
+    expect(bashCalls).toHaveLength(0)
+  })
 })
