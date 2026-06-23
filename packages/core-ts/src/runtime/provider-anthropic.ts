@@ -33,6 +33,8 @@ export interface AnthropicProviderDeps {
   fetchImpl?: typeof fetch
   timeoutMs?: number
   apiBase?: string
+  /** Emit cache_control breakpoints on system + last message. Default true. */
+  prefixCache?: boolean
 }
 
 class AnthropicError extends Error implements ProviderError {
@@ -113,7 +115,12 @@ export function priceFor(model: string): ModelPrice | undefined {
 export function parseResponse(body: unknown, price?: ModelPrice): ModelResponse {
   const b = (body && typeof body === 'object' ? body : {}) as {
     content?: AnthropicContentBlock[]
-    usage?: { input_tokens?: number; output_tokens?: number }
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
   }
   const blocks = Array.isArray(b.content) ? b.content : []
   const replyParts: string[] = []
@@ -129,9 +136,17 @@ export function parseResponse(body: unknown, price?: ModelPrice): ModelResponse 
 
   let usage: ModelResponse['usage']
   if (b.usage) {
-    const inputTokens = b.usage.input_tokens ?? 0
+    const uncached = b.usage.input_tokens ?? 0
+    const cacheWrite = b.usage.cache_creation_input_tokens ?? 0
+    const cacheRead = b.usage.cache_read_input_tokens ?? 0
+    const inputTokens = uncached + cacheWrite + cacheRead
     const outputTokens = b.usage.output_tokens ?? 0
-    const dollars = price ? (inputTokens / 1e6) * price.inPerMtok + (outputTokens / 1e6) * price.outPerMtok : 0
+    const dollars = price
+      ? (uncached / 1e6) * price.inPerMtok +
+        (cacheWrite / 1e6) * price.inPerMtok * 1.25 +
+        (cacheRead / 1e6) * price.inPerMtok * 0.1 +
+        (outputTokens / 1e6) * price.outPerMtok
+      : 0
     usage = { inputTokens, outputTokens, dollars }
   }
 
@@ -148,17 +163,30 @@ export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdap
   const maxTokens = deps.maxTokens ?? 4096
   const timeoutMs = deps.timeoutMs ?? 60_000
 
+  const prefixCache = deps.prefixCache ?? true
+
   return {
     async complete(req: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
       const prefix = req.prefixBytes.byteLength > 0 ? Buffer.from(req.prefixBytes).toString('utf8') : ''
       const { system, messages } = spansToMessages(req.spans, prefix)
 
-      const payload: Record<string, unknown> = {
-        model: deps.model,
-        max_tokens: maxTokens,
-        messages,
+      const payload: Record<string, unknown> = { model: deps.model, max_tokens: maxTokens }
+
+      if (prefixCache && messages.length > 0) {
+        payload['messages'] = messages.map((m, i) =>
+          i === messages.length - 1
+            ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] }
+            : { role: m.role, content: m.content },
+        )
+      } else {
+        payload['messages'] = messages
       }
-      if (system.length > 0) payload['system'] = system
+
+      if (system.length > 0) {
+        payload['system'] = prefixCache
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+          : system
+      }
       if (deps.tools && deps.tools.length > 0) payload['tools'] = deps.tools
 
       let res: Response

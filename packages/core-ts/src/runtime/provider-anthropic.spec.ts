@@ -3,6 +3,7 @@ import {
   makeAnthropicProvider,
   spansToMessages,
   parseResponse,
+  priceFor,
   type AnthropicTool,
 } from './provider-anthropic.js'
 import type { ContextSpan, ModelRequest, ProviderError } from '../agent-loop/types.js'
@@ -105,6 +106,27 @@ describe('parseResponse', () => {
   it('omits usage when the body has none', () => {
     expect(parseResponse({ content: [] }).usage).toBeUndefined()
   })
+
+  it('computes tiered dollars from cache token fields and totals inputTokens', () => {
+    // input_tokens=100 (uncached), cache_creation=1000, cache_read=8000, output=50
+    // dollars = 100/1e6*3 + 1000/1e6*3*1.25 + 8000/1e6*3*0.1 + 50/1e6*15
+    //         = 0.0003 + 0.00375 + 0.0024 + 0.00075 = 0.0072
+    const r = parseResponse(
+      {
+        content: [],
+        usage: {
+          input_tokens: 100,
+          cache_creation_input_tokens: 1000,
+          cache_read_input_tokens: 8000,
+          output_tokens: 50,
+        },
+      },
+      priceFor('claude-sonnet-4-6'),
+    )
+    expect(r.usage?.inputTokens).toBe(9100)
+    expect(r.usage?.outputTokens).toBe(50)
+    expect(r.usage?.dollars).toBeCloseTo(0.0072, 6)
+  })
 })
 
 describe('makeAnthropicProvider.complete', () => {
@@ -112,7 +134,7 @@ describe('makeAnthropicProvider.complete', () => {
     { name: 'bash', description: 'run', input_schema: { type: 'object' } },
   ]
 
-  it('sends a well-formed request and parses the reply', async () => {
+  it('sends a well-formed request and parses the reply (prefixCache default-on)', async () => {
     const { impl, calls } = fakeFetch(200, { content: [{ type: 'text', text: 'pong' }] })
     const provider = makeAnthropicProvider({ apiKey: 'KEY', model: 'claude-sonnet-4-6', tools, fetchImpl: impl })
     const res = await provider.complete(req([span('system', 'sys'), span('user', 'ping')], 'PFX'))
@@ -125,9 +147,41 @@ describe('makeAnthropicProvider.complete', () => {
     expect(headers['anthropic-version']).toBe('2023-06-01')
     const sent = JSON.parse(calls[0]!.init.body as string)
     expect(sent.model).toBe('claude-sonnet-4-6')
+    // prefixCache on: system becomes a block array with cache_control
+    expect(sent.system).toEqual([{ type: 'text', text: 'PFX\n\nsys', cache_control: { type: 'ephemeral' } }])
+    // last (and only) message carries cache_control block
+    expect(sent.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'ping', cache_control: { type: 'ephemeral' } }] },
+    ])
+    expect(sent.tools).toEqual(tools)
+  })
+
+  it('only wraps the LAST message with cache_control in a multi-message conversation', async () => {
+    const { impl, calls } = fakeFetch(200, { content: [] })
+    const provider = makeAnthropicProvider({ apiKey: 'K', model: 'm', fetchImpl: impl })
+    // three messages: user 'a', assistant 'b', user 'c'
+    await provider.complete(req([span('user', 'a'), span('assistant', 'b'), span('user', 'c')]))
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    expect(sent.messages).toEqual([
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: [{ type: 'text', text: 'c', cache_control: { type: 'ephemeral' } }] },
+    ])
+  })
+
+  it('emits plain-string system and messages when prefixCache is false (back-compat)', async () => {
+    const { impl, calls } = fakeFetch(200, { content: [{ type: 'text', text: 'pong' }] })
+    const provider = makeAnthropicProvider({
+      apiKey: 'KEY',
+      model: 'claude-sonnet-4-6',
+      tools,
+      fetchImpl: impl,
+      prefixCache: false,
+    })
+    await provider.complete(req([span('system', 'sys'), span('user', 'ping')], 'PFX'))
+    const sent = JSON.parse(calls[0]!.init.body as string)
     expect(sent.system).toBe('PFX\n\nsys')
     expect(sent.messages).toEqual([{ role: 'user', content: 'ping' }])
-    expect(sent.tools).toEqual(tools)
   })
 
   it('omits system and tools when empty', async () => {
