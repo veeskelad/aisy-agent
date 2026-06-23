@@ -44,7 +44,7 @@ function makeInMemoryStore(): GoalStore & { saved: GoalSpec[] } {
   }
 }
 
-function makeDeps(overrides: Partial<GoalOrchestratorDeps> = {}): GoalOrchestratorDeps & {
+function makeDeps(overrides: Partial<Omit<GoalOrchestratorDeps, 'store'>> = {}): GoalOrchestratorDeps & {
   store: GoalStore & { saved: GoalSpec[] }
   calls: Array<Parameters<GoalOrchestratorDeps['runGoalTurn']>[0]>
   progress: string[]
@@ -333,29 +333,29 @@ describe('8. every mode', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 9. awaiting-approval → re-call with approvalToken, tier-3 NOT auto-granted
+// 9. awaiting-approval → HALTS (safety regression lock: no self-issued token)
 // ---------------------------------------------------------------------------
 describe('9. awaiting-approval', () => {
-  it('re-calls with approvalToken on awaiting-approval, then completes; recordGrant not called for tier-3', async () => {
+  it('halts goal on awaiting-approval; runGoalTurn called once; recordGrant not called for tier-3', async () => {
     const spec = makeSpec({ grantedScope: ['read_file'] })
     const runGoalTurn = vi.fn<GoalOrchestratorDeps['runGoalTurn']>()
       .mockResolvedValueOnce({ state: 'awaiting-approval', planHash: 'hash-abc', claimedDone: false, reply: 'plan ready' })
-      .mockResolvedValueOnce({ state: 'ok', claimedDone: true, reply: 'done' })
 
     const deps = makeDeps({ runGoalTurn })
     const orch = makeGoalOrchestrator(deps)
     const ac = new AbortController()
     await orch.start(spec, ac.signal)
 
-    expect(deps.store.saved.at(-1)?.status).toBe('completed')
+    // runGoalTurn must be called exactly ONCE — no self-issued re-call with approvalToken
+    expect(runGoalTurn).toHaveBeenCalledTimes(1)
 
-    // 2nd call must have approvalToken (check via mock directly since override bypasses deps.calls)
-    const secondCall = runGoalTurn.mock.calls[1]?.[0]
-    expect(secondCall?.approvalToken).toBe('hash-abc')
+    // Goal must be halted, not completed
+    const last = deps.store.saved.at(-1)!
+    expect(last.status).toBe('halted')
+    expect(last.haltReason).toBe('awaiting-approval')
 
-    // recordGrant only called for grantedScope tools (read_file), not for tier-3
+    // recordGrant only called for grantedScope tools (read_file), NOT for planHash / tier-3
     expect(deps.grants).toContain('read_file')
-    // should NOT have been called with the planHash or any tier-3 token
     expect(deps.grants).not.toContain('hash-abc')
     expect(deps.grants).toHaveLength(1)
   })
@@ -458,13 +458,11 @@ describe('13. resume() every-mode — grants scope once', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 14. backstop guards the awaiting-approval re-call (Fix 2)
+// 14. awaiting-approval halts immediately (no backstop-guarded re-call path)
 // ---------------------------------------------------------------------------
-describe('14. backstop guards approval re-call', () => {
-  it('does NOT make the re-call when iterationsSpent is at the backstop ceiling', async () => {
-    // maxIterations = 2; first turn is at iterationsSpent=0 → after turn iterationsSpent=1
-    // second turn starts at iterationsSpent=1 → after turn iterationsSpent=2 (== maxIterations)
-    // the awaiting-approval re-call backstop check: iterationsSpent >= 2 → skip re-call
+describe('14. awaiting-approval halts regardless of backstop state', () => {
+  it('halts with awaiting-approval when the turn returns that state, even mid-run', async () => {
+    // maxIterations = 2; first turn continues; second turn hits awaiting-approval
     const spec = makeSpec({
       backstop: { maxIterations: 2, tokenCeiling: 999_999, dollarCeiling: 99 },
     })
@@ -472,7 +470,7 @@ describe('14. backstop guards approval re-call', () => {
     const runGoalTurn = vi.fn<GoalOrchestratorDeps['runGoalTurn']>()
       // turn 1 (iterationsSpent→1): ok continue
       .mockResolvedValueOnce(okContinue())
-      // turn 2 (iterationsSpent→2 == maxIterations): awaiting-approval → backstop should block re-call
+      // turn 2 (iterationsSpent→2 == maxIterations): awaiting-approval → must halt immediately
       .mockResolvedValueOnce({ state: 'awaiting-approval', planHash: 'h1', claimedDone: false, reply: 'plan' })
 
     const deps = makeDeps({ runGoalTurn })
@@ -480,12 +478,65 @@ describe('14. backstop guards approval re-call', () => {
     const ac = new AbortController()
     await orch.start(spec, ac.signal)
 
-    // The approval re-call must NOT have been made (runGoalTurn called exactly 2 times)
+    // No re-call — runGoalTurn called exactly 2 times (once per turn, no self-issued approval)
     expect(runGoalTurn).toHaveBeenCalledTimes(2)
 
-    // Goal should eventually halt with max-iterations (next iterate's pre-check)
+    // Goal halts with awaiting-approval (not max-iterations)
     const last = deps.store.saved.at(-1)!
     expect(last.status).toBe('halted')
-    expect(last.haltReason).toBe('max-iterations')
+    expect(last.haltReason).toBe('awaiting-approval')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 15. generation guard — superseded loop never clobbers the new active goal
+// ---------------------------------------------------------------------------
+describe('15. generation guard — superseded loop cannot overwrite new goal', () => {
+  it('skips the terminal save from a superseded loop, keeping goal B in the store', async () => {
+    // Goal A: loops (okContinue), will be superseded by goal B
+    const specA = makeSpec({ id: 'goal-a', objective: 'task A' })
+    const specB = makeSpec({ id: 'goal-b', objective: 'task B' })
+
+    // Shared store between both orchestrators
+    const store = makeInMemoryStore()
+
+    // Track when A's runGoalTurn is called so we can abort it mid-loop
+    const acA = new AbortController()
+    let aTurnCount = 0
+    const orchA = makeGoalOrchestrator({
+      store,
+      runGoalTurn: async () => {
+        aTurnCount++
+        if (aTurnCount >= 1) acA.abort() // abort A after first turn
+        return okContinue()
+      },
+      probeRunner: async () => true,
+      recordGrant: () => {},
+      sendProgress: async () => {},
+      clock: { now: () => '2026-01-01T00:01:00Z' },
+    })
+
+    // Start A in the background (will abort after first turn)
+    const aLoop = orchA.start(specA, acA.signal)
+
+    // Wait for A to abort and save its stopped state
+    await aLoop
+
+    // Now start goal B — this sets current = specB and saves it
+    const orchB = makeGoalOrchestrator({
+      store,
+      runGoalTurn: async () => okDone(), // B completes immediately
+      probeRunner: async () => true,
+      recordGrant: () => {},
+      sendProgress: async () => {},
+      clock: { now: () => '2026-01-01T00:02:00Z' },
+    })
+    const acB = new AbortController()
+    await orchB.start(specB, acB.signal)
+
+    // The last persisted spec must be goal B (completed), not goal A (stopped)
+    const last = store.saved.at(-1)!
+    expect(last.id).toBe('goal-b')
+    expect(last.status).toBe('completed')
   })
 })

@@ -69,7 +69,7 @@ When a goal is created, the operator pre-authorises a tool scope recorded as tie
 Locked invariants:
 
 - A grant suppresses only a tier-2 `ask`; it **never** overrides a `deny`.
-- **Tier-3 is never grantable.** A tier-3 step mid-goal pauses the orchestrator and waits for an explicit operator tap; the orchestrator resumes once with `approvalToken: planHash`.
+- **Tier-3 is never grantable.** A whole-plan tier-3 gate HALTS the goal (`haltReason='awaiting-approval'`) — the orchestrator NEVER self-issues the approval token (that would bypass the human). The operator performs the step in a normal turn or re-runs the goal. Tier-3 TOOL calls during a goal turn remain gated by the real approval card (the bot's approve port). A goal-approval-card + auto-resume is a follow-up.
 
 ## Consequences
 
@@ -88,6 +88,7 @@ Locked invariants:
 - A sub-agent that calls `goal_done` hits Core's tool sentinel, not the goal orchestrator's wrapper — the `claimedDone` flag is not set in that edge case (documented, not blocked).
 - v1 supports a **single active goal**; parallel goals are deferred.
 - Nightly-style boot-time startup of goals is not in scope.
+- A goal-approval-card UI + auto-resume after operator tap is deferred (follow-up to tier-3 HALT behaviour).
 
 ## Alternatives considered
 

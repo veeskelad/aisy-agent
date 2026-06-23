@@ -69,6 +69,11 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
     spec.usageSpent.dollars += usage.dollars
   }
 
+  // Generation guard: superseded loops must never overwrite the newly active goal.
+  const persist = async (s: GoalSpec): Promise<void> => {
+    if (current?.id === s.id) await store.save(s)
+  }
+
   // -------------------------------------------------------------------------
   // Core iterate — one turn attempt
   // -------------------------------------------------------------------------
@@ -83,7 +88,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       spec.status = 'stopped'
       spec.haltReason = 'stopped'
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
       return 'stopped'
     }
 
@@ -93,7 +98,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       spec.status = 'halted'
       spec.haltReason = 'max-iterations'
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
       return 'halted'
     }
     const totalTokens = spec.usageSpent.inputTokens + spec.usageSpent.outputTokens
@@ -101,7 +106,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       spec.status = 'halted'
       spec.haltReason = 'backstop-budget'
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
       return 'halted'
     }
     // Budget-mode ceiling check
@@ -115,14 +120,14 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
         spec.status = 'halted'
         spec.haltReason = 'budget-ceiling'
         touch(spec)
-        await store.save(spec)
+        await persist(spec)
         return 'halted'
       }
     }
 
     // Step 3: run the turn
     const objective = spec.objective
-    let r = await runGoalTurn({
+    const r = await runGoalTurn({
       objective,
       ...(spec.lastFeedback !== undefined ? { feedback: spec.lastFeedback } : {}),
       signal,
@@ -132,37 +137,17 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
     spec.iterationsSpent++
     if (r.usage !== undefined) addUsage(spec, r.usage)
     touch(spec)
-    await store.save(spec)
+    await persist(spec)
 
-    // Step 5: awaiting-approval (tier-3 plan gate) — re-call once with planHash
+    // Step 5: awaiting-approval (tier-3 plan gate) — HALT; never self-issue the token.
+    // Self-issuing approvalToken = planHash would bypass the mandatory operator tap.
     if (r.state === 'awaiting-approval') {
-      await sendProgress('⏳ Цель ждёт твоего подтверждения шага (tier-3).')
-
-      // Re-check backstop before the extra turn — approval re-call must not exceed ceiling
-      if (spec.iterationsSpent >= bs.maxIterations) {
-        return 'continue'
-      }
-      const totalTokensAfter = spec.usageSpent.inputTokens + spec.usageSpent.outputTokens
-      if (spec.usageSpent.dollars >= bs.dollarCeiling || totalTokensAfter >= bs.tokenCeiling) {
-        return 'continue'
-      }
-
-      const token = r.planHash
-      const reCall = await runGoalTurn({
-        objective,
-        ...(spec.lastFeedback !== undefined ? { feedback: spec.lastFeedback } : {}),
-        ...(token !== undefined ? { approvalToken: token } : {}),
-        signal,
-      })
-      spec.iterationsSpent++
-      if (reCall.usage !== undefined) addUsage(spec, reCall.usage)
+      spec.status = 'halted'
+      spec.haltReason = 'awaiting-approval'
       touch(spec)
-      await store.save(spec)
-      r = reCall
-      // If still awaiting-approval after re-call → treat as 'continue' (no infinite loop here)
-      if (r.state === 'awaiting-approval') {
-        return 'continue'
-      }
+      await persist(spec)
+      await sendProgress('⏸ Цель остановлена: шаг требует ручного подтверждения (tier-3). Авто-одобрение отключено — выполни шаг сам или перезапусти цель.')
+      return 'halted'
     }
 
     // Step 6: halted
@@ -170,7 +155,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       spec.status = r.haltReason === 'stopped' ? 'stopped' : 'halted'
       if (r.haltReason !== undefined) spec.haltReason = r.haltReason
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
       return r.haltReason === 'stopped' ? 'stopped' : 'halted'
     }
 
@@ -179,7 +164,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
       spec.lastFeedback = 'Предыдущая итерация запросила уточнение: ' + r.reply
       await sendProgress('⏸ Цель ждёт уточнения.')
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
       return 'continue'
     }
 
@@ -190,20 +175,20 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
         if (pass) {
           spec.status = 'completed'
           touch(spec)
-          await store.save(spec)
+          await persist(spec)
           return 'done'
         } else {
           spec.lastFeedback = 'Ты пометил цель выполненной, но проба не прошла — продолжай.'
           emit?.('goal.probe_failed', { specId: spec.id })
           touch(spec)
-          await store.save(spec)
+          await persist(spec)
           return 'continue'
         }
       } else {
         // no probe (or non-until mode with claim) → complete on claim
         spec.status = 'completed'
         touch(spec)
-        await store.save(spec)
+        await persist(spec)
         return 'done'
       }
     }
@@ -211,7 +196,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
     // Not claimed done → store reply as feedback and continue
     spec.lastFeedback = r.reply.slice(0, 500)
     touch(spec)
-    await store.save(spec)
+    await persist(spec)
     return 'continue'
   }
 
@@ -257,7 +242,7 @@ export function makeGoalOrchestrator(deps: GoalOrchestratorDeps): GoalOrchestrat
 
       // Initial persist
       touch(spec)
-      await store.save(spec)
+      await persist(spec)
 
       // Loop until non-continue (until / budget modes)
       for (;;) {
