@@ -53,6 +53,7 @@ in this index so cross-references stay stable.
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Accepted  | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Accepted | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0054 | Accepted  | 2026-06-23 | [Goal-Driven Loop Layer (/goal)](./2026-06-23-goal-driven-loop-layer.md) | agent-loop, goal, proactivity |
 | ADR-0053 | Accepted  | 2026-06-22 | [Proactivity: In-Process Scheduler & Nightly Generator/Judge](./2026-06-22-proactivity-scheduler-and-nightly-generator.md) | proactivity, nightly, triggers, scheduler |
 | ADR-0052 | Accepted  | 2026-06-19 | [Live Sub-Agent Runner Seam & Safety Model](./2026-06-19-live-subagent-runner-seam-and-safety.md) | orchestration, delegation, safety, runtime |
 | ADR-0051 | Accepted  | 2026-06-17 | [Loop Control Seams — Turn Abort & Mid-Turn Budget](./2026-06-17-loop-control-abort-and-mid-turn-budget.md) | agent-loop, runtime, cost |

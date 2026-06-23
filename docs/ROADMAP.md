@@ -79,12 +79,28 @@ Follow-ups: real `draftSkills`; full hash-chained AuditLog (Component 12); SQL w
 | 16 | CI (lint + build + test gate) | M |
 | 17 | Packaging / distribution (ADR-0035) | M |
 
-### Tier 7 — goal-driven loop (`/goal`) — requested 2026-06-22, after Tier 4
+### Tier 7 — goal-driven loop (`/goal`) — ✅ DONE (#18)
+| # | Task | Effort | Risk | Status |
+|---|------|--------|------|--------|
+| 18 | Persistent session objective + verify-until-done loop on top of `runTurn` (à la Claude Code `/goal`; ANIMA persistent-agent model). Completion-condition reuses the existing `VerificationTrace`; budget/guardian/`Halt` + the Tier-4 scheduler (`/loop every 10m`) already exist. **ADR-0054** (loop contract: turn-based → goal-driven). | L | high (loop) | ✅ done |
+
+→ **Plan:** [`docs/superpowers/plans/2026-06-23-tier7-goal-driven-loop.md`](./superpowers/plans/2026-06-23-tier7-goal-driven-loop.md)
+Shipped across phases A–F (GoalSpec + store, `goal_done` Tier-0 tool, `makeGoalOrchestrator`, bot seam + `/goal` commands, bin wiring, ADR-0054).
+v1 scope: 3 modes (`until` / `every:<interval>` / `budget:<n>`); model-claims → probe-verifies (probe-fail feeds back and continues); always-on backstop (`maxIterations` + token/$ ceiling, env-configurable via `AISY_GOAL_*`); `/stop` + `/goal stop` via goal-scoped `AbortController`; pre-grant read-only default scope; `~/.aisy/goal.json` crash-resume; app-level orchestrator (Core untouched).
+Follow-ups: `every` cron/HH:MM scheduling (only relative intervals in v1); goal-store per-tick caching; sub-agent `goal_done` edge case (Core sentinel vs. orchestrator wrapper); single active goal (parallel goals deferred).
+Distinct from the goal-DAG (orchestration, ADR-0039 — per-spawn delegation decomposition, not a top-level session goal).
+
+### Tier 8 — caching
+
+> Semantic-caching the live loop is an anti-pattern; prefix caching is the real win (research 2026-06-23).
+
 | # | Task | Effort | Risk |
 |---|------|--------|------|
-| 18 | Persistent session objective + verify-until-done loop on top of `runTurn` (à la Claude Code `/goal`; ANIMA persistent-agent model). Completion-condition reuses the existing `VerificationTrace`; budget/guardian/`Halt` + the Tier-4 scheduler (`/loop every 10m`) already exist. **New ADR-0054** (loop contract: turn-based → goal-driven). Own arc: brainstorming → ADR → plan. | L | high (loop) |
+| 19 | **Finish PREFIX caching (ADR-0019)** — the provider adapters compute breakpoints but don't emit `cache_control: ephemeral` (Anthropic) / rely on OpenAI auto-prefix; wiring it is the safe high-ROI win (zero wrong-answer risk). | M | low |
+| 20 | Optional narrow exact-cache on eval-replay + nightly generator/judge retries (deterministic, non-stateful). | S | low |
+| 21 | (Deferred) semantic-response cache ONLY behind the ADR-0031 embedding plugin, scoped to read-only paths, with invariants (no cross-session; invalidate on narrowed/forget; key includes prefixHash) — NEVER the live agent loop (anti-pattern: stateful turns → near-zero hit rate + safety-invariant bypass + key-collision risk). | L | high |
 
-→ Plan: TBD (own arc after Tier 4). Distinct from the goal-DAG (orchestration, ADR-0039 — per-spawn delegation decomposition, not a top-level session goal).
+→ Plan: TBD.
 
 ## Dependency notes
 
