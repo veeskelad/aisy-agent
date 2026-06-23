@@ -176,3 +176,14 @@ export type {
 export { makeFileRunLock, makeMemoryValidators, liveFactsForNightly, memOpToMemoryOp } from './runtime/nightly-adapters.js'
 export type { FileRunLockDeps, MemoryValidatorsDeps } from './runtime/nightly-adapters.js'
 export { makeNightlyGenerator, makeNightlyJudge } from './runtime/nightly-generator.js'
+
+// --- Tier-7 goal-driven loop ---
+export { makeGoalSpec } from './goals/index.js'
+export type {
+  GoalSpec,
+  GoalStore,
+  GoalMode,
+  GoalBackstop,
+  GoalUsage,
+  GoalStatus,
+} from './goals/index.js'
