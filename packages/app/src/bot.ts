@@ -23,6 +23,7 @@ import type {
   SettingsStore,
   SpendStore,
   TelegramUpdate,
+  TurnResult,
 } from '@aisy/core'
 import {
   MAIN_MENU,
@@ -85,6 +86,11 @@ export interface TelegramBotDeps {
   onListTriggers?: () => Promise<{ id: string; kind: string; prompt: string }[]>
   /** Cancel a trigger by id — returns true if found (Tier-4 D2). */
   onCancelTrigger?: (id: string) => Promise<boolean>
+  /** Build a goal-scoped runner whose executeTool detects goal_done; takeClaimedDone()
+   *  reads + resets the per-turn flag. Absent ⇒ goals fall back to the main runner (no detection). */
+  buildGoalRunner?: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => { runner: AgentRunner; takeClaimedDone: () => boolean }
+  /** Handle a /goal command — decoupled; no goal types leak into bot (Tier-7 D). */
+  onGoalCommand?: (input: { kind: 'start'; objective: string; mode: string } | { kind: 'status' } | { kind: 'stop' }) => Promise<{ ok: true; message: string } | { ok: false; error: string }>
 }
 
 interface PendingCard {
@@ -165,6 +171,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     })
 
   const runner = deps.buildRunner(approve)
+  const goal = deps.buildGoalRunner ? deps.buildGoalRunner(approve) : { runner, takeClaimedDone: (): boolean => false }
 
   const sendReply = async (text: string): Promise<void> => {
     const fitted = fitBody(text.length > 0 ? text : '(пустой ответ)')
@@ -443,6 +450,42 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     await ctx.reply(ok === true ? '✅ Снят' : '❌ Не найден')
   })
 
+  // --- goal commands (Tier-7 D) ---
+  bot.command('goal', async (ctx) => {
+    const raw = (ctx.match ?? '').trim()
+    if (!raw) {
+      await ctx.reply('Использование: /goal <цель> [until[:<проба>] | every:<10m|@daily|HH:MM> | budget:<0.50|50000>]')
+      return
+    }
+    if (raw === 'status') {
+      const res = await deps.onGoalCommand?.({ kind: 'status' })
+      if (!res) { await ctx.reply('❌ Цели не настроены.'); return }
+      await ctx.reply(res.ok ? res.message : `❌ ${res.error}`)
+      return
+    }
+    if (raw === 'stop') {
+      const res = await deps.onGoalCommand?.({ kind: 'stop' })
+      if (!res) { await ctx.reply('❌ Цели не настроены.'); return }
+      await ctx.reply(res.ok ? res.message : `❌ ${res.error}`)
+      return
+    }
+    // Split off a trailing mode token: until[:<probe>] | every:<...> | budget:<...>
+    const tokens = raw.split(/\s+/)
+    const last = tokens[tokens.length - 1] ?? ''
+    let mode: string
+    let objective: string
+    if (/^(until(:.+)?|every:.+|budget:.+)$/.test(last) && tokens.length > 1) {
+      mode = last
+      objective = tokens.slice(0, -1).join(' ')
+    } else {
+      mode = 'until'
+      objective = raw
+    }
+    const res = await deps.onGoalCommand?.({ kind: 'start', objective, mode })
+    if (!res) { await ctx.reply('❌ Цели не настроены.'); return }
+    await ctx.reply(res.ok ? res.message : `❌ ${res.error}`)
+  })
+
   // --- approval card taps ---
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data
@@ -564,6 +607,49 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
       }
       if (agentState === 'running') return   // rare: operator turn > ~30s — skip; schedule/watch re-fires next tick
       return runTurn([{ text: prompt, provenance: opts?.provenance ?? 'operator' }])
+    },
+    runGoalTurn: async (input: {
+      objective: string
+      feedback?: string
+      approvalToken?: string
+      signal: AbortSignal
+    }): Promise<{
+      state: TurnResult['state']
+      haltReason?: string
+      planHash?: string
+      usage?: { inputTokens: number; outputTokens: number; dollars: number }
+      claimedDone: boolean
+      reply: string
+    }> => {
+      // Don't race an in-flight operator turn — same idle-guard as runProactiveTurn.
+      for (let i = 0; i < 60 && agentState === 'running'; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      if (agentState === 'running') return { state: 'halted', haltReason: 'busy', claimedDone: false, reply: '' }
+      agentState = 'running'
+      try {
+        const text = input.feedback
+          ? `${input.objective}\n\n[Контекст прошлой итерации]: ${input.feedback}`
+          : input.objective
+        const result = await goal.runner.handle({
+          sessionId,
+          spans: [{ role: 'user', provenance: 'operator' as const, text }],
+          signal: input.signal,
+          ...(input.approvalToken !== undefined ? { approvalToken: input.approvalToken } : {}),
+        })
+        if (result.usage) deps.spend?.record({ model: deps.model, usage: result.usage })
+        deps.setOutboundLocked?.(result.narrowed === true)
+        return {
+          state: result.state,
+          ...(result.haltReason !== undefined ? { haltReason: result.haltReason } : {}),
+          ...(result.planHash !== undefined ? { planHash: result.planHash } : {}),
+          ...(result.usage !== undefined ? { usage: result.usage } : {}),
+          claimedDone: goal.takeClaimedDone(),
+          reply: result.reply,
+        }
+      } finally {
+        agentState = 'idle'
+      }
     },
     sendProactive: (text: string): Promise<void> => sendReply(text),
   }
