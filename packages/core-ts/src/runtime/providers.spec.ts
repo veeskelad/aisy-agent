@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import { PROVIDER_CATALOG, findProvider, buildProvider, makeTieredProvider } from './providers.js'
-import type { ProviderAdapter, ModelRequest, ModelResponse } from '../agent-loop/types.js'
+import type { ProviderAdapter, ModelRequest, ModelResponse, ContextSpan } from '../agent-loop/types.js'
 
 const req: ModelRequest = { sessionId: 's', prefixBytes: new Uint8Array(), spans: [] }
+
+function span(role: ContextSpan['role'], text: string): ContextSpan {
+  return { role, text, provenance: 'operator' }
+}
+
+function fakeFetch(status: number, body: unknown) {
+  const calls: { url: string; init: RequestInit }[] = []
+  const impl = (async (url: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} })
+    return { status, json: async () => body } as Response
+  }) as unknown as typeof fetch
+  return { impl, calls }
+}
 
 describe('PROVIDER_CATALOG', () => {
   it('includes the full provider set', () => {
@@ -32,6 +45,66 @@ describe('buildProvider', () => {
 
   it('throws on an unknown provider', () => {
     expect(() => buildProvider({ provider: 'nope', model: 'm' })).toThrow(/unknown provider/)
+  })
+})
+
+describe('buildProvider prefixCache wiring', () => {
+  const okBody = { choices: [{ message: { content: 'ok' } }] }
+  const anthropicOkBody = { content: [{ type: 'text', text: 'ok' }] }
+  const spans = [span('system', 'sys'), span('user', 'ping')]
+  const turnReq: ModelRequest = { sessionId: 's', prefixBytes: new Uint8Array(), spans }
+
+  it('openrouter + prefixCache:true => cache_control blocks on system and last message', async () => {
+    const { impl, calls } = fakeFetch(200, okBody)
+    const adapter = buildProvider({
+      provider: 'openrouter',
+      model: 'anthropic/claude-sonnet-4-6',
+      apiKey: 'K',
+      prefixCache: true,
+      fetchImpl: impl,
+    })
+    await adapter.complete(turnReq)
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    expect(sent.messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }],
+    })
+    expect(sent.messages[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'ping', cache_control: { type: 'ephemeral' } }],
+    })
+  })
+
+  it('deepseek + prefixCache:true => plain string content (auto cache)', async () => {
+    const { impl, calls } = fakeFetch(200, okBody)
+    const adapter = buildProvider({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      apiKey: 'K',
+      prefixCache: true,
+      fetchImpl: impl,
+    })
+    await adapter.complete(turnReq)
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    // system message: plain string (auto cache)
+    expect(sent.messages[0]).toEqual({ role: 'system', content: 'sys' })
+    // user message: plain string
+    expect(sent.messages[1]).toEqual({ role: 'user', content: 'ping' })
+  })
+
+  it('anthropic + prefixCache:false => plain string system and messages', async () => {
+    const { impl, calls } = fakeFetch(200, anthropicOkBody)
+    const adapter = buildProvider({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      apiKey: 'K',
+      prefixCache: false,
+      fetchImpl: impl,
+    })
+    await adapter.complete(turnReq)
+    const sent = JSON.parse(calls[0]!.init.body as string)
+    expect(sent.system).toBe('sys')
+    expect(sent.messages).toEqual([{ role: 'user', content: 'ping' }])
   })
 })
 

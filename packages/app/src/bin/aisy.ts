@@ -216,6 +216,8 @@ const runBash = sandboxImage
 
 const grants = makeGrantStore({ persistence: grantPersistence })
 
+const prefixCache = process.env['AISY_PREFIX_CACHE'] !== '0'
+
 function adapterFor(sel: ProviderSel): ProviderAdapter {
   const apiKey = keyFor(sel.provider)
   const baseUrl = baseUrlFor(sel.provider)
@@ -223,6 +225,7 @@ function adapterFor(sel: ProviderSel): ProviderAdapter {
     provider: sel.provider,
     model: sel.model,
     tools: TOOLS,
+    prefixCache,
     ...(apiKey ? { apiKey } : {}),
     ...(baseUrl ? { baseUrl } : {}),
   })

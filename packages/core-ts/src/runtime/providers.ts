@@ -50,6 +50,13 @@ export interface BuildProviderConfig {
   baseUrl?: string
   tools?: AnthropicTool[]
   price?: ModelPrice
+  /** Emit cache_control breakpoints on system + last message. Default true. */
+  prefixCache?: boolean
+  /**
+   * Injected fetch implementation for testing. Passed through to the underlying
+   * adapter when provided (both adapters accept fetchImpl in their deps).
+   */
+  fetchImpl?: typeof fetch
 }
 
 /** Build a single ProviderAdapter from a catalog id + config. */
@@ -62,18 +69,24 @@ export function buildProvider(cfg: BuildProviderConfig): ProviderAdapter {
       return makeAnthropicProvider({
         apiKey: cfg.apiKey ?? '',
         model: cfg.model,
+        prefixCache: cfg.prefixCache ?? true,
         ...(cfg.tools ? { tools: cfg.tools } : {}),
         ...(cfg.baseUrl ? { apiBase: cfg.baseUrl } : {}),
+        ...(cfg.fetchImpl ? { fetchImpl: cfg.fetchImpl } : {}),
       })
     case 'openai-compat': {
       const baseUrl = cfg.baseUrl ?? entry.defaultBaseUrl
       if (!baseUrl) throw new Error(`provider ${cfg.provider} needs a baseUrl`)
+      const cache: 'auto' | 'breakpoints' =
+        (cfg.prefixCache ?? true) && entry.id === 'openrouter' ? 'breakpoints' : 'auto'
       return makeOpenAICompatProvider({
         apiKey: cfg.apiKey ?? '',
         model: cfg.model,
         baseUrl,
+        cache,
         ...(cfg.tools ? { tools: cfg.tools } : {}),
         ...(cfg.price ? { price: cfg.price } : {}),
+        ...(cfg.fetchImpl ? { fetchImpl: cfg.fetchImpl } : {}),
       })
     }
     case 'cli':
