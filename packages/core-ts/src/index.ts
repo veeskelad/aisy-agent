@@ -177,6 +177,10 @@ export { makeFileRunLock, makeMemoryValidators, liveFactsForNightly, memOpToMemo
 export type { FileRunLockDeps, MemoryValidatorsDeps } from './runtime/nightly-adapters.js'
 export { makeNightlyGenerator, makeNightlyJudge } from './runtime/nightly-generator.js'
 
+// --- Tier-8 exact-response cache (deterministic paths only; NEVER the live loop — ADR-0055) ---
+export { makeExactCache, makeMemoryExactCacheStore } from './runtime/exact-cache.js'
+export type { ExactCacheStore } from './runtime/exact-cache.js'
+
 // --- Tier-7 goal-driven loop ---
 export { makeGoalSpec } from './goals/index.js'
 export type {

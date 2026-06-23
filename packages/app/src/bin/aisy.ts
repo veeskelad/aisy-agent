@@ -71,6 +71,8 @@ import {
   makeNightlyJudge,
   makeTriggerEngine,
   makeGoalSpec,
+  makeExactCache,
+  makeMemoryExactCacheStore,
   type GoalMode,
   type NightlyConfig,
   type TriggerBudget,
@@ -401,10 +403,14 @@ const processStartTime = Date.now()
 // the session are consolidated only after a restart — a facts-thunk for live
 // freshness is a follow-up. Both facts AND validators are boot-time → internally consistent.
 const bootLiveFacts = await memoryStore.listLive()
+const exactStore = makeMemoryExactCacheStore()
+const nightlyExact = process.env['AISY_NIGHTLY_EXACT_CACHE'] === '1'
+const wrapNightly = (a: ProviderAdapter, ns: string): ProviderAdapter =>
+  nightlyExact ? makeExactCache(a, exactStore, ns) : a
 const nightlyRunner = makeConsolidationRunner({
   clock: { now: () => new Date(nowIso()) },
-  generator: makeNightlyGenerator({ provider: adapterFor(genSel), nowIso }),
-  judge: makeNightlyJudge({ provider: adapterFor(judgeSel) }),
+  generator: makeNightlyGenerator({ provider: wrapNightly(adapterFor(genSel), `gen:${genSel.model}`), nowIso }),
+  judge: makeNightlyJudge({ provider: wrapNightly(adapterFor(judgeSel), `judge:${judgeSel.model}`) }),
   validators: makeMemoryValidators({ liveFactIds: new Set(bootLiveFacts.map((f) => f.id)) }),
   lock: makeFileRunLock({
     lockPath: join(base, 'nightly.lock'),
