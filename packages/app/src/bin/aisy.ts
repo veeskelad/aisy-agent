@@ -58,6 +58,9 @@ import { makeJsonlJournal } from '../journal.js'
 import { makeScheduler } from '../scheduler.js'
 import { makeTriggerStore } from '../trigger-store.js'
 import { makeTriggerProbeRunner } from '../trigger-probe.js'
+import { makeGoalStore } from '../goal-store.js'
+import { makeGoalOrchestrator } from '../goal-orchestrator.js'
+import { parseGoalMode } from '../goal-parse.js'
 import {
   makeConsolidationRunner,
   makeFileRunLock,
@@ -67,6 +70,8 @@ import {
   makeNightlyGenerator,
   makeNightlyJudge,
   makeTriggerEngine,
+  makeGoalSpec,
+  type GoalMode,
   type NightlyConfig,
   type TriggerBudget,
 } from '@aisy/core'
@@ -461,6 +466,25 @@ function parseProbe(p?: string): VerificationTrace | null {
 // sendProactive is resolved after makeTelegramBot; runNightly captures it via closure.
 let sendProactiveRef: ((text: string) => Promise<void>) | null = null
 
+// --- Tier-7 goal wiring (pre-bot declarations; onGoalCommand closes over these) ---
+const goalStore = makeGoalStore({
+  path: join(base, 'goal.json'),
+  readFile: (p) => readFileSync(p, 'utf8'),
+  writeFile: (p, c) => writeFileSync(p, c, { encoding: 'utf8', mode: 0o600 }),
+  exists: (p) => existsSync(p),
+  removeFile: (p) => { try { unlinkSync(p) } catch { /* already gone */ } },
+})
+const goalBackstop = {
+  maxIterations: Number(process.env['AISY_GOAL_MAX_ITERATIONS'] ?? '25') || 25,
+  tokenCeiling: Number(process.env['AISY_GOAL_TOKEN_CEILING'] ?? '500000') || 500000,
+  dollarCeiling: Number(process.env['AISY_GOAL_DOLLAR_CEILING'] ?? '5') || 5,
+}
+// Forward reference: orchestrator is assigned after makeTelegramBot (chicken-egg break).
+// onGoalCommand (inside makeTelegramBot deps) closes over orchestrator by reference;
+// it is only called at runtime (never at definition time), so the assignment below is safe.
+let orchestrator: ReturnType<typeof makeGoalOrchestrator>
+let goalAbort: AbortController | null = null
+
 async function runNightly(): Promise<void> {
   const result = await nightlyRunner.run(nightlyConfig)
   await gateway.issueCard({
@@ -473,7 +497,7 @@ async function runNightly(): Promise<void> {
   await sendProactiveRef?.(`🌅 Ночная консолидация ${result.runDate} готова — ${result.card.memoryEdits.length} правок в staging. Открой карту для одобрения.`)
 }
 
-const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
+const { bot, runProactiveTurn, sendProactive, runGoalTurn } = makeTelegramBot({
   token,
   allowedChatId,
   gateway,
@@ -534,6 +558,55 @@ const { bot, runProactiveTurn, sendProactive } = makeTelegramBot({
       },
     })
   },
+  buildGoalRunner: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => {
+    let done = false
+    const goalExec: typeof executeTool = (call) => {
+      if (call.name === 'goal_done') {
+        done = true
+        return Promise.resolve({ ok: true as const, output: 'acknowledged' })
+      }
+      return executeTool(call)
+    }
+    const runner = makeAgentRunner({
+      provider,
+      memory,
+      grants,
+      executeTool: goalExec,
+      approve,
+      guardian: makeGuardian(),
+      sessionLog,
+      maxTotalToolCalls: 50,
+      budgetCheck: (usage) => {
+        if (settings.get().budgetEnabled !== true) return false
+        const cap = budget.capFor('main')
+        if (cap <= 0) return false
+        return budget.spentFor('main') + usage.dollars >= cap
+      },
+    })
+    return { runner, takeClaimedDone: () => { const d = done; done = false; return d } }
+  },
+  onGoalCommand: async (input) => {
+    if (input.kind === 'status') {
+      const g = orchestrator.status() ?? await goalStore.load()
+      if (!g) return { ok: true as const, message: 'Активной цели нет.' }
+      return { ok: true as const, message: `🎯 ${g.objective}\nРежим: ${g.mode.kind} · статус: ${g.status} · итераций: ${g.iterationsSpent}/${g.backstop.maxIterations} · $${g.usageSpent.dollars.toFixed(3)}/${g.backstop.dollarCeiling}` }
+    }
+    if (input.kind === 'stop') {
+      goalAbort?.abort()
+      await goalStore.clear()
+      return { ok: true as const, message: '⏹ Цель остановлена.' }
+    }
+    // start
+    const mode: GoalMode | null = parseGoalMode(input.mode)
+    if (!mode) return { ok: false as const, error: `Не понял режим «${input.mode}». Примеры: until, until:file:/p, every:10m, budget:0.50` }
+    goalAbort?.abort()
+    goalAbort = new AbortController()
+    const grantedScope = (process.env['AISY_GOAL_SCOPE']?.split(',').map((s) => s.trim()).filter(Boolean)) ?? ['read_file', 'list_dir', 'search_memory']
+    const spec = makeGoalSpec({ id: randomUUID(), objective: input.objective, mode, backstop: goalBackstop, grantedScope, nowIso: nowIso() })
+    await goalStore.save(spec)
+    if (mode.kind !== 'every') void orchestrator.start(spec, goalAbort.signal)
+    return { ok: true as const, message: `🎯 Цель принята (${mode.kind}). ${mode.kind === 'every' ? 'Буду работать по расписанию.' : 'Работаю до завершения/бэкстопа. /goal status — прогресс, /goal stop — стоп.'}` }
+  },
 })
 sendProactiveRef = sendProactive
 
@@ -574,6 +647,17 @@ const triggerEngine = makeTriggerEngine({
   globalBackgroundBudget: triggerBudget,
 })
 
+// --- Tier-7 goal orchestrator (assigned here; triggerProbe + sendProactive now in scope) ---
+orchestrator = makeGoalOrchestrator({
+  store: goalStore,
+  runGoalTurn,
+  probeRunner: triggerProbe,
+  recordGrant: (tool) => grants.record(tool, 'session'),
+  sendProgress: sendProactive,
+  clock: { now: () => nowIso() },
+  emit: (event, payload) => { journal.append('goal', event, payload) },
+})
+
 // --- Scheduler: drives nightly + trigger tick (triggers wired in Phase D) ---
 const lastRunPath = join(base, 'nightly-last.json')
 const scheduler = makeScheduler({
@@ -593,8 +677,24 @@ const scheduler = makeScheduler({
   },
   runNightly,
   tickTriggers: async () => { await triggerEngine.tick() },
+  tickGoal: (() => {
+    let lastGoalTick = 0
+    return async () => {
+      const g = await goalStore.load()
+      if (g?.mode.kind !== 'every' || g.status !== 'active') return
+      const intervalMs = (g.mode as { kind: 'every'; intervalMs?: number }).intervalMs ?? 600_000
+      if ((Date.now() - lastGoalTick) < intervalMs) return
+      if (!goalAbort) return
+      lastGoalTick = Date.now()
+      await orchestrator.tick(goalAbort.signal)
+    }
+  })(),
 })
 scheduler.start()
+
+// Resume any active goal persisted from a previous run.
+goalAbort = new AbortController()
+await orchestrator.resume(goalAbort.signal)
 
 process.stdout.write(`aisy run: starting Telegram agent (chat ${allowedChatId}, model ${modelLabel})…\n`)
 void bot.start()

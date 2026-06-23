@@ -372,6 +372,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     buffered = []
     if (flushTimer) clearTimeout(flushTimer)
     currentAbort?.abort()
+    void deps.onGoalCommand?.({ kind: 'stop' })
     await ctx.reply('⏹ Остановлено.')
   })
 

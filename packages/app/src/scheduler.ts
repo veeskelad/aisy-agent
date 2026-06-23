@@ -17,6 +17,8 @@ export interface SchedulerDeps {
   runNightly: () => Promise<void>
   /** One trigger scan. */
   tickTriggers: () => Promise<void>
+  /** One goal tick (every-mode scheduler dispatch); optional. */
+  tickGoal?: () => Promise<void>
   /** Injected timer (setInterval) for tests; default real setInterval. */
   setInterval?: (fn: () => void, ms: number) => unknown
   /** Tick period; default 60_000. */
@@ -32,6 +34,9 @@ export interface Scheduler {
 export function makeScheduler(deps: SchedulerDeps): Scheduler {
   const pump = async (): Promise<void> => {
     try { await deps.tickTriggers() } catch { /* swallow — loop must survive */ }
+    if (deps.tickGoal) {
+      try { await deps.tickGoal() } catch { /* swallow */ }
+    }
     try {
       const n = deps.now()
       const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
