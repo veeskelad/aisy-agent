@@ -12,6 +12,7 @@ function fakeMemory(over: Partial<Memory> = {}): Memory {
     forget: async () => {},
     reindex: async () => {},
     rebuildFromFiles: async () => {},
+    listLive: async () => [],
     serializeMemoryIndex: async () => ({ content: '', sha256: '' }),
     integrityCheck: async () => ({ ok: true }) as never,
     ...over,
