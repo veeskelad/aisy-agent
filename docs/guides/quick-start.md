@@ -8,10 +8,9 @@ Aisy is a **single-user** personal agent harness you self-host. Zero-to-running:
 ## 1. Install
 
 ```bash
-# one-liner (checks Node 22 + Docker, installs, builds native deps from source)
-bash scripts/install.sh
-# — or — containerized:
-docker compose build
+npm install -g @aisy/app          # provides the `aisy` command  (or: npx @aisy/app)
+# — or, from source (dev loop):
+bash scripts/install.sh           # checks Node 22 (+ pnpm ≥9), installs, builds native deps
 ```
 
 ## 2. Configure

@@ -39,10 +39,17 @@ then `aisy init` → `aisy run`.
   package. pnpm rewrites `workspace:*` deps to the real version on publish.
 - A tag-driven `release.yml` runs the gates, then `pnpm -r publish` (needs the
   `@aisy` npm org + an `NPM_TOKEN` secret) and cuts a GitHub Release.
-- **Docker/Compose and `scripts/install.sh` are retained** as the self-host and
-  from-source paths (the `Dockerfile` entrypoint bug `@aisy/core`→`@aisy/app` is
-  fixed), not auto-published. ADR-0035's "build-from-source over pinned binaries"
-  principle still governs native deps (`better-sqlite3`).
+- **The Docker/Compose *deployment* path is removed** (`Dockerfile` +
+  `docker-compose.yml` deleted). Its original rationale — bundling the Node core
+  with the Python Whisper sidecar — died with the voice decision, the image was
+  untested (it had rotted to a stale `@aisy/core` entrypoint), and `npm i -g` +
+  systemd covers "run as a service on a VPS" more simply (documented in the
+  README). `scripts/install.sh` stays as the **from-source** path for a dev loop.
+- **Docker is retained only as the opt-in bash-sandbox runtime** (`AISY_SANDBOX_IMAGE`
+  → `makeDockerBash`) — a tool-execution concern, orthogonal to how the app is
+  distributed. ADR-0035's "build-from-source over pinned binaries" principle still
+  governs native deps (`better-sqlite3`). Re-introducing a deployment image is an
+  ADR-0035/0056 revisit trigger if a Python sidecar or container-deploy demand returns.
 
 ## Consequences
 

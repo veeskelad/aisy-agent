@@ -6,29 +6,32 @@ Single-user, self-hosted. No multi-tenant/SaaS mode (VISION non-goals).
 
 | | Use | Notes |
 |---|---|---|
-| **Native (VPS/laptop)** | dev, simplest | `scripts/install.sh`; Node 22 + Docker ≥24 on the host |
-| **Docker Compose** | durable VPS | `docker compose up -d`; memory in `./data`, secrets in `.env` |
+| **npm** (`npm i -g @aisy/app`) | simplest | Node 22; `aisy init` → `aisy run` |
+| **systemd service** | durable VPS | `aisy.service` (see [README](../../README.md) Quickstart); `Restart=on-failure`, `journalctl -u aisy` |
+| **From source** | dev loop | `scripts/install.sh`; Node 22 + pnpm ≥9 |
 
 ## Prerequisites
 
-- **Node 22 LTS**, **pnpm ≥9** (via corepack), **Docker ≥24**.
-- Optional: **gVisor (runsc)** runtime for stronger sandbox isolation (ADR-0012);
-  Aisy falls back to standard Docker and `doctor` reports the degraded level.
-- Optional: **ffmpeg** + a Whisper model for voice (spec 02 sidecar).
+- **Node 22 LTS** (npm install); **pnpm ≥9** (via corepack) for the from-source path.
+- Optional: **Docker ≥24** — only for the opt-in bash sandbox (`AISY_SANDBOX_IMAGE`);
+  **gVisor (runsc)** for stronger isolation (ADR-0012), Aisy falls back to standard
+  Docker and `doctor` reports the degraded level.
+- Optional: voice is served by a multimodal provider, or a self-installed transcriber.
 
 ## The sandbox & the Docker socket
 
-The harness runs each tool task in a fresh, network-denied, cap-dropped
-container (spec 05, ADR-0012). To orchestrate them it talks to the host Docker
-engine. The compose file mounts `/var/run/docker.sock` — this is
-**host-root-equivalent**:
+When the bash sandbox is enabled, the harness runs each tool task in a fresh,
+network-denied, cap-dropped container (spec 05, ADR-0012). To orchestrate them it
+talks to the host Docker engine — grant the agent's OS user access to
+`/var/run/docker.sock`. That socket is **host-root-equivalent**:
 
 - Only on a host you fully trust. Never expose the socket (or the harness) to
   untrusted ingress.
-- The harness's own config/compose are **read-only outside the agent namespace**
-  (a Phase-5 review fix; mounting the agent's own compose writable was the
-  AutoGPT CVE-2023-37273 class).
-- Prefer gVisor where available.
+- The harness's own config is **read-only outside the agent namespace** (a Phase-5
+  review fix; letting the agent rewrite its own runtime config was the AutoGPT
+  CVE-2023-37273 class).
+- Prefer gVisor where available. If you don't enable the sandbox, the `bash` tool
+  simply reports unavailable and Docker isn't required at all.
 
 ## Secrets & backup
 

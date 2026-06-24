@@ -7,7 +7,8 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "✗ missing prerequisite: $1
 
 echo "→ checking prerequisites"
 need node "Node 22 LTS — https://nodejs.org"
-need docker "Docker ≥24 — required for the sandbox"
+# Docker is optional: only the opt-in bash sandbox (AISY_SANDBOX_IMAGE) uses it.
+command -v docker >/dev/null 2>&1 || echo "ℹ Docker not found — fine; it's only needed if you enable the bash sandbox (AISY_SANDBOX_IMAGE)."
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$NODE_MAJOR" -ge 22 ] || { echo "✗ Node ${NODE_MAJOR} found; Aisy needs ≥22"; exit 1; }
 

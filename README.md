@@ -88,19 +88,35 @@ cp .env.example .env         # or run `aisy init` to fill it interactively
 pnpm --filter @aisy/app exec aisy run
 ```
 
-**Docker / Compose** (self-host; bundles the runtime, secrets stay in a
-git-ignored `.env`, never in the image):
+**Run as a service (systemd):**
 
-```bash
-cp .env.example .env         # provider key(s), AISY_TELEGRAM_BOT_TOKEN, AISY_TELEGRAM_CHAT_ID
-docker compose up --build    # builds the image and runs `aisy run`
+```ini
+# /etc/systemd/system/aisy.service
+[Unit]
+Description=Aisy agent
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/aisy run
+WorkingDirectory=/home/aisy
+EnvironmentFile=/home/aisy/.env
+Restart=on-failure
+User=aisy
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-> Pair before the first Docker `up` (run `aisy init` once, or
-> `docker compose run --rm aisy init`) so `AISY_TELEGRAM_CHAT_ID` is set. The bash
-> sandbox is opt-in via `AISY_SANDBOX_IMAGE` (mounts the host Docker socket —
-> trusted hosts only). Voice, Skills, and MCP are not wired in 0.1.0; voice is
-> served by multimodal providers or a self-installed transcriber.
+```bash
+sudo systemctl enable --now aisy     # boot + restart-on-failure
+journalctl -u aisy -f                # logs
+```
+
+> Long-polling means no inbound ports — Aisy runs behind NAT / on any VPS. The
+> bash sandbox is **opt-in** via `AISY_SANDBOX_IMAGE` (the only thing that needs
+> Docker — it mounts the host Docker socket, trusted hosts only). Voice, Skills,
+> and MCP are not wired in 0.1.0; voice is served by multimodal providers or a
+> self-installed transcriber.
 
 ## Architecture at a glance
 

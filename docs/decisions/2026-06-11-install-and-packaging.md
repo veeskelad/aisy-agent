@@ -8,11 +8,13 @@
 > the "reject `npm i -g` only" stance below was predicated on bundling the Python
 > Whisper sidecar — but 0.1.0 ships **pure Node** (voice is deferred and, per
 > ADR-0056, handled by multimodal providers rather than a bundled sidecar), so npm
-> is viable and becomes the **primary** distribution. The bootstrap script
-> (`scripts/install.sh`) and Docker/Compose (`Dockerfile` entrypoint fixed
-> `@aisy/core`→`@aisy/app`) remain as the from-source and self-host paths. The
-> "build-from-source over pinned binaries" principle still holds for native deps
-> (`better-sqlite3`). Re-evaluate bundling if/when a Python sidecar returns.
+> is viable and becomes the **primary** distribution. The **Docker/Compose
+> deployment path proposed here is removed** (deleted; its sidecar-bundling
+> rationale is gone and `npm i -g` + systemd covers self-host — see ADR-0056);
+> `scripts/install.sh` remains as the from-source path, and Docker stays only as
+> the opt-in bash-sandbox runtime. The "build-from-source over pinned binaries"
+> principle still holds for native deps (`better-sqlite3`). Re-introduce a
+> deployment image only if a Python sidecar or container-deploy demand returns.
 
 ## Context
 

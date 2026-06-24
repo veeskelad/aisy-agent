@@ -45,7 +45,7 @@ Spec-driven design is **complete**: 15 component specs + 40 ADRs. Implementation
 - ✅ **First-class sub-agent delegation (ADR-0039)** — goal-DAG scheduler, AgentCard capability authority, scope composition + pairwise disjointness, hash-chained per-delegation shards with compact observations, checkpoint/resume + cascade-skip (AC-11-16..20). Adversarially reviewed.
 - ✅ **Eval & red-team harness (ADR-0037)** — `pass^k` scoring + golden-trajectory replay/diff (`src/eval/`).
 - ✅ **Medium/low review triage** — 16 of the 59 lower findings resolved (15 fixed TDD + 1 by design); the remaining 43 are bucketed with rationale in the review doc.
-- ✅ **Operational shell (partial)** — `aisy` CLI router (tested), Dockerfile + Compose + install script (ADR-0035), operator guides (`docs/guides/`).
+- ✅ **Operational shell (partial)** — `aisy` CLI router (tested), npm-package distribution + from-source install script (ADR-0035/0056), operator guides (`docs/guides/`).
 - 🚧 **Remaining for a runnable v0.1** — wire the `aisy` bin to real node adapters (fs/prereq/provider-ping/Telegram/SQLite/Docker probes).
 
 ---
