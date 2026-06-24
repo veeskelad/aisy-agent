@@ -1,8 +1,18 @@
 # ADR-0035: Install & Packaging
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-11
 **Tags:** packaging, devex, install
+
+> **Partially superseded by [ADR-0056](./2026-06-24-npm-package-distribution.md) (2026-06-24):**
+> the "reject `npm i -g` only" stance below was predicated on bundling the Python
+> Whisper sidecar — but 0.1.0 ships **pure Node** (voice is deferred and, per
+> ADR-0056, handled by multimodal providers rather than a bundled sidecar), so npm
+> is viable and becomes the **primary** distribution. The bootstrap script
+> (`scripts/install.sh`) and Docker/Compose (`Dockerfile` entrypoint fixed
+> `@aisy/core`→`@aisy/app`) remain as the from-source and self-host paths. The
+> "build-from-source over pinned binaries" principle still holds for native deps
+> (`better-sqlite3`). Re-evaluate bundling if/when a Python sidecar returns.
 
 ## Context
 

@@ -12,9 +12,11 @@
 
 ---
 
-> **Status: pre-alpha.** The project is in its documentation-and-design phase.
-> The architecture below is the target; the implementation is being specified
-> before it is written. See the [Roadmap](ROADMAP.md).
+> **Status: 0.1.0 (pre-alpha).** The text-first Telegram agent runs end-to-end:
+> onboarding, terminal-side pairing, long-polling on a server, durable memory,
+> deterministic safety + approvals, sub-agent delegation, nightly consolidation,
+> proactive triggers, persistent `/goal` loops, and prefix caching. **Not yet:**
+> voice (Whisper), live Skills, and MCP — these are on the [Roadmap](ROADMAP.md).
 
 ## What is this?
 
@@ -54,6 +56,51 @@ its own homework. Aisy fixes the hard parts by construction. See [VISION.md](VIS
   descriptor hashing against tool poisoning.
 - 📟 **Reachable where you are** — Telegram and IDE, voice or text, with
   proactive cards for approvals and reports.
+
+## Quickstart
+
+Single-operator by design: the bot answers exactly one paired Telegram chat.
+You need a [Telegram bot token](https://core.telegram.org/bots#botfather) and at
+least one LLM provider key (Anthropic, OpenAI, DeepSeek, OpenRouter, Qwen, GLM,
+Gemini, or any OpenAI-compatible endpoint). Requires **Node 22+**.
+
+**Install from npm (recommended):**
+
+```bash
+npm install -g @aisy/app     # provides the `aisy` command  (or: npx @aisy/app <cmd>)
+
+aisy init                    # interactive: provider key(s) + Telegram token + pairing
+aisy doctor                  # full-stack health check (read-only)
+aisy run                     # boot the bot (long-polling — works behind NAT / on any VPS)
+```
+
+Pairing happens **in the terminal** during `aisy init`: a code is shown there,
+you send it to the bot, and only the chat that echoes the matching code is
+allowed. A pairing request that arrives *as a Telegram message* is never trusted
+(prompt-injection guard) — trust is established terminal-side only.
+
+**From source (dev loop):**
+
+```bash
+git clone <this-repo> && cd aisy-harness
+./scripts/install.sh         # checks prerequisites (Node 22, pnpm ≥9), installs, builds
+cp .env.example .env         # or run `aisy init` to fill it interactively
+pnpm --filter @aisy/app exec aisy run
+```
+
+**Docker / Compose** (self-host; bundles the runtime, secrets stay in a
+git-ignored `.env`, never in the image):
+
+```bash
+cp .env.example .env         # provider key(s), AISY_TELEGRAM_BOT_TOKEN, AISY_TELEGRAM_CHAT_ID
+docker compose up --build    # builds the image and runs `aisy run`
+```
+
+> Pair before the first Docker `up` (run `aisy init` once, or
+> `docker compose run --rm aisy init`) so `AISY_TELEGRAM_CHAT_ID` is set. The bash
+> sandbox is opt-in via `AISY_SANDBOX_IMAGE` (mounts the host Docker socket —
+> trusted hosts only). Voice, Skills, and MCP are not wired in 0.1.0; voice is
+> served by multimodal providers or a self-installed transcriber.
 
 ## Architecture at a glance
 

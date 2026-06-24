@@ -48,11 +48,12 @@ in this index so cross-references stay stable.
 | ADR-0032 | Proposed | 2026-06-11 | [Code Search: semble as Optional stdio MCP Sidecar](./2026-06-11-code-search-semble.md) | search, mcp, performance |
 | ADR-0033 | Proposed | 2026-06-11 | [LLMwiki Pattern Borrow: Three-Layer Structure, Typed Edges, Nightly Lint Pass](./2026-06-11-llmwiki-pattern-borrow.md) | memory, architecture, contributors |
 | ADR-0034 | Proposed | 2026-06-11 | [Onboarding & Operations Layer](./2026-06-11-onboarding-operations-layer.md) | onboarding, devex |
-| ADR-0035 | Proposed | 2026-06-11 | [Install & Packaging](./2026-06-11-install-and-packaging.md) | packaging, devex |
+| ADR-0035 | Accepted (partly superseded by 0056) | 2026-06-11 | [Install & Packaging](./2026-06-11-install-and-packaging.md) | packaging, devex |
 | ADR-0036 | Proposed | 2026-06-11 | [Cost-Transparency Surfacing](./2026-06-11-cost-transparency-surfacing.md) | cost, observability |
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Accepted  | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Accepted | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0056 | Accepted  | 2026-06-24 | [npm-Package Distribution (primary)](./2026-06-24-npm-package-distribution.md) | packaging, devex, distribution |
 | ADR-0055 | Accepted  | 2026-06-24 | [Content-Addressed Exact-Response Cache (#20)](./2026-06-24-exact-response-cache.md) | performance |
 | ADR-0054 | Accepted  | 2026-06-23 | [Goal-Driven Loop Layer (/goal)](./2026-06-23-goal-driven-loop-layer.md) | agent-loop, goal, proactivity |
 | ADR-0053 | Accepted  | 2026-06-22 | [Proactivity: In-Process Scheduler & Nightly Generator/Judge](./2026-06-22-proactivity-scheduler-and-nightly-generator.md) | proactivity, nightly, triggers, scheduler |

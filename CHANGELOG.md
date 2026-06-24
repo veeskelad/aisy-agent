@@ -15,6 +15,24 @@ release establishes the changeset baseline.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.1.0] — 2026-06-24
+
+First pre-alpha release — the **text-first Telegram agent runs end-to-end**:
+`aisy init` onboarding + terminal-side pairing (single-operator allowlist),
+`aisy run` long-polling (works behind NAT), durable file memory (SQLite
+FTS5/BM25 + durable forgetting), deterministic safety with tiered approvals,
+scoped grants (`/grants`), outbound lockout, opt-in sandboxed `bash`, `/stop`
++ mid-turn budget cap, sub-agent delegation (`spawn_subagent`), nightly memory
+consolidation (generator + independent judge → staging → human tap), proactive
+triggers (`/remind` `/schedule` `/watch`), persistent `/goal` loops, prefix
+caching with cache-aware cost accounting, a 9-provider catalog with per-agent
+budgets, a CI gate, and a tag-driven npm-publish release pipeline + GitHub Release.
+
+**Not yet (Roadmap):** voice input (Whisper sidecar), live Skills, MCP
+integration, and session crash-resume mid-turn.
+
 ### Added
 
 - Initial documentation and Architecture Decision Record (ADR) scaffolding for
