@@ -1,0 +1,42 @@
+name: CI
+
+# Runs the three gates that must all be green before merge. `typecheck` is first
+# and deliberate: it is a SEPARATE gate from build+test (only `tsc --noEmit`
+# checks spec files), and a stale spec fake once left it red for three tiers
+# undetected because build+test alone don't type-check specs. See lessons-learned.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A newer push to the same ref cancels an in-flight run for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the pnpm version pinned in package.json's `packageManager` field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --frozen-lockfile: fail (don't silently update) if pnpm-lock.yaml is stale.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (tsc --noEmit, includes specs)
+        run: pnpm -r typecheck
+
+      - name: Build (tsconfig.build.json, excludes specs)
+        run: pnpm -r build
+
+      - name: Test (vitest run)
+        run: pnpm -r test
