@@ -246,6 +246,9 @@ const provider: ProviderAdapter = providersCfg.tiers
       routine: adapterFor(providersCfg.tiers.routine),
     })
   : adapterFor(defaultSel)
+// The 'mixed (per-tier)' sentinel is matched by event-bridge.ts renderEvent
+// (cost.summary) to show the tiered note instead of a fake model name (#15).
+// Keep the two literals in sync; the event-bridge spec asserts on this exact value.
 const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
 
 const memSearch = makeMemorySearch(memoryStore)
