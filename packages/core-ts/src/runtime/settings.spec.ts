@@ -28,6 +28,29 @@ describe('makeSettingsStore', () => {
 
   it('loads a partial persisted file over the defaults', () => {
     const s = makeSettingsStore({ persistence: { load: () => ({ showCostPerTurn: true }), save: () => {} } })
-    expect(s.get()).toEqual({ showCostPerTurn: true, budgetEnabled: false })
+    expect(s.get()).toEqual({ showCostPerTurn: true, budgetEnabled: false, debug: false })
+  })
+
+  it('debug defaults to false', () => {
+    const s = makeSettingsStore({})
+    expect(s.get().debug).toBe(false)
+    expect(DEFAULT_SETTINGS.debug).toBe(false)
+  })
+
+  it('toggle("debug") flips the debug flag', () => {
+    const s = makeSettingsStore({})
+    expect(s.toggle('debug')).toBe(true)
+    expect(s.get().debug).toBe(true)
+    expect(s.toggle('debug')).toBe(false)
+    expect(s.get().debug).toBe(false)
+  })
+
+  it('debug persists across reload', () => {
+    let stored: Partial<Settings> = {}
+    const s = makeSettingsStore({ persistence: { load: () => stored, save: (v) => void (stored = v) } })
+    s.set('debug', true)
+    expect(stored.debug).toBe(true)
+    const s2 = makeSettingsStore({ persistence: { load: () => stored, save: () => {} } })
+    expect(s2.get().debug).toBe(true)
   })
 })

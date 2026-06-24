@@ -10,11 +10,14 @@ export interface Settings {
   showCostPerTurn: boolean
   /** Enforce per-agent budgets (Phase 3); the toggle lives here from Phase 2. */
   budgetEnabled: boolean
+  /** Append a compact per-turn debug footer after replies (default off). */
+  debug: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   showCostPerTurn: false,
   budgetEnabled: false,
+  debug: false,
 }
 
 /** Persistence seam — load a (possibly partial) settings object, save the full. */

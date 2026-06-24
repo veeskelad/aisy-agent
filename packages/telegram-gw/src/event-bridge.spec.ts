@@ -99,11 +99,23 @@ describe('renderEvent', () => {
   })
 
   it('settings.panel shows toggles with set: callbacks', () => {
-    const msg = renderEvent({ kind: 'settings.panel', showCostPerTurn: true, budgetEnabled: false })!
+    const msg = renderEvent({ kind: 'settings.panel', showCostPerTurn: true, budgetEnabled: false, debug: false })!
     expect(msg.html).toContain('⚙️ <b>Настройки</b>')
     expect(msg.html).toContain('Стоимость за ход: ✅ вкл')
     expect(msg.html).toContain('Бюджет агентов: ❌ выкл')
     const datas = msg.buttons?.flat().map((b) => b.data)
-    expect(datas).toEqual(['set:showCostPerTurn', 'set:budgetEnabled'])
+    expect(datas).toEqual(['set:showCostPerTurn', 'set:budgetEnabled', 'set:debug'])
+  })
+
+  it('settings.panel shows the debug toggle with set:debug callback and correct on/off state', () => {
+    const msgOff = renderEvent({ kind: 'settings.panel', showCostPerTurn: false, budgetEnabled: false, debug: false })!
+    expect(msgOff.html).toContain('🔧 Отладка: ❌ выкл')
+    const datasOff = msgOff.buttons?.flat().map((b) => b.data)
+    expect(datasOff).toContain('set:debug')
+
+    const msgOn = renderEvent({ kind: 'settings.panel', showCostPerTurn: false, budgetEnabled: false, debug: true })!
+    expect(msgOn.html).toContain('🔧 Отладка: ✅ вкл')
+    const datasOn = msgOn.buttons?.flat().map((b) => b.data)
+    expect(datasOn).toContain('set:debug')
   })
 })

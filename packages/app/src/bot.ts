@@ -227,8 +227,8 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
   }
 
   const settingsPanel = (): { html: string; buttons?: InlineButton[][] } | null => {
-    const st = deps.settings?.get() ?? { showCostPerTurn: false, budgetEnabled: false }
-    return renderEvent({ kind: 'settings.panel', showCostPerTurn: st.showCostPerTurn, budgetEnabled: st.budgetEnabled })
+    const st = deps.settings?.get() ?? { showCostPerTurn: false, budgetEnabled: false, debug: false }
+    return renderEvent({ kind: 'settings.panel', showCostPerTurn: st.showCostPerTurn, budgetEnabled: st.budgetEnabled, debug: st.debug })
   }
 
   const sendSpendReport = async (): Promise<void> => {
@@ -303,6 +303,16 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
         // per-turn cost card when the operator opted in (default off — ADR-0050).
         deps.spend?.record({ model: deps.model, usage: result.usage })
         if (deps.settings?.get().showCostPerTurn === true) await sendCostSummary(result.usage)
+      }
+      // Debug footer: compact per-turn state summary when debug is on (ADR-0050 tail, Task 11).
+      if (deps.settings?.get().debug === true) {
+        const { state, haltReason, narrowed, usage } = result
+        const footer =
+          `🔧 ${state}` +
+          (haltReason !== undefined ? `/${haltReason}` : '') +
+          ` · narrowed: ${narrowed === true ? 'да' : 'нет'}` +
+          (usage !== undefined ? ` · $${usage.dollars.toFixed(4)}` : '')
+        await bot.api.sendMessage(deps.allowedChatId, footer)
       }
     } catch (err) {
       // A turn that throws — an executor/provider error not mapped to a loop
@@ -495,7 +505,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     // Settings toggle (event-bridge callback) — flip + re-render the panel.
     if (data.startsWith('set:')) {
       const key = data.slice(4)
-      if (deps.settings && (key === 'showCostPerTurn' || key === 'budgetEnabled')) {
+      if (deps.settings && (key === 'showCostPerTurn' || key === 'budgetEnabled' || key === 'debug')) {
         deps.settings.toggle(key)
         const msg = settingsPanel()
         if (msg) {

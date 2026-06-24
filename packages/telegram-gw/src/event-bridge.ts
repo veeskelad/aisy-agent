@@ -34,7 +34,7 @@ export type UiEvent =
       totalUsd: number
       perAgent?: { agentId: string; dollars: number }[]
     }
-  | { kind: 'settings.panel'; showCostPerTurn: boolean; budgetEnabled: boolean }
+  | { kind: 'settings.panel'; showCostPerTurn: boolean; budgetEnabled: boolean; debug: boolean }
 
 function btn(text: string, data: string): InlineButton {
   return { text, data }
@@ -124,10 +124,12 @@ export function renderEvent(ev: UiEvent): BotMessage | null {
           '',
           `Стоимость за ход: ${onOff(ev.showCostPerTurn)}`,
           `Бюджет агентов: ${onOff(ev.budgetEnabled)}`,
+          `🔧 Отладка: ${onOff(ev.debug)}`,
         ].join('\n'),
         buttons: [
           [btn(`Стоимость за ход: ${ev.showCostPerTurn ? '✅' : '❌'}`, 'set:showCostPerTurn')],
           [btn(`Бюджет агентов: ${ev.budgetEnabled ? '✅' : '❌'}`, 'set:budgetEnabled')],
+          [btn(`🔧 Отладка: ${ev.debug ? '✅' : '❌'}`, 'set:debug')],
         ],
       }
     }
