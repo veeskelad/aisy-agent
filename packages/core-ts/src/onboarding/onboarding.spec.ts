@@ -874,12 +874,13 @@ const PRESENT_ENV: Record<string, string> = {
 }
 
 describe('interactive init — provider catalog (ADR-0050)', () => {
-  // Single-provider flow: known provider with defaultModels — no model prompt, no base-URL prompt.
-  it('known provider: writes providers.json { default } and seeds the key; no model or base-URL prompt', async () => {
+  // Single-provider flow: known provider — model prompt fires pre-filled with the
+  // catalog default (Enter/empty accepts it); no base-URL prompt for known providers.
+  it('known provider: writes providers.json { default } and seeds the key; model prompt accepts the default, no base-URL prompt', async () => {
     const vault = makeFakeVault()
     const out = captureProvidersOut()
-    // asks: only the provider number is consumed (no model prompt for known providers with defaults)
-    const prompt = catalogPrompt({ asks: ['1'], secrets: ['dk-secret'] })
+    // asks: provider number, then model (empty = accept the deepseek-chat default)
+    const prompt = catalogPrompt({ asks: ['1', ''], secrets: ['dk-secret'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault,
@@ -896,8 +897,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     // The legacy per-tier ping is NOT used; provider validation is keyed by id.
     expect(res.outcomes.some((o) => o.step === 'validate.provider.deepseek' && o.result === 'done')).toBe(true)
     // No tiered prompt was issued (confirm() never called = no tiers).
-    // Exactly 1 ask: the provider number.
-    expect(prompt.askCount).toBe(1)
+    // 2 asks: provider number + model (with default); NO base-URL ask for a known provider.
+    expect(prompt.askCount).toBe(2)
   })
 
   // No tiered flow in interactive mode — always writes { default: ... }, never { tiers: ... }.
@@ -911,7 +912,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
       keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
       defaultModels: ['claude-sonnet-4-6'],
     }
-    const prompt = catalogPrompt({ asks: ['2'], secrets: ['an-key'] })
+    // asks: provider number '2', then model (empty = accept claude-sonnet-4-6 default)
+    const prompt = catalogPrompt({ asks: ['2', ''], secrets: ['an-key'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
@@ -931,8 +933,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
   // Invalid provider input must re-ask instead of silently picking catalog[0].
   it('invalid provider number re-asks in a loop until a valid selection is made', async () => {
     const out = captureProvidersOut()
-    // First two inputs are invalid; third ('1') is valid.
-    const prompt = catalogPrompt({ asks: ['deepseek', '99', '1'], secrets: ['dk-key'] })
+    // First two inputs are invalid; third ('1') is valid. Fourth ('') accepts the model default.
+    const prompt = catalogPrompt({ asks: ['deepseek', '99', '1', ''], secrets: ['dk-key'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
@@ -946,8 +948,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     expect(res.completed).toBe(true)
     // Despite invalid inputs, the correct provider was ultimately selected.
     expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
-    // 3 asks consumed: 'deepseek', '99', '1'.
-    expect(prompt.askCount).toBe(3)
+    // 4 asks consumed: 'deepseek', '99', '1' (re-ask loop), then the model prompt.
+    expect(prompt.askCount).toBe(4)
   })
 
   // Custom (openai-compat) provider DOES prompt for base URL and model.
@@ -990,8 +992,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
   // Known provider with a defaultBaseUrl must NOT be prompted for base URL.
   it('known provider with defaultBaseUrl is never prompted for base URL', async () => {
     const out = captureProvidersOut()
-    // DeepSeek has defaultBaseUrl set — only provider number ask should fire.
-    const prompt = catalogPrompt({ asks: ['1'], secrets: ['dk-key'] })
+    // DeepSeek has defaultBaseUrl set — provider number + model ask fire, but NOT base URL.
+    const prompt = catalogPrompt({ asks: ['1', ''], secrets: ['dk-key'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
@@ -1002,8 +1004,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
 
     await makeOnboardingOps(deps).init({})
 
-    // Only 1 ask (provider number); no base-URL ask fired.
-    expect(prompt.askCount).toBe(1)
+    // 2 asks (provider number + model); no base-URL ask fired for a known provider.
+    expect(prompt.askCount).toBe(2)
   })
 
   it('skips key validation for CLI providers (no key prompted)', async () => {

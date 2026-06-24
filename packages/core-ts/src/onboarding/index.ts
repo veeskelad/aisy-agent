@@ -165,11 +165,12 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
             }
             // If invalid/out-of-range, loop again (no silent fallback).
           }
-          // Model: use catalog default if available; only prompt when there is none.
+          // Model: always ask, right after the provider, pre-filled with the
+          // catalog default (Enter accepts it; type to override).
           const defModel = entry.defaultModels?.[0]
-          const model = defModel !== undefined
-            ? defModel
-            : (await p.ask(`Model (${entry.label})`)).trim()
+          const model =
+            (await p.ask(`Model (${entry.label})`, defModel !== undefined ? { default: defModel } : {})).trim() ||
+            (defModel ?? '')
           if (entry.needsKey && entry.keyEnv) {
             const key = (await p.secret(`API key (${entry.label}):`)).trim()
             if (key.length > 0) collected[entry.keyEnv] = key
