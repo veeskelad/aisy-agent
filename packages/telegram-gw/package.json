@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Aisy Telegram gateway — the pure UX layer (cards, menu, event bridge) for the grammY transport.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/veeskelad/aisy-agent.git",
+    "directory": "packages/telegram-gw"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",

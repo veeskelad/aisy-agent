@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Aisy core — agent loop, memory, safety, provider adapters, and the runtime composition surface.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/veeskelad/aisy-agent.git",
+    "directory": "packages/core-ts"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
