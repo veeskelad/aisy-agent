@@ -312,7 +312,10 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
           (haltReason !== undefined ? `/${haltReason}` : '') +
           ` · narrowed: ${narrowed === true ? 'да' : 'нет'}` +
           (usage !== undefined ? ` · $${usage.dollars.toFixed(4)}` : '')
-        await bot.api.sendMessage(deps.allowedChatId, footer)
+        // Debug-only and best-effort: a footer-send failure must NOT reach the
+        // turn's catch (which would falsely report the turn as failed) — the real
+        // reply already went out. Fire-and-forget with a swallowed error.
+        void bot.api.sendMessage(deps.allowedChatId, footer).catch(() => {})
       }
     } catch (err) {
       // A turn that throws — an executor/provider error not mapped to a loop
