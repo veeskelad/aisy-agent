@@ -23,9 +23,20 @@ import { PROVIDER_CATALOG, findProvider } from './providers.js'
 
 /** Readline-backed interactive prompt; secret() mutes echo for token entry. */
 function makeReadlinePrompt(): PromptPort {
+  // Ctrl-C during any prompt: restore the terminal (rl.close) and exit quietly
+  // (130). Without this, the bin's top-level `await runCli` is left unsettled and
+  // Node prints a "Detected unsettled top-level await" warning. This just exits.
+  const newRl = (): ReturnType<typeof createInterface> => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    rl.on('SIGINT', () => {
+      rl.close()
+      process.exit(130)
+    })
+    return rl
+  }
   const ask = (q: string, opts?: { default?: string }): Promise<string> =>
     new Promise((resolve) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout })
+      const rl = newRl()
       const def = opts?.default ? ` [${opts.default}]` : ''
       rl.question(`${q}${def}: `, (a) => {
         rl.close()
@@ -37,7 +48,7 @@ function makeReadlinePrompt(): PromptPort {
     ask,
     confirm: (q: string, opts?: { default?: boolean }): Promise<boolean> =>
       new Promise((resolve) => {
-        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        const rl = newRl()
         rl.question(`${q} [${opts?.default ? 'Y/n' : 'y/N'}]: `, (a) => {
           rl.close()
           const t = a.trim().toLowerCase()
@@ -46,7 +57,7 @@ function makeReadlinePrompt(): PromptPort {
       }),
     secret: (q: string): Promise<string> =>
       new Promise((resolve) => {
-        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        const rl = newRl()
         const out = rl as unknown as { _writeToOutput?: (s: string) => void }
         let muted = false
         out._writeToOutput = (s: string): void => {
