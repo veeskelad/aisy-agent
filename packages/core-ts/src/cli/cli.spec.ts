@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { runCli, parseArgs } from './index.js'
+import { runCli, parseArgs, SETUP_ELEMENTS } from './index.js'
 import type { OnboardingOps, DoctorReport, InitResult } from '../onboarding/index.js'
 
 function report(over: Partial<DoctorReport> = {}): DoctorReport {
@@ -80,5 +80,51 @@ describe('CLI router', () => {
     const code = await c.run(['frobnicate'])
     expect(code).toBe(2)
     expect(c.err.join('\n')).toMatch(/unknown command/i)
+  })
+
+  it('USAGE contains both `run` and `setup` lines', async () => {
+    const c = makeCli()
+    await c.run(['--help'])
+    const usage = c.out.join('\n')
+    expect(usage).toMatch(/aisy run/)
+    expect(usage).toMatch(/aisy setup/)
+  })
+
+  it('parseArgs([\'setup\',\'provider\']) yields {command:\'setup\', positional:[\'provider\']}', () => {
+    const p = parseArgs(['setup', 'provider'])
+    expect(p.command).toBe('setup')
+    expect(p.positional).toEqual(['provider'])
+  })
+
+  it('`setup provider` routes to init and exits 0', async () => {
+    const c = makeCli()
+    const code = await c.run(['setup', 'provider'])
+    expect(c.ops.init).toHaveBeenCalled()
+    expect(code).toBe(0)
+  })
+
+  it('`setup` with no element routes to init and exits 0 (interactive)', async () => {
+    const c = makeCli()
+    const code = await c.run(['setup'])
+    expect(c.ops.init).toHaveBeenCalled()
+    expect(code).toBe(0)
+  })
+
+  it('`setup <unknown>` exits non-zero and names valid elements', async () => {
+    const c = makeCli()
+    const code = await c.run(['setup', 'nonsense'])
+    expect(code).toBe(2)
+    const errOut = c.err.join('\n')
+    expect(errOut).toMatch(/nonsense/)
+    for (const el of SETUP_ELEMENTS) {
+      expect(errOut).toContain(el)
+    }
+  })
+
+  it('SETUP_ELEMENTS contains provider, telegram, memory, personality', () => {
+    expect(SETUP_ELEMENTS).toContain('provider')
+    expect(SETUP_ELEMENTS).toContain('telegram')
+    expect(SETUP_ELEMENTS).toContain('memory')
+    expect(SETUP_ELEMENTS).toContain('personality')
   })
 })

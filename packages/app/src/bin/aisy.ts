@@ -80,10 +80,9 @@ import {
 
 const argv = process.argv.slice(2)
 
-// Non-run commands → onboarding CLI. `setup` is an alias for interactive init.
+// Non-run commands → onboarding CLI. `setup` is a validated alias for init (see SETUP_ELEMENTS).
 if (argv[0] !== 'run') {
-  const cliArgv = argv[0] === 'setup' ? ['init', ...argv.slice(1)] : argv
-  const exitCode = await runCli(cliArgv, {
+  const exitCode = await runCli(argv, {
     ops: makeNodeOnboardingOps(),
     out: (s) => process.stdout.write(s + '\n'),
     err: (s) => process.stderr.write(s + '\n'),

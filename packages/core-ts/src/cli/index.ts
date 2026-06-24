@@ -38,10 +38,15 @@ export interface CliDeps {
   version?: string
 }
 
+export const SETUP_ELEMENTS = ['provider', 'telegram', 'memory', 'personality'] as const
+export type SetupElement = (typeof SETUP_ELEMENTS)[number]
+
 const USAGE = `aisy — personal agent harness
 
 Usage:
+  aisy run                                          Boot the Telegram agent
   aisy init [--yes] [--force] [--non-interactive]   Scaffold & validate a config (idempotent)
+  aisy setup [<element>]                            Re-run onboarding (optionally for one element)
   aisy doctor [--fix] [--json] [--post-upgrade]     Full-stack health check (read-only by default)
               [--only=a,b] [--skip=a,b]
   aisy diagnostics [--out=path]                     Write a redacted support bundle
@@ -58,7 +63,7 @@ function printReport(r: DoctorReport, out: (s: string) => void): void {
 }
 
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
-  const { command, flags } = parseArgs(argv)
+  const { command, flags, positional } = parseArgs(argv)
   const { ops, out, err } = deps
 
   if (command === '' || command === 'help' || flags['help'] === true) {
@@ -68,6 +73,25 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
   switch (command) {
     case 'init': {
+      const res = await ops.init({
+        yes: flags['yes'] === true,
+        force: flags['force'] === true,
+        nonInteractive: flags['non-interactive'] === true,
+      })
+      out(res.completed ? `init: complete — scaffolded ${res.scaffolded.join(', ')}` : 'init: incomplete')
+      for (const o of res.outcomes) if (o.result === 'failed') err(`  ${o.step}: ${o.detail}`)
+      return res.completed ? 0 : 1
+    }
+    case 'setup': {
+      const element = positional[0]
+      if (element !== undefined) {
+        if (!(SETUP_ELEMENTS as readonly string[]).includes(element)) {
+          err(`setup: unknown element "${element}". Valid elements: ${SETUP_ELEMENTS.join(', ')}`)
+          return 2
+        }
+      }
+      // Route to init; element (if any) is passed through as a positional hint.
+      // Per-element re-config flow is a documented follow-up — init currently ignores it.
       const res = await ops.init({
         yes: flags['yes'] === true,
         force: flags['force'] === true,
