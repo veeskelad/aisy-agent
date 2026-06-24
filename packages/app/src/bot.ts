@@ -582,6 +582,8 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
 
     if (data === 'grants:reset') {
       deps.grants?.revokeAll()
+      // Stop the button spinner (Telegram requires answering the query) — best-effort.
+      await ctx.answerCallbackQuery().catch(() => {})
       // Best-effort edit: a stale or already-edited message must not crash the handler.
       await ctx.editMessageText('Гранты сброшены.').catch(() => {})
       return
