@@ -62,16 +62,17 @@ Shipped across phases A–E (journal sink + scheduler seam, `Memory.listLive()`,
 v1 scope: in-process scheduler + missed-slot catch-up; LLM Generator/Judge with defensive parse + fail-safe staging; staging-gated nightly (Approve tap → `approveStagedItem` + TOCTOU + resurrection-guard); operator trigger commands (`/remind`, `/schedule`, `/watch`, `/triggers`, `/untrigger`); JSONL observability journal (`~/.aisy/journal.jsonl`); phase-1 probes (file/http/exit).
 Follow-ups: real `draftSkills`; full hash-chained AuditLog (Component 12); SQL watch probes; `propose_trigger` agent tool; nightly git/hygiene/archive effect seams; judge==generator single-provider fallback; `/watch http:https://…` double-scheme UX; live fact freshness (nightly facts/validators are boot-time-captured until restart).
 
-### Tier 5 — UX polish & small tails (quick wins)
-| # | Task | Effort |
-|---|------|--------|
-| 11 | Debug toggle in ⚙️ Настройки (plan mentioned it, not added) | S |
-| 12 | `/grants` listing + "Сбросить гранты" (ADR-0047 tail) | S |
-| 13 | Menu actions `Сессии/Навыки/Агент` (currently "в разработке") | M |
-| 14 | `aisy setup <element>` per-element re-config; `--help` lists `run/setup` | S |
-| 15 | Per-call spend attribution (tiered shows "mixed (per-tier)") | S |
+### Tier 5 — UX polish & small tails (quick wins) — ✅ DONE (#11–#15)
+| # | Task | Effort | Status |
+|---|------|--------|--------|
+| 11 | Debug toggle in ⚙️ Настройки + per-turn debug footer | S | ✅ done |
+| 12 | `/grants` listing + inline "🗑 Сбросить гранты" (ADR-0047 tail) | S | ✅ done |
+| 13 | Menu actions `Сессии/Навыки/Агент` + `SessionLog.recent` | M | ✅ done |
+| 14 | `aisy setup <element>` recognized+validated; `--help` lists `run/setup` | S | ✅ done |
+| 15 | Honest tiered per-turn spend label (was "mixed (per-tier)") | S | ✅ done |
 
-→ Plan: TBD (can batch into one small plan).
+→ **Plan:** [`docs/superpowers/plans/2026-06-24-tier5-ux-tails.md`](./superpowers/plans/2026-06-24-tier5-ux-tails.md). Final opus whole-branch review READY TO MERGE, 0 must-fix.
+Documented DEFERRALS (NOT done — honest stubs): #13 🧩 Навыки renders empty until the Skills component (06) is wired into the live bin (the runner doesn't use live skills either); #14 per-element re-config FLOW (needs the onboarding refactor — `setup <element>` validates + routes to init, element hint ignored); #15 true per-call-model spend split (needs `ModelResponse.usage.model` — a Core change deliberately out of this quick-win tier).
 
 ### Tier 6 — delivery (pipeline Phase 5–6)
 | # | Task | Effort |
