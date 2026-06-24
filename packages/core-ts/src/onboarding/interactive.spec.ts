@@ -83,7 +83,7 @@ describe('runTelegramPairing', () => {
       getUpdates: async () => ({ ok: true, updates: [] }),
     })
     expect(id).toBe('manual-77')
-    expect(prompt.infos.some((m) => m.includes('вручную'))).toBe(true)
+    expect(prompt.infos.some((m) => m.includes('manually'))).toBe(true)
   })
 
   it('returns null when manual entry is left empty', async () => {

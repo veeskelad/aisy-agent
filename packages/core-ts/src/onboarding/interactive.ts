@@ -23,7 +23,7 @@ export interface PairingDeps {
 }
 
 async function manualEntry(prompt: PromptPort): Promise<string | null> {
-  const id = (await prompt.ask('Введи свой chat_id (узнать: напиши @userinfobot)')).trim()
+  const id = (await prompt.ask('Enter your chat_id (find it via @userinfobot)')).trim()
   return id.length > 0 ? id : null
 }
 
@@ -37,7 +37,7 @@ export async function runTelegramPairing(token: string, deps: PairingDeps): Prom
   const code = deps.genCode()
   const pollInterval = deps.pollIntervalMs ?? 2000
   const maxWait = deps.maxWaitMs ?? 120_000
-  deps.prompt.info(`Открой бот в Telegram и отправь ему этот код: ${code}`)
+  deps.prompt.info(`Open your bot in Telegram and send it this code: ${code}`)
 
   const started = deps.clock()
   while (deps.clock() - started < maxWait) {
@@ -51,13 +51,13 @@ export async function runTelegramPairing(token: string, deps: PairingDeps): Prom
       const hit = res.updates.find((u) => u.text.trim() === code)
       if (hit) {
         const who = hit.username ? `@${hit.username}` : `chat ${hit.chatId}`
-        deps.prompt.info(`Связано с ${who} (id ${hit.chatId}).`)
+        deps.prompt.info(`Paired with ${who} (id ${hit.chatId}).`)
         return String(hit.chatId)
       }
     }
     await deps.sleep(pollInterval)
   }
 
-  deps.prompt.info('Не дождался кода — введи chat_id вручную.')
+  deps.prompt.info('No code received — enter the chat_id manually.')
   return manualEntry(deps.prompt)
 }
