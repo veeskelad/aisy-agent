@@ -1,6 +1,6 @@
 # ADR-0019: Stable-Prefix KV-Cache
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-11
 **Tags:** performance
 
@@ -66,3 +66,81 @@ the stable prefix.
 - [ADR-0006](./2026-06-11-file-based-memory-fts5-bm25.md) — file-based memory + FTS5 index this snapshot is derived from
 - [ADR-0018](./2026-06-11-model-router-hysteresis-fallback.md) — provider fallback; KV-cache is lost on fallback while the session survives
 - [Anthropic prompt caching documentation](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) — 4 breakpoints, ~1024-2048 token minimum
+
+---
+
+## Live implementation (Tier 8, 2026-06-24)
+
+### Breakpoint design: 2 breakpoints, not 4
+
+The live implementation emits **2 cache breakpoints** per request, not the 4-segment
+layout described in the original Decision above:
+
+- **bp1 (stable prefix):** `cache_control: { type: 'ephemeral' }` on the last system
+  block — covers the entire stable prefix (system prompt + memory + tool definitions).
+- **bp2 (conversation tail):** `cache_control: { type: 'ephemeral' }` on the last
+  message — covers the growing conversation history.
+
+**Rationale for not using the 4-segment split:**
+Within a session the prefix is FROZEN (byte-identical per this ADR), so placing
+multiple breakpoints inside it buys nothing within-session — each segment still
+hashes identically to the single bp1 block. Anthropic's 5-minute (ephemeral) and
+1-hour cache TTLs also make cross-session segment reuse moot for the typical
+session lifecycle; the marginal benefit of sub-segment granularity does not
+justify the implementation and maintenance cost. The tail breakpoint (bp2) is
+where the agentic-loop win lives: conversation history grows across inner
+tool-calls and turns (append-only per this ADR), so bp2 is re-read from cache on
+every subsequent turn after the first.
+
+The 4-segment split remains a documented future option if cross-session reuse
+patterns justify it.
+
+### Per-provider cache matrix
+
+| Provider | Strategy | Request change |
+|----------|----------|----------------|
+| anthropic | Explicit `cache_control: ephemeral` on last system block (bp1) + last message (bp2) | Yes — system becomes `[{ type, text, cache_control }]`; last message becomes block array |
+| openai / deepseek / gemini / glm / qwen | Transparent automatic prefix caching | None — the provider caches transparently; no `cache_control` emitted; dollar accounting conservatively over-estimates (uses `prompt_tokens` inclusive of cached), which is safe for the budget cap |
+| openrouter | `cache_control` passthrough (`cache: 'breakpoints'` mode) | Same block-wrapping as Anthropic — OpenRouter forwards the hint to the backing model |
+| claude-cli | None | None |
+
+### Cost accounting (Anthropic)
+
+When Anthropic caching is active, `usage.input_tokens` in the response reports only the
+**uncached remainder** of the prompt. The remaining prompt tokens arrive in two
+separate fields:
+
+- `cache_creation_input_tokens` — tokens written to cache this turn (billed at 1.25×
+  base input price).
+- `cache_read_input_tokens` — tokens read from cache (billed at 0.1× base input price).
+
+`parseResponse` now reads all three fields and computes:
+
+```
+inputTokens  = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+dollars      = (input_tokens / 1e6) × inPerMtok
+             + (cache_creation_input_tokens / 1e6) × inPerMtok × 1.25
+             + (cache_read_input_tokens / 1e6) × inPerMtok × 0.1
+             + (output_tokens / 1e6) × outPerMtok
+```
+
+This is required so the budget cap (a safety mechanism) does not under-bill when
+caching is active. `TurnUsage` was deliberately **not** widened — cache savings are
+an internal optimization and are surfaced only via the falling `$` figure in the
+Monitor, not as new public fields.
+
+Prompt caching is GA on the Anthropic API; no `anthropic-beta` header is required
+(only `anthropic-version: 2023-06-01`).
+
+### Kill-switch
+
+`AISY_PREFIX_CACHE` — anything other than `'0'` enables prefix caching (default on).
+The minimum cacheable prefix is model-dependent (e.g., 4096 tokens on Opus-tier
+models). When the prefix is below the model's minimum, Anthropic silently skips
+caching — no error is returned and no incorrect answers are produced.
+
+### Implementation reference
+
+- Plan: [`docs/superpowers/plans/2026-06-24-tier8-prefix-cache.md`](../superpowers/plans/2026-06-24-tier8-prefix-cache.md)
+- ADR-0055: Content-Addressed Exact-Response Cache — the companion exact-cache for
+  deterministic, non-stateful paths (eval-replay, nightly re-run).

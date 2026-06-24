@@ -90,17 +90,21 @@ v1 scope: 3 modes (`until` / `every:<interval>` / `budget:<n>`); model-claims �
 Follow-ups: `every` cron/HH:MM scheduling (only relative intervals in v1); goal-store per-tick caching; sub-agent `goal_done` edge case (Core sentinel vs. orchestrator wrapper); single active goal (parallel goals deferred).
 Distinct from the goal-DAG (orchestration, ADR-0039 — per-spawn delegation decomposition, not a top-level session goal).
 
-### Tier 8 — caching
+### Tier 8 — caching — ✅ DONE (#19–#20)
 
 > Semantic-caching the live loop is an anti-pattern; prefix caching is the real win (research 2026-06-23).
 
-| # | Task | Effort | Risk |
-|---|------|--------|------|
-| 19 | **Finish PREFIX caching (ADR-0019)** — the provider adapters compute breakpoints but don't emit `cache_control: ephemeral` (Anthropic) / rely on OpenAI auto-prefix; wiring it is the safe high-ROI win (zero wrong-answer risk). | M | low |
-| 20 | Optional narrow exact-cache on eval-replay + nightly generator/judge retries (deterministic, non-stateful). | S | low |
-| 21 | (Deferred) semantic-response cache ONLY behind the ADR-0031 embedding plugin, scoped to read-only paths, with invariants (no cross-session; invalidate on narrowed/forget; key includes prefixHash) — NEVER the live agent loop (anti-pattern: stateful turns → near-zero hit rate + safety-invariant bypass + key-collision risk). | L | high |
+| # | Task | Effort | Risk | Status |
+|---|------|--------|------|--------|
+| 19 | **Finish PREFIX caching (ADR-0019)** — emit `cache_control: ephemeral` breakpoints (Anthropic bp1+bp2) + cache-aware tiered cost accounting; per-provider matrix (anthropic / openai-compat / openrouter / cli); `AISY_PREFIX_CACHE` kill-switch. | M | low | ✅ done |
+| 20 | Optional narrow exact-cache on eval-replay + nightly generator/judge retries (deterministic, non-stateful). `makeExactCache` decorator; `AISY_NIGHTLY_EXACT_CACHE` opt-in. ADR-0055. | S | low | ✅ done |
+| 21 | (Deferred) semantic-response cache ONLY behind the ADR-0031 embedding plugin, scoped to read-only paths, with invariants (no cross-session; invalidate on narrowed/forget; key includes prefixHash) — NEVER the live agent loop (anti-pattern: stateful turns → near-zero hit rate + safety-invariant bypass + key-collision risk). | L | high | deferred |
 
-→ Plan: TBD.
+→ **Plan:** [`docs/superpowers/plans/2026-06-24-tier8-prefix-cache.md`](./superpowers/plans/2026-06-24-tier8-prefix-cache.md)
+Shipped across phases A–D (Anthropic bp1+bp2 + cache-aware tiered dollars, OpenAI-compat auto/breakpoints, catalog + bin kill-switch, exact-cache decorator + nightly opt-in). ADR-0019 promoted to Accepted; ADR-0055 captures the exact-cache contract and invariants.
+v1 scope: 2 breakpoints (stable prefix + conversation tail); per-provider cache matrix; `AISY_PREFIX_CACHE` kill-switch (default on); `makeExactCache` content-addressed decorator (`sha256(namespace + prefixBytes + spans)`, sessionId excluded); `AISY_NIGHTLY_EXACT_CACHE=1` opt-in for nightly paths.
+Invariants: exact-cache NEVER wraps the live agent loop (stateful turns + safety bypass risk) and NEVER wraps an in-flight retry-for-a-fresh-sample.
+Follow-ups: disk-backed exact-cache store (cross-run incremental eval); #21 semantic cache deferred pending ADR-0031 embedding plugin.
 
 ## Dependency notes
 

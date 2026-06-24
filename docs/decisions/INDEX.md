@@ -32,7 +32,7 @@ in this index so cross-references stay stable.
 | ADR-0016 | Proposed | 2026-06-11 | [Generator + Separate Judge for Self-Learning](./2026-06-11-generator-judge-self-learning.md) | skills, memory |
 | ADR-0017 | Proposed | 2026-06-11 | [External Verification by Real Traces](./2026-06-11-external-verification-by-traces.md) | verification |
 | ADR-0018 | Proposed | 2026-06-11 | [3-Tier Model Router with Hysteresis Fallback](./2026-06-11-model-router-hysteresis-fallback.md) | routing |
-| ADR-0019 | Proposed | 2026-06-11 | [Stable-Prefix KV-Cache](./2026-06-11-stable-prefix-kv-cache.md) | performance |
+| ADR-0019 | Accepted | 2026-06-11 | [Stable-Prefix KV-Cache](./2026-06-11-stable-prefix-kv-cache.md) | performance |
 | ADR-0020 | Proposed | 2026-06-11 | [Loop Guardian (Period 1/2/3 Detection)](./2026-06-11-loop-guardian.md) | safety, observability |
 | ADR-0021 | Proposed | 2026-06-11 | [Coordinator-Workers Orchestration + Decision Journal](./2026-06-11-coordinator-workers-orchestration.md) | orchestration |
 | ADR-0022 | Proposed | 2026-06-11 | [rtk as Optional Compression Layer](./2026-06-11-rtk-optional-compression.md) | performance, dependency |
@@ -53,6 +53,7 @@ in this index so cross-references stay stable.
 | ADR-0037 | Proposed | 2026-06-11 | [Eval & Red-Team Harness](./2026-06-11-eval-and-red-team-harness.md) | verification, security |
 | ADR-0038 | Accepted  | 2026-06-12 | [Triggers & Proactivity (Two-Phase, Budget-Capped)](./2026-06-12-triggers-and-proactivity.md) | proactivity, cost |
 | ADR-0039 | Accepted | 2026-06-12 | [First-Class Sub-Agent Delegation & Own-Scope Definition](./2026-06-12-first-class-subagent-delegation.md) | orchestration, delegation |
+| ADR-0055 | Accepted  | 2026-06-24 | [Content-Addressed Exact-Response Cache (#20)](./2026-06-24-exact-response-cache.md) | performance |
 | ADR-0054 | Accepted  | 2026-06-23 | [Goal-Driven Loop Layer (/goal)](./2026-06-23-goal-driven-loop-layer.md) | agent-loop, goal, proactivity |
 | ADR-0053 | Accepted  | 2026-06-22 | [Proactivity: In-Process Scheduler & Nightly Generator/Judge](./2026-06-22-proactivity-scheduler-and-nightly-generator.md) | proactivity, nightly, triggers, scheduler |
 | ADR-0052 | Accepted  | 2026-06-19 | [Live Sub-Agent Runner Seam & Safety Model](./2026-06-19-live-subagent-runner-seam-and-safety.md) | orchestration, delegation, safety, runtime |
