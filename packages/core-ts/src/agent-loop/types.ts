@@ -165,9 +165,16 @@ export interface LogEntry {
   payload: unknown
 }
 
+export interface SessionSummary {
+  sessionId: string
+  turns: number
+  lastAt: string
+}
+
 export interface SessionLog {
   append(entry: LogEntry): void
   resume(sessionId: string): TurnState | null
+  recent?(n: number): SessionSummary[]
 }
 
 export interface AgentLoopDeps {

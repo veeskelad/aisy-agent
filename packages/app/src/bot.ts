@@ -94,6 +94,12 @@ export interface TelegramBotDeps {
   onGoalCommand?: (input: { kind: 'start'; objective: string; mode: string } | { kind: 'status' } | { kind: 'stop' }) => Promise<{ ok: true; message: string } | { ok: false; error: string }>
   /** Active capability grants — list and bulk-reset (ADR-0047 tail). */
   grants?: Pick<GrantStore, 'list' | 'revokeAll'>
+  /** Session log — renders recent sessions in 💬 Сессии menu (Task 13). */
+  sessionLog?: { recent?(n: number): { sessionId: string; turns: number; lastAt: string }[] }
+  /** Skill menu entries — renders 🧩 Навыки menu (Task 13). */
+  skillsMenu?: () => { name: string; summary?: string }[]
+  /** Agent card for the main agent — renders 🧠 Агент menu (Task 13). */
+  agentCard?: () => { name: string; description: string; skills: string[] }
 }
 
 interface PendingCard {
@@ -251,6 +257,31 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
       await sendPanel(settingsPanel())
     } else if (action === 'monitor') {
       await sendSpendReport()
+    } else if (action === 'sessions') {
+      const sessions = deps.sessionLog?.recent?.(10) ?? []
+      if (sessions.length === 0) {
+        await bot.api.sendMessage(deps.allowedChatId, 'Сессий пока нет.')
+      } else {
+        const lines = sessions.map((s) => `• ${s.sessionId} · ${s.turns} ход${s.turns === 1 ? '' : 'ов'} · ${s.lastAt.slice(0, 10)}`)
+        await bot.api.sendMessage(deps.allowedChatId, lines.join('\n'))
+      }
+    } else if (action === 'skills') {
+      const entries = deps.skillsMenu?.() ?? []
+      if (entries.length === 0) {
+        await bot.api.sendMessage(deps.allowedChatId, 'Навыков нет.')
+      } else {
+        const lines = entries.map((e) => `• ${e.name}${e.summary !== undefined ? ` — ${e.summary}` : ''}`)
+        await bot.api.sendMessage(deps.allowedChatId, lines.join('\n'))
+      }
+    } else if (action === 'agent') {
+      const card = deps.agentCard?.()
+      if (!card) {
+        await bot.api.sendMessage(deps.allowedChatId, '—')
+      } else {
+        const skillList = card.skills.length > 0 ? card.skills.join(', ') : '—'
+        const text = `🧠 ${card.name}\n${card.description}\nНавыки: ${skillList}`
+        await bot.api.sendMessage(deps.allowedChatId, text)
+      }
     } else {
       await bot.api.sendMessage(deps.allowedChatId, 'Раздел в разработке.')
     }

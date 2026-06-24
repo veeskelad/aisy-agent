@@ -209,6 +209,14 @@ const memory: MemoryPort = makeMemoryPort(memoryStore, nowIso)
 const sessionLogPath = join(base, 'session-log.jsonl')
 const sessionLog: SessionLog = makeJsonlSessionLog({
   appendLine: (line) => appendFileSync(sessionLogPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
+  readLines: () => {
+    if (!existsSync(sessionLogPath)) return []
+    try {
+      return readFileSync(sessionLogPath, 'utf8').split('\n').filter((l) => l.trim().length > 0)
+    } catch {
+      return []
+    }
+  },
 })
 
 const sandboxImage = process.env['AISY_SANDBOX_IMAGE'] ?? ''
@@ -517,6 +525,17 @@ const { bot, runProactiveTurn, sendProactive, runGoalTurn } = makeTelegramBot({
   budget,
   grants,
   setOutboundLocked: (locked) => { outboundLocked = locked },
+  sessionLog,
+  skillsMenu: () => [],  // Skills (06) not live yet — returns empty list
+  agentCard: () => {
+    const c = cardResolver.resolve('general')
+    if (!c) return { name: 'general', description: '—', skills: [] }
+    return {
+      name: c.name,
+      description: c.description ?? '—',
+      skills: c.skills,
+    }
+  },
   onConsolidate: runNightly,
   getStaging: async () => {
     const area = await nightlyRunner.getStagedProposals()

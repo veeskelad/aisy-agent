@@ -113,6 +113,7 @@ export type {
   MemoryPort,
   LoopGuardian,
   SessionLog,
+  SessionSummary,
   LogEntry,
   Clock,
   HookGate,
