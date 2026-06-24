@@ -14,6 +14,9 @@ export function makeJsonlSessionLog(deps: {
     append: (entry: LogEntry) => deps.appendLine(JSON.stringify(entry)),
     resume: () => null,
     recent: (n: number): SessionSummary[] => {
+      // Counts log entries carrying `sessionId`. In the live loop only `turn.start`
+      // carries it (one per turn), so `turns` is the real turn count and `lastAt` the
+      // last turn-start ts — this depends on `turn.start` keeping `sessionId`.
       const lines = deps.readLines?.() ?? []
       const map = new Map<string, { turns: number; lastAt: string }>()
       for (const line of lines) {
