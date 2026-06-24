@@ -147,27 +147,35 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     const interactive = deps.prompt !== undefined && opts.nonInteractive !== true && opts.yes !== true
     if (interactive && deps.prompt) {
       const p = deps.prompt
-      p.info('Настройка Aisy — отвечай на вопросы (Enter — пропустить шаг).')
+      p.info('Aisy setup — answer the prompts (Enter to skip).')
 
       const catalog = deps.providerCatalog
       if (catalog && catalog.length > 0 && deps.providersOut) {
-        p.info('Доступные провайдеры:')
+        p.info('Providers:')
         catalog.forEach((e, i) => p.info(`  ${i + 1}. ${e.label}`))
 
-        const pickOne = async (prefix: string): Promise<ProviderSelection> => {
-          const raw = (await p.ask(`${prefix}провайдер (номер)`, { default: '1' })).trim()
-          const n = Number.parseInt(raw, 10)
-          const idx = Number.isFinite(n) && n >= 1 && n <= catalog.length ? n - 1 : 0
-          const entry = catalog[idx]!
+        const pickOne = async (): Promise<ProviderSelection> => {
+          // Validated selection loop — re-ask on invalid/out-of-range input.
+          let entry: (typeof catalog)[number] | undefined
+          while (entry === undefined) {
+            const raw = (await p.ask('Provider (number)', { default: '1' })).trim()
+            const n = Number.parseInt(raw, 10)
+            if (Number.isFinite(n) && n >= 1 && n <= catalog.length) {
+              entry = catalog[n - 1]
+            }
+            // If invalid/out-of-range, loop again (no silent fallback).
+          }
+          // Model: use catalog default if available; only prompt when there is none.
           const defModel = entry.defaultModels?.[0]
-          const model =
-            (await p.ask(`Модель (${entry.label})`, defModel ? { default: defModel } : {})).trim() || (defModel ?? '')
+          const model = defModel !== undefined
+            ? defModel
+            : (await p.ask(`Model (${entry.label})`)).trim()
           if (entry.needsKey && entry.keyEnv) {
-            const key = (await p.secret(`API-ключ (${entry.label}):`)).trim()
+            const key = (await p.secret(`API key (${entry.label}):`)).trim()
             if (key.length > 0) collected[entry.keyEnv] = key
-            // Known providers carry a catalog default base URL (buildProvider
-            // falls back to it); only a custom endpoint must be asked.
-            if (entry.defaultBaseUrl === undefined) {
+            // Only the explicit custom provider needs a base URL prompt.
+            // Native/known providers always carry a catalog defaultBaseUrl.
+            if (entry.id === 'openai-compat') {
               const bu = (await p.ask(`Base URL (${entry.label})`)).trim()
               if (bu.length > 0) collected[`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`] = bu
             }
@@ -175,26 +183,17 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
           return { provider: entry.id, model }
         }
 
-        const single = await p.confirm('Одна модель для всех тиров?', { default: true })
-        let config: ProvidersConfig
-        if (single) {
-          const sel = await pickOne('')
-          config = { default: sel }
-          catalogSelections = [sel]
-        } else {
-          const reasoning = await pickOne('reasoning · ')
-          const critique = await pickOne('critique · ')
-          const routine = await pickOne('routine · ')
-          config = { tiers: { reasoning, critique, routine } }
-          catalogSelections = [reasoning, critique, routine]
-        }
+        // Single-provider flow — no tier prompts.
+        const sel = await pickOne()
+        const config: ProvidersConfig = { default: sel }
+        catalogSelections = [sel]
         deps.providersOut.write(config)
       } else {
         // Legacy: prompt the per-tier provider keys (no catalog injected).
         for (const tier of TIERS) {
           const key = `AISY_PROVIDER_${tier.toUpperCase()}_KEY`
           if (valueOf(key).length === 0) {
-            const v = (await p.secret(`API-ключ провайдера (${tier}):`)).trim()
+            const v = (await p.secret(`API key for provider (${tier}):`)).trim()
             if (v.length > 0) collected[key] = v
           }
         }
@@ -216,12 +215,6 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
             sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
           })
           if (chatId) collected['AISY_TELEGRAM_CHAT_ID'] = chatId
-        }
-      }
-      for (const key of ['AISY_MEMORY_ROOT', 'AISY_DB_PATH'] as const) {
-        if (valueOf(key).length === 0) {
-          const v = (await p.ask(`Путь ${key}`)).trim()
-          if (v.length > 0) collected[key] = v
         }
       }
     }

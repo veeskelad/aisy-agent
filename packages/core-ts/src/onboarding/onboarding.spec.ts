@@ -788,10 +788,12 @@ function scriptedPrompt(secrets: string[], asks: string[]): PromptPort & { infos
 }
 
 describe('interactive init (ADR-0049)', () => {
-  it('prompts for missing secrets and seeds them into the vault', async () => {
+  it('prompts for missing secrets and seeds them into the vault (no memory path prompts)', async () => {
+    // Legacy flow (no catalog): 3 tier keys + bot token; chat_id via manualEntry ask.
+    // AISY_MEMORY_ROOT / AISY_DB_PATH prompts are dropped — bin supplies defaults.
     const prompt = scriptedPrompt(
       ['k-reason', 'k-crit', 'k-routine', 'tok-123'],
-      ['424242', '/m/root', '/m/db'],
+      ['424242'],
     )
     const vault = makeFakeVault()
     const deps = makeDeps({ env: {}, prompt, vault })
@@ -803,7 +805,8 @@ describe('interactive init (ADR-0049)', () => {
     expect(seeded['AISY_PROVIDER_REASONING_KEY']).toBe('k-reason')
     expect(seeded['AISY_TELEGRAM_BOT_TOKEN']).toBe('tok-123')
     expect(seeded['AISY_TELEGRAM_CHAT_ID']).toBe('424242')
-    expect(seeded['AISY_MEMORY_ROOT']).toBe('/m/root')
+    // Memory path prompts no longer exist — not expected in vault.
+    expect(seeded['AISY_MEMORY_ROOT']).toBeUndefined()
   })
 
   it('does not prompt for keys already provided via env', async () => {
@@ -828,21 +831,22 @@ describe('interactive init (ADR-0049)', () => {
 // Interactive init — provider catalog picker (ADR-0050, Phase 1c)
 // ---------------------------------------------------------------------------
 
-/** Catalog-flow prompt double: confirm() returns `single`; ask()/secret()
- *  replay their scripted queues in order. */
+/** Catalog-flow prompt double: ask()/secret() replay their scripted queues
+ *  in order. confirm() always returns true (retained for legacy path compat). */
 function catalogPrompt(opts: {
-  single: boolean
   asks: string[]
   secrets: string[]
-}): PromptPort & { infos: string[] } {
+}): PromptPort & { infos: string[]; askCount: number } {
   let ai = 0
   let si = 0
   const infos: string[] = []
+  let askCount = 0
   return {
     infos,
-    ask: async () => opts.asks[ai++] ?? '',
+    get askCount() { return askCount },
+    ask: async () => { askCount++; return opts.asks[ai++] ?? '' },
     secret: async () => opts.secrets[si++] ?? '',
-    confirm: async () => opts.single,
+    confirm: async () => true,
     info: (m) => void infos.push(m),
   }
 }
@@ -870,10 +874,12 @@ const PRESENT_ENV: Record<string, string> = {
 }
 
 describe('interactive init — provider catalog (ADR-0050)', () => {
-  it('single-model mode: writes providers.json default and seeds the provider key', async () => {
+  // Single-provider flow: known provider with defaultModels — no model prompt, no base-URL prompt.
+  it('known provider: writes providers.json { default } and seeds the key; no model or base-URL prompt', async () => {
     const vault = makeFakeVault()
     const out = captureProvidersOut()
-    const prompt = catalogPrompt({ single: true, asks: ['1', ''], secrets: ['dk-secret'] })
+    // asks: only the provider number is consumed (no model prompt for known providers with defaults)
+    const prompt = catalogPrompt({ asks: ['1'], secrets: ['dk-secret'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault,
@@ -889,11 +895,44 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     expect((vault as ReturnType<typeof makeFakeVault>).seeded['AISY_PROVIDER_DEEPSEEK_KEY']).toBe('dk-secret')
     // The legacy per-tier ping is NOT used; provider validation is keyed by id.
     expect(res.outcomes.some((o) => o.step === 'validate.provider.deepseek' && o.result === 'done')).toBe(true)
+    // No tiered prompt was issued (confirm() never called = no tiers).
+    // Exactly 1 ask: the provider number.
+    expect(prompt.askCount).toBe(1)
   })
 
-  it('per-tier mode: writes providers.json tiers', async () => {
+  // No tiered flow in interactive mode — always writes { default: ... }, never { tiers: ... }.
+  it('always writes { default } — no tiered prompts in interactive mode', async () => {
     const out = captureProvidersOut()
-    const prompt = catalogPrompt({ single: false, asks: ['1', '', '1', '', '1', ''], secrets: ['k1', 'k2', 'k3'] })
+    // Second entry in catalog to verify the selection picks by number correctly.
+    const anthropicEntry: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-sonnet-4-6'],
+    }
+    const prompt = catalogPrompt({ asks: ['2'], secrets: ['an-key'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [DEEPSEEK_ENTRY, anthropicEntry],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    // Must be { default: ... } (single provider), never { tiers: ... }.
+    expect(out.written[0]).toMatchObject({ default: { provider: 'anthropic', model: 'claude-sonnet-4-6' } })
+    expect(out.written[0]).not.toHaveProperty('tiers')
+  })
+
+  // Invalid provider input must re-ask instead of silently picking catalog[0].
+  it('invalid provider number re-asks in a loop until a valid selection is made', async () => {
+    const out = captureProvidersOut()
+    // First two inputs are invalid; third ('1') is valid.
+    const prompt = catalogPrompt({ asks: ['deepseek', '99', '1'], secrets: ['dk-key'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
@@ -905,10 +944,13 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     const res = await makeOnboardingOps(deps).init({})
 
     expect(res.completed).toBe(true)
-    const sel = { provider: 'deepseek', model: 'deepseek-chat' }
-    expect(out.written[0]).toEqual({ tiers: { reasoning: sel, critique: sel, routine: sel } })
+    // Despite invalid inputs, the correct provider was ultimately selected.
+    expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
+    // 3 asks consumed: 'deepseek', '99', '1'.
+    expect(prompt.askCount).toBe(3)
   })
 
+  // Custom (openai-compat) provider DOES prompt for base URL and model.
   it('validates the chosen provider via the provider-aware ping (custom endpoint)', async () => {
     const seen: { providerId: string; baseUrl?: string; key: string }[] = []
     const validators: CredentialValidators = {
@@ -925,7 +967,8 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
       needsKey: true,
       keyEnv: 'AISY_PROVIDER_CUSTOM_KEY',
     }
-    const prompt = catalogPrompt({ single: true, asks: ['1', 'my-model', 'https://x/v1'], secrets: ['ck'] })
+    // asks: provider number, then model (no default), then base URL
+    const prompt = catalogPrompt({ asks: ['1', 'my-model', 'https://x/v1'], secrets: ['ck'] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
@@ -940,12 +983,34 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     expect(res.completed).toBe(true)
     expect(seen[0]).toEqual({ providerId: 'openai-compat', key: 'ck', baseUrl: 'https://x/v1' })
     expect(out.written[0]).toEqual({ default: { provider: 'openai-compat', model: 'my-model' } })
+    // 3 asks: provider number, model, base URL.
+    expect(prompt.askCount).toBe(3)
+  })
+
+  // Known provider with a defaultBaseUrl must NOT be prompted for base URL.
+  it('known provider with defaultBaseUrl is never prompted for base URL', async () => {
+    const out = captureProvidersOut()
+    // DeepSeek has defaultBaseUrl set — only provider number ask should fire.
+    const prompt = catalogPrompt({ asks: ['1'], secrets: ['dk-key'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [DEEPSEEK_ENTRY],
+      providersOut: out.port,
+    })
+
+    await makeOnboardingOps(deps).init({})
+
+    // Only 1 ask (provider number); no base-URL ask fired.
+    expect(prompt.askCount).toBe(1)
   })
 
   it('skips key validation for CLI providers (no key prompted)', async () => {
     const out = captureProvidersOut()
     const cli: ProviderCatalogEntry = { id: 'claude-cli', label: 'Claude CLI', needsKey: false }
-    const prompt = catalogPrompt({ single: true, asks: ['1', 'sonnet'], secrets: [] })
+    // CLI has no defaultModels → model ask fires; no key prompt.
+    const prompt = catalogPrompt({ asks: ['1', 'sonnet'], secrets: [] })
     const deps = makeDeps({
       env: { ...PRESENT_ENV },
       vault: makeFakeVault(),
