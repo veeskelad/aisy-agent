@@ -33,6 +33,9 @@ COPY --from=build /app /app
 VOLUME ["/data"]
 ENV AISY_MEMORY_ROOT=/data/memory
 
-# `aisy` resolves via the package bin once the bin adapters are wired (v0.2).
-ENTRYPOINT ["pnpm", "--filter", "@aisy/core", "exec", "aisy"]
-CMD ["doctor"]
+# The `aisy` bin lives in @aisy/app (the composition root: run + init + doctor).
+ENTRYPOINT ["pnpm", "--filter", "@aisy/app", "exec", "aisy"]
+# This compose service's job is to run the agent; override (e.g. `doctor`,
+# `init`) by passing a command. `aisy run` exits with a clear message if the
+# mounted .env is missing the Telegram token or a provider key.
+CMD ["run"]

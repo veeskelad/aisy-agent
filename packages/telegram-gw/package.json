@@ -1,7 +1,8 @@
 {
   "name": "@aisy/telegram-gw",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Aisy Telegram gateway — the pure UX layer (cards, menu, event bridge) for the grammY transport.",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./src/index.ts",
@@ -9,6 +10,17 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
     }
   },
   "scripts": {

@@ -1,0 +1,49 @@
+name: Release
+
+# Fires on a version tag (e.g. v0.1.0): runs the gates, then publishes the
+# packages to npm (ADR-0056 — npm is the primary distribution). Cuts a GitHub
+# Release too. No-op until the repo lives on GitHub, a v* tag is pushed, and the
+# NPM_TOKEN secret + the @aisy npm org exist. Docker/Compose stays a
+# build-it-yourself self-host path (not auto-published).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the GitHub Release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # Gates must pass before anything is published.
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
+      - run: pnpm -r test
+
+      # Publish every non-private package. pnpm rewrites `workspace:*` deps to the
+      # real version and swaps in each package's publishConfig (dist-pointing
+      # types/exports). --no-git-checks: the tag commit is the source of truth.
+      - run: pnpm -r publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Aisy ${GITHUB_REF_NAME} — see CHANGELOG.md. Install: npm i -g @aisy/app" \
+            --verify-tag

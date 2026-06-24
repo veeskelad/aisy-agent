@@ -1,10 +1,15 @@
 {
   "name": "@aisy/app",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Aisy — the aisy CLI: boot the Telegram agent (run), onboard (init/setup), and health-check (doctor).",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "aisy": "./dist/bin/aisy.js"
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
