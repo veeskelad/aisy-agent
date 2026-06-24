@@ -107,6 +107,36 @@ describe('renderEvent', () => {
     expect(datas).toEqual(['set:showCostPerTurn', 'set:budgetEnabled', 'set:debug'])
   })
 
+  it('cost.summary for tiered run: no bare "mixed (per-tier)" token, shows total $ + тиры note', () => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId: 'sess1',
+      tokensIn: 5000,
+      tokensOut: 1000,
+      dollars: 0.025,
+      limitUsd: 1,
+      model: 'mixed (per-tier)',
+    })!
+    expect(msg.html).not.toContain('mixed (per-tier)')
+    expect(msg.html).toContain('$0.025')
+    expect(msg.html).toContain('тирам')
+    expect(msg.html).toContain('📡 Монитор')
+  })
+
+  it('cost.summary for non-tiered run: shows real model name unchanged', () => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId: 'sess2',
+      tokensIn: 100,
+      tokensOut: 50,
+      dollars: 0.001,
+      limitUsd: 1,
+      model: 'claude-sonnet-4-6',
+    })!
+    expect(msg.html).toContain('claude-sonnet-4-6')
+    expect(msg.html).not.toContain('тирам')
+  })
+
   it('settings.panel shows the debug toggle with set:debug callback and correct on/off state', () => {
     const msgOff = renderEvent({ kind: 'settings.panel', showCostPerTurn: false, budgetEnabled: false, debug: false })!
     expect(msgOff.html).toContain('🔧 Отладка: ❌ выкл')

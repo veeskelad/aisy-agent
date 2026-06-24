@@ -59,10 +59,14 @@ export function renderEvent(ev: UiEvent): BotMessage | null {
 
     case 'cost.summary': {
       const frac = ev.limitUsd > 0 ? ev.dollars / ev.limitUsd : 0
+      const isTiered = ev.model === 'mixed (per-tier)'
+      const modelLine = isTiered
+        ? `   Токены: ${ev.tokensIn} in / ${ev.tokensOut} out · $${ev.dollars.toFixed(3)} (тарифицировано по тирам — разбивка по моделям в 📡 Монитор)`
+        : `   Токены: ${ev.tokensIn} in / ${ev.tokensOut} out · ${escapeHtml(ev.model)}`
       return {
         html: [
           `💰 <b>Сессия ${escapeHtml(ev.sessionId)}</b>`,
-          `   Токены: ${ev.tokensIn} in / ${ev.tokensOut} out · ${escapeHtml(ev.model)}`,
+          modelLine,
           `   Стоимость: $${ev.dollars.toFixed(3)} / $${ev.limitUsd.toFixed(2)} (${(frac * 100).toFixed(1)}%)`,
           `   ${bar(frac)}`,
         ].join('\n'),
