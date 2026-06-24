@@ -515,6 +515,7 @@ const { bot, runProactiveTurn, sendProactive, runGoalTurn } = makeTelegramBot({
   settings,
   spend,
   budget,
+  grants,
   setOutboundLocked: (locked) => { outboundLocked = locked },
   onConsolidate: runNightly,
   getStaging: async () => {

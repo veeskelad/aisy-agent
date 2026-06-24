@@ -18,6 +18,7 @@ import type {
   BudgetTracker,
   Gateway,
   GrantScope,
+  GrantStore,
   PendingAction,
   Provenance,
   SettingsStore,
@@ -91,6 +92,8 @@ export interface TelegramBotDeps {
   buildGoalRunner?: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => { runner: AgentRunner; takeClaimedDone: () => boolean }
   /** Handle a /goal command — decoupled; no goal types leak into bot (Tier-7 D). */
   onGoalCommand?: (input: { kind: 'start'; objective: string; mode: string } | { kind: 'status' } | { kind: 'stop' }) => Promise<{ ok: true; message: string } | { ok: false; error: string }>
+  /** Active capability grants — list and bulk-reset (ADR-0047 tail). */
+  grants?: Pick<GrantStore, 'list' | 'revokeAll'>
 }
 
 interface PendingCard {
@@ -464,6 +467,18 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     await ctx.reply(ok === true ? '✅ Снят' : '❌ Не найден')
   })
 
+  // --- grants command (ADR-0047 tail) ---
+  bot.command('grants', async (ctx) => {
+    const list = deps.grants?.list() ?? []
+    if (list.length === 0) {
+      await ctx.reply('Активных грантов нет.')
+      return
+    }
+    const text = list.map((g) => `• ${g.tool} · ${g.scope}`).join('\n')
+    const kb = new InlineKeyboard().text('🗑 Сбросить гранты', 'grants:reset')
+    await ctx.reply(text, { reply_markup: kb })
+  })
+
   // --- goal commands (Tier-7 D) ---
   bot.command('goal', async (ctx) => {
     const raw = (ctx.match ?? '').trim()
@@ -562,6 +577,13 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     if (data === 'nightly:unjudged') {
       // Override the silent top-level answer with a toast explaining why.
       await bot.api.answerCallbackQuery(ctx.callbackQuery.id, { text: 'Ещё не проверено судьёй' })
+      return
+    }
+
+    if (data === 'grants:reset') {
+      deps.grants?.revokeAll()
+      // Best-effort edit: a stale or already-edited message must not crash the handler.
+      await ctx.editMessageText('Гранты сброшены.').catch(() => {})
       return
     }
 
