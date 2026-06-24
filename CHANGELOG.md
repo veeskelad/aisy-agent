@@ -17,6 +17,19 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.1] — 2026-06-24
+
+CLI/onboarding fixes from dogfooding 0.1.0.
+
+### Fixed
+- **`aisy init` simplified** — single provider (removed the reasoning/critique/routine
+  tier prompts), **validated provider selection** (a bad pick re-asks instead of silently
+  falling back to Anthropic), **Base URL** prompted only for the Custom (OpenAI-compatible)
+  provider, **model** prompted right after the provider pre-filled with the catalog default,
+  dropped the memory/db-path prompts. Known providers carry sensible default models.
+- **Ctrl-C during `aisy init`** now exits quietly — no "Detected unsettled top-level await" warning.
+- **English CLI** — onboarding and Telegram-pairing prompts are now English (the Telegram bot UI is unchanged).
+
 ## [0.1.0] — 2026-06-24
 
 First pre-alpha release — the **text-first Telegram agent runs end-to-end**:
