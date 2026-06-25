@@ -11,8 +11,15 @@ import type { ProviderAdapter, ProviderError } from '../agent-loop/types.js'
 function isTransient(err: unknown): boolean {
   if (err instanceof Error) {
     const pe = err as Partial<ProviderError>
-    if (pe.kind === 'rate-limit' || pe.kind === 'timeout' || pe.kind === 'server-error') {
+    if (pe.kind === 'rate-limit' || pe.kind === 'timeout') {
       return true
+    }
+    // server-error covers both 5xx and 4xx in the adapters. Only fail over on a
+    // genuine 5xx, or when there is no HTTP status (network-level throw). A 4xx
+    // (bad key, bad request) is the operator's config — retrying the fallback
+    // would mask it, so propagate.
+    if (pe.kind === 'server-error') {
+      return pe.httpStatus === undefined || pe.httpStatus >= 500
     }
     // Network-level errors (DNS, connection refused, etc.) surfaced as plain
     // fetch throws (TypeError: Failed to fetch / ECONNREFUSED) or as AbortError.

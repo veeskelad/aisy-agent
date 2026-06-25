@@ -41,9 +41,11 @@ export interface OpenAIProviderDeps {
 }
 
 class OpenAIError extends Error implements ProviderError {
-  constructor(public readonly kind: ProviderError['kind'], message: string) {
+  readonly httpStatus?: number
+  constructor(public readonly kind: ProviderError['kind'], message: string, httpStatus?: number) {
     super(message)
     this.name = 'ProviderError'
+    if (httpStatus !== undefined) this.httpStatus = httpStatus
   }
 }
 
@@ -150,9 +152,9 @@ export function makeOpenAICompatProvider(deps: OpenAIProviderDeps): ProviderAdap
         throw new OpenAIError(kind, `OpenAI-compat request failed: ${(err as Error)?.message ?? 'unknown'}`)
       }
 
-      if (res.status === 429) throw new OpenAIError('rate-limit', 'OpenAI-compat 429')
-      if (res.status >= 500) throw new OpenAIError('server-error', `OpenAI-compat ${res.status}`)
-      if (res.status >= 400) throw new OpenAIError('server-error', `OpenAI-compat client error ${res.status}`)
+      if (res.status === 429) throw new OpenAIError('rate-limit', 'OpenAI-compat 429', 429)
+      if (res.status >= 500) throw new OpenAIError('server-error', `OpenAI-compat ${res.status}`, res.status)
+      if (res.status >= 400) throw new OpenAIError('server-error', `OpenAI-compat client error ${res.status}`, res.status)
 
       const body = (await res.json()) as unknown
       return parseOpenAIResponse(body, deps.price)

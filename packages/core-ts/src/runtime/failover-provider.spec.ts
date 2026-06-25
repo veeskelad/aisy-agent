@@ -30,19 +30,21 @@ function okAdapter(reply = 'primary-ok'): ProviderAdapter & { calls: number } {
 }
 
 class FakeProviderError extends Error implements ProviderError {
-  constructor(public readonly kind: ProviderError['kind'], message: string) {
+  readonly httpStatus?: number
+  constructor(public readonly kind: ProviderError['kind'], message: string, httpStatus?: number) {
     super(message)
     this.name = 'ProviderError'
+    if (httpStatus !== undefined) this.httpStatus = httpStatus
   }
 }
 
-function failingAdapter(kind: ProviderError['kind']): ProviderAdapter & { calls: number } {
+function failingAdapter(kind: ProviderError['kind'], httpStatus?: number): ProviderAdapter & { calls: number } {
   const state = { calls: 0 }
   return {
     get calls() { return state.calls },
     complete: async (_req, _signal) => {
       state.calls++
-      throw new FakeProviderError(kind, `${kind} error`)
+      throw new FakeProviderError(kind, `${kind} error`, httpStatus)
     },
   }
 }
@@ -88,8 +90,8 @@ describe('makeFailoverProvider', () => {
     expect(fallback.calls).toBe(1)
   })
 
-  it('primary transient error (server-error / 5xx) — fallback is used', async () => {
-    const primary = failingAdapter('server-error')
+  it('primary transient error (server-error, 5xx) — fallback is used', async () => {
+    const primary = failingAdapter('server-error', 503)
     const fallback = okAdapter('fallback-ok')
     const provider = makeFailoverProvider(primary, fallback)
 
@@ -97,6 +99,36 @@ describe('makeFailoverProvider', () => {
 
     expect(result.reply).toBe('fallback-ok')
     expect(fallback.calls).toBe(1)
+  })
+
+  it('primary server-error WITHOUT an http status (network throw) — fallback is used', async () => {
+    const primary = failingAdapter('server-error') // no httpStatus → treat as network-level
+    const fallback = okAdapter('fallback-ok')
+    const provider = makeFailoverProvider(primary, fallback)
+
+    const result = await provider.complete(makeRequest())
+
+    expect(result.reply).toBe('fallback-ok')
+    expect(fallback.calls).toBe(1)
+  })
+
+  it('primary 4xx client error (server-error, httpStatus 400) — propagates, fallback NOT called', async () => {
+    const primary = failingAdapter('server-error', 400)
+    const fallback = okAdapter('fallback-ok')
+    const provider = makeFailoverProvider(primary, fallback)
+
+    await expect(provider.complete(makeRequest())).rejects.toThrow('server-error error')
+    expect(primary.calls).toBe(1)
+    expect(fallback.calls).toBe(0)
+  })
+
+  it('primary 401 unauthorized (server-error, httpStatus 401) — propagates, not masked by fallback', async () => {
+    const primary = failingAdapter('server-error', 401)
+    const fallback = okAdapter('fallback-ok')
+    const provider = makeFailoverProvider(primary, fallback)
+
+    await expect(provider.complete(makeRequest())).rejects.toThrow('server-error error')
+    expect(fallback.calls).toBe(0)
   })
 
   it('primary transient error (timeout) — fallback is used', async () => {

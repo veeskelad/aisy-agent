@@ -131,6 +131,10 @@ export interface ModelResponse {
 
 export interface ProviderError extends Error {
   kind: "rate-limit" | "server-error" | "timeout" | "all-exhausted"
+  /** HTTP status when the error came from an HTTP response. Lets failover tell a
+   *  4xx client error (don't retry) from a 5xx server error (do retry). Absent for
+   *  network-level failures. */
+  httpStatus?: number
 }
 
 export interface ProviderAdapter {

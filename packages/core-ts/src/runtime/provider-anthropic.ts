@@ -38,9 +38,11 @@ export interface AnthropicProviderDeps {
 }
 
 class AnthropicError extends Error implements ProviderError {
-  constructor(public readonly kind: ProviderError['kind'], message: string) {
+  readonly httpStatus?: number
+  constructor(public readonly kind: ProviderError['kind'], message: string, httpStatus?: number) {
     super(message)
     this.name = 'ProviderError'
+    if (httpStatus !== undefined) this.httpStatus = httpStatus
   }
 }
 
@@ -206,9 +208,9 @@ export function makeAnthropicProvider(deps: AnthropicProviderDeps): ProviderAdap
         throw new AnthropicError(kind, `Anthropic request failed: ${(err as Error)?.message ?? 'unknown'}`)
       }
 
-      if (res.status === 429) throw new AnthropicError('rate-limit', 'Anthropic 429')
-      if (res.status >= 500) throw new AnthropicError('server-error', `Anthropic ${res.status}`)
-      if (res.status >= 400) throw new AnthropicError('server-error', `Anthropic client error ${res.status}`)
+      if (res.status === 429) throw new AnthropicError('rate-limit', 'Anthropic 429', 429)
+      if (res.status >= 500) throw new AnthropicError('server-error', `Anthropic ${res.status}`, res.status)
+      if (res.status >= 400) throw new AnthropicError('server-error', `Anthropic client error ${res.status}`, res.status)
 
       const body = (await res.json()) as unknown
       return parseResponse(body, priceFor(deps.model))
