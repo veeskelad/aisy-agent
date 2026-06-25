@@ -258,6 +258,9 @@ export interface PromptPort {
   confirm(question: string, opts?: { default?: boolean }): Promise<boolean>
   /** Print an informational line to the operator. */
   info(message: string): void
+  /** Arrow-key single-select. Returns the chosen index. Optional: only the TTY
+   *  adapter implements it; callers fall back to a numbered prompt when absent. */
+  select?(prompt: string, choices: string[], opts?: { defaultIndex?: number }): Promise<number>
 }
 
 // ---------------------------------------------------------------------------

@@ -832,25 +832,36 @@ describe('interactive init (ADR-0049)', () => {
 // ---------------------------------------------------------------------------
 
 /** Catalog-flow prompt double: ask()/secret() replay their scripted queues
- *  in order. confirm() replays the confirms queue (default false when exhausted). */
+ *  in order. confirm() replays the confirms queue (default false when exhausted).
+ *  When selects is provided, select() is defined and replays that queue.
+ *  When selects is absent, select is undefined (tests the numbered fallback path). */
 function catalogPrompt(opts: {
   asks: string[]
   secrets: string[]
   confirms?: boolean[]
-}): PromptPort & { infos: string[]; askCount: number } {
+  selects?: number[]
+}): PromptPort & { infos: string[]; askCount: number; selectCount: number } {
   let ai = 0
   let si = 0
   let ci = 0
+  let seli = 0
   const infos: string[] = []
   let askCount = 0
-  return {
+  let selectCount = 0
+  const selectsQueue = opts.selects
+  const obj: PromptPort & { infos: string[]; askCount: number; selectCount: number } = {
     infos,
     get askCount() { return askCount },
+    get selectCount() { return selectCount },
     ask: async () => { askCount++; return opts.asks[ai++] ?? '' },
     secret: async () => opts.secrets[si++] ?? '',
     confirm: async () => opts.confirms?.[ci++] ?? false,
     info: (m) => void infos.push(m),
+    ...(selectsQueue !== undefined
+      ? { select: async () => { selectCount++; return selectsQueue[seli++] ?? 0 } }
+      : {}),
   }
+  return obj
 }
 
 function captureProvidersOut(): { port: ProvidersOutPort; written: ProvidersConfig[] } {
@@ -967,7 +978,7 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     const out = captureProvidersOut()
     const custom: ProviderCatalogEntry = {
       id: 'openai-compat',
-      label: 'Custom (OpenAI-compatible)',
+      label: 'Other — OpenAI-compatible API (you provide the URL)',
       needsKey: true,
       keyEnv: 'AISY_PROVIDER_CUSTOM_KEY',
     }
@@ -1112,6 +1123,123 @@ describe('interactive init — model picker (Task 4)', () => {
 
     expect(res.completed).toBe(true)
     expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-sonnet-4-7-custom' } })
+  })
+})
+
+describe('interactive init — arrow-key select (select present)', () => {
+  // When select() is defined, provider selection uses it and skips the numbered loop.
+  it('with select: provider chosen by index via select()', async () => {
+    const out = captureProvidersOut()
+    const anthropicEntry: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic (Claude API)',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+    }
+    const deepseekEntry: ProviderCatalogEntry = {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY',
+      defaultModels: ['deepseek-chat', 'deepseek-reasoner'],
+    }
+    // selects: [1, 0] → provider index 1 (deepseek), model index 0 (deepseek-chat)
+    const prompt = catalogPrompt({ asks: [], secrets: ['dk-secret'], selects: [1, 0] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [anthropicEntry, deepseekEntry],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
+    // select() called twice: once for provider, once for model.
+    expect(prompt.selectCount).toBe(2)
+    // ask() not called for provider/model (select handled it).
+    expect(prompt.askCount).toBe(0)
+  })
+
+  // Model select: index within defaultModels range → picks that model.
+  it('with select: model chosen by index within defaultModels range', async () => {
+    const out = captureProvidersOut()
+    const multi: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic (Claude API)',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    }
+    // selects: [0, 2] → provider index 0, model index 2 (claude-haiku-4-5-20251001)
+    const prompt = catalogPrompt({ asks: [], secrets: ['ak'], selects: [0, 2] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [multi],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' } })
+  })
+
+  // Model select: synthetic last index ("Other") → falls through to ask() for a custom id.
+  it('with select: model "Other" index (== defaultModels.length) falls back to ask() for a custom id', async () => {
+    const out = captureProvidersOut()
+    const multi: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic (Claude API)',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+    }
+    // selects: [0, 2] → provider index 0, model index 2 = the "Other" entry (defaultModels.length = 2)
+    // asks: ['claude-custom-9'] — the custom model id typed after choosing "Other"
+    const prompt = catalogPrompt({ asks: ['claude-custom-9'], secrets: ['ak'], selects: [0, 2] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [multi],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-custom-9' } })
+    // ask() called once (for the custom model id).
+    expect(prompt.askCount).toBe(1)
+  })
+
+  // Without select on the prompt, the numbered fallback loop still works (regression guard).
+  it('without select: numbered provider fallback still works', async () => {
+    const out = captureProvidersOut()
+    // No selects → select is undefined → falls back to numbered loop.
+    const prompt = catalogPrompt({ asks: ['1', ''], secrets: ['dk-secret'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [DEEPSEEK_ENTRY],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
+    // select was never defined so selectCount should be 0.
+    expect(prompt.selectCount).toBe(0)
+    // ask() called for provider number + model.
+    expect(prompt.askCount).toBe(2)
   })
 })
 

@@ -152,38 +152,59 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
 
       const catalog = deps.providerCatalog
       if (catalog && catalog.length > 0 && deps.providersOut) {
-        p.info('Providers:')
-        catalog.forEach((e, i) => p.info(`  ${i + 1}. ${e.label}`))
-
         const pickOne = async (): Promise<ProviderSelection> => {
-          // Validated selection loop — re-ask on invalid/out-of-range input.
-          let entry: (typeof catalog)[number] | undefined
-          while (entry === undefined) {
-            const raw = (await p.ask('Provider (number)', { default: '1' })).trim()
-            const n = Number.parseInt(raw, 10)
-            if (Number.isFinite(n) && n >= 1 && n <= catalog.length) {
-              entry = catalog[n - 1]
+          // Provider selection: arrow-key select when available, numbered fallback otherwise.
+          let resolvedEntry: (typeof catalog)[number] | undefined
+          if (p.select !== undefined) {
+            const idx = await p.select('Provider', catalog.map((e) => e.label))
+            resolvedEntry = catalog[idx] ?? catalog[0]
+          } else {
+            // Numbered fallback — show list, re-ask on invalid/out-of-range input.
+            p.info('Providers:')
+            catalog.forEach((e, i) => p.info(`  ${i + 1}. ${e.label}`))
+            while (resolvedEntry === undefined) {
+              const raw = (await p.ask('Provider (number)', { default: '1' })).trim()
+              const n = Number.parseInt(raw, 10)
+              if (Number.isFinite(n) && n >= 1 && n <= catalog.length) {
+                resolvedEntry = catalog[n - 1]
+              }
+              // If invalid/out-of-range, loop again (no silent fallback).
             }
-            // If invalid/out-of-range, loop again (no silent fallback).
           }
+          // Guard: catalog.length > 0 is checked before pickOne is defined, so
+          // resolvedEntry is always set by this point. The fallback below satisfies
+          // TypeScript's strict checks without widening the return type.
+          const entry = resolvedEntry ?? catalog[0]
+          if (entry === undefined) throw new Error('empty catalog')
           // Model picker: when the provider has a known model list, show it
-          // numbered and ask for a number (or a verbatim custom model name).
+          // numbered (or arrow-key) and ask for a selection or free-text model id.
           // When defaultModels is absent, fall back to the legacy free-text prompt.
           let model: string
           const models = entry.defaultModels
           if (models !== undefined && models.length > 0) {
-            p.info('Models:')
-            models.forEach((m, i) => p.info(`  ${i + 1}. ${m}`))
-            const raw = (await p.ask('Model (number)', { default: '1' })).trim()
-            const isNum = /^\d+$/.test(raw)
-            const n = Number.parseInt(raw, 10)
-            if (raw === '' || (isNum && n >= 1 && n <= models.length)) {
-              // Empty or a clean in-range number → pick from list (default is #1).
-              const idx = raw === '' ? 0 : n - 1
-              model = models[idx] ?? models[0] ?? ''
+            if (p.select !== undefined) {
+              // Arrow-key select: append synthetic "Other" as the last choice.
+              const choices = [...models, 'Other — type a model id']
+              const mi = await p.select('Model', choices)
+              if (mi < models.length) {
+                model = models[mi] ?? models[0] ?? ''
+              } else {
+                model = (await p.ask('Model id')).trim()
+              }
             } else {
-              // Anything else (a custom model id, or out-of-range) → verbatim custom.
-              model = raw
+              p.info('Models:')
+              models.forEach((m, i) => p.info(`  ${i + 1}. ${m}`))
+              const raw = (await p.ask('Model (number)', { default: '1' })).trim()
+              const isNum = /^\d+$/.test(raw)
+              const n = Number.parseInt(raw, 10)
+              if (raw === '' || (isNum && n >= 1 && n <= models.length)) {
+                // Empty or a clean in-range number → pick from list (default is #1).
+                const idx = raw === '' ? 0 : n - 1
+                model = models[idx] ?? models[0] ?? ''
+              } else {
+                // Anything else (a custom model id, or out-of-range) → verbatim custom.
+                model = raw
+              }
             }
           } else {
             const defModel = entry.defaultModels?.[0]

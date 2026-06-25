@@ -78,6 +78,71 @@ function makeReadlinePrompt(): PromptPort {
         })
         muted = true
       }),
+    select: (prompt: string, choices: string[], opts?: { defaultIndex?: number }): Promise<number> =>
+      new Promise((resolve) => {
+        // Raw-mode arrow-key single-select. No external dependencies.
+        // Renders an interactive list; Up/Down/k/j move, Enter confirms, Ctrl-C/Esc exits.
+        let active = opts?.defaultIndex ?? 0
+        // Clamp initial value to valid range.
+        if (active < 0) active = 0
+        if (active >= choices.length) active = choices.length > 0 ? choices.length - 1 : 0
+
+        const stdout = process.stdout
+        const stdin = process.stdin
+
+        const restore = (): void => {
+          process.stdin.setRawMode?.(false)
+          stdin.pause()
+          stdin.removeAllListeners('data')
+        }
+
+        const render = (firstRender: boolean): void => {
+          if (!firstRender) {
+            // Move cursor up N+1 lines (prompt + choices) and clear to end of screen.
+            stdout.write(`\x1b[${choices.length + 1}A\x1b[J`)
+          }
+          stdout.write(`${prompt}:\n`)
+          choices.forEach((c, i) => {
+            if (i === active) {
+              // Active row: cyan highlight
+              stdout.write(`  \x1b[36m❯ ${c}\x1b[0m\n`)
+            } else {
+              stdout.write(`    ${c}\n`)
+            }
+          })
+        }
+
+        render(true)
+
+        process.stdin.setRawMode?.(true)
+        stdin.resume()
+        stdin.setEncoding('utf8')
+
+        const onData = (chunk: string): void => {
+          if (chunk === '\x03' || chunk === '\x1b') {
+            // Ctrl-C or Esc — restore terminal and exit with code 130.
+            restore()
+            process.exit(130)
+          } else if (chunk === '\x1b[A' || chunk === 'k') {
+            // Up arrow or k
+            if (active > 0) active--
+            render(false)
+          } else if (chunk === '\x1b[B' || chunk === 'j') {
+            // Down arrow or j
+            if (active < choices.length - 1) active++
+            render(false)
+          } else if (chunk === '\r' || chunk === '\n') {
+            // Enter — confirm selection.
+            restore()
+            const chosen = choices[active] ?? ''
+            stdout.write(`${prompt}: ${chosen}\n`)
+            resolve(active)
+          }
+          // Any other key is silently ignored.
+        }
+
+        stdin.on('data', onData)
+      }),
   }
 }
 
