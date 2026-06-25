@@ -31,6 +31,7 @@ import { runTelegramPairing } from './interactive.js'
 
 export type {
   OnboardingOps,
+  UpdateResult,
   OnboardingDeps,
   InSessionCommands,
   InSessionDeps,

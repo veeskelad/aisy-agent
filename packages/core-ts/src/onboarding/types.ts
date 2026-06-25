@@ -160,6 +160,21 @@ export interface OnboardingOps {
 
   /** CLI: `aisy diagnostics [--out=path]` — redacted support bundle. */
   diagnostics(opts: { out?: string }): Promise<{ bundlePath: string; redactedFields: string[] }>
+
+  /**
+   * CLI: `aisy update` — update the global npm install to the latest published
+   * version. Optional so existing fakes/tests that spread OnboardingOps need
+   * no changes. Returns updated:true on success; updated:false on no-op or
+   * error; message is always a human-readable one-liner.
+   */
+  update?(): Promise<UpdateResult>
+}
+
+export interface UpdateResult {
+  updated: boolean
+  from: string
+  to?: string
+  message: string
 }
 
 export interface InSessionCommands {

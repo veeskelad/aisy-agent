@@ -50,6 +50,7 @@ Usage:
   aisy doctor [--fix] [--json] [--post-upgrade]     Full-stack health check (read-only by default)
               [--only=a,b] [--skip=a,b]
   aisy diagnostics [--out=path]                     Write a redacted support bundle
+  aisy update                                       Update to the latest published version
   aisy --help                                       Show this help`
 
 const list = (v: string | boolean | undefined): DoctorDomain[] | undefined =>
@@ -121,6 +122,15 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       const res = await ops.diagnostics(out0 !== undefined ? { out: out0 } : {})
       out(`diagnostics: wrote ${res.bundlePath} (redacted: ${res.redactedFields.join(', ') || 'none'})`)
       return 0
+    }
+    case 'update': {
+      if (ops.update === undefined) {
+        err('update: not supported')
+        return 2
+      }
+      const r = await ops.update()
+      out(r.message)
+      return r.updated ? 0 : 1
     }
     default:
       err(`unknown command: ${command}`)

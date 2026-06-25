@@ -127,4 +127,46 @@ describe('CLI router', () => {
     expect(SETUP_ELEMENTS).toContain('memory')
     expect(SETUP_ELEMENTS).toContain('personality')
   })
+
+  it('`update` routes to ops.update, prints message, returns 0 when updated:true', async () => {
+    const updateFn = vi.fn(async () => ({ updated: true, from: '0.0.0', message: 'Updated.' }))
+    const c = makeCli({ update: updateFn })
+    const code = await c.run(['update'])
+    expect(updateFn).toHaveBeenCalledOnce()
+    expect(c.out.join('')).toContain('Updated.')
+    expect(code).toBe(0)
+  })
+
+  it('`update` returns 1 when updated:false', async () => {
+    const c = makeCli({ update: vi.fn(async () => ({ updated: false, from: '0.0.0', message: 'Running from source.' })) })
+    const code = await c.run(['update'])
+    expect(code).toBe(1)
+    expect(c.out.join('')).toContain('Running from source.')
+  })
+
+  it('`update` exits 2 and prints error when ops.update is absent', async () => {
+    // Build a cli without update method
+    const c = makeCli()
+    // Remove update from ops
+    const { update: _removed, ...opsWithoutUpdate } = c.ops as typeof c.ops & { update?: unknown }
+    void _removed
+    const out: string[] = []
+    const err: string[] = []
+    const code = await runCli(['update'], {
+      ops: opsWithoutUpdate as typeof c.ops,
+      out: (s) => out.push(s),
+      err: (s) => err.push(s),
+      version: '0.0.0',
+    })
+    expect(code).toBe(2)
+    expect(err.join('')).toContain('update: not supported')
+  })
+
+  it('USAGE contains the `update` line', async () => {
+    const c = makeCli()
+    await c.run(['--help'])
+    const usage = c.out.join('\n')
+    expect(usage).toMatch(/aisy update/)
+    expect(usage).toMatch(/latest published version/i)
+  })
 })

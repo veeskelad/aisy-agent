@@ -7,13 +7,15 @@
 // wiring. No business logic — env vars and the local filesystem are the seams.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { makeOnboardingOps } from '../onboarding/index.js'
 import type {
+  OnboardingOps,
+  UpdateResult,
   PromptPort,
   TelegramPairUpdate,
   ProviderCatalogEntry,
@@ -87,7 +89,7 @@ const TOOL_CMD: Record<ToolName, [string, string[]]> = {
 type Db = { prepare(s: string): { get(): unknown }; close(): void }
 
 /** Build the onboarding ops with real Node adapters. Honors AISY_HOME. */
-export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
+export function makeNodeOnboardingOps(): OnboardingOps {
   const base = process.env['AISY_HOME'] ?? join(homedir(), '.aisy')
   const dbPath = join(base, 'memory.db')
   const vaultPath = join(base, 'vault.json')
@@ -353,7 +355,7 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
   // only prompts for what is genuinely missing.
   const env: Record<string, string> = { ...(process.env as Record<string, string>), ...loadVault() }
 
-  return makeOnboardingOps({
+  const base_ops = makeOnboardingOps({
     clock,
     fs: nodeFs,
     prereqs,
@@ -371,10 +373,73 @@ export function makeNodeOnboardingOps(): ReturnType<typeof makeOnboardingOps> {
     // Interactive only on a real TTY; piped/non-interactive stays env-driven.
     ...(process.stdin.isTTY ? { prompt: makeReadlinePrompt() } : {}),
   })
+
+  return { ...base_ops, update: nodeUpdate }
+}
+
+/**
+ * Detect whether we're running from a global npm install or source checkout,
+ * then update accordingly.
+ */
+function nodeUpdate(): Promise<UpdateResult> {
+  const from = harnessVersion()
+  const binPath = process.argv[1] ?? ''
+
+  // Global npm install: the bin lives inside node_modules/@aisy/app
+  if (binPath.includes('node_modules/@aisy/app')) {
+    return new Promise((resolve) => {
+      execFile('npm', ['install', '-g', '@aisy/app@latest'], (error, _stdout, stderr) => {
+        if (error) {
+          resolve({
+            updated: false,
+            from,
+            message: `Update failed: ${stderr.trim() || error.message}`,
+          })
+        } else {
+          resolve({
+            updated: true,
+            from,
+            message: 'Updated. Run `aisy doctor --post-upgrade` to verify.',
+          })
+        }
+      })
+    })
+  }
+
+  // Source checkout: user must update manually
+  return Promise.resolve({
+    updated: false,
+    from,
+    message: 'Running from source — update with: git pull && pnpm -r build',
+  })
 }
 
 /** Harness version from package.json (for the CLI version flag). */
 export function harnessVersion(): string {
   const pkg = req('../../package.json') as { version?: string }
   return pkg.version ?? '0.0.0'
+}
+
+/**
+ * Returns true when `candidate` is strictly newer than `current`.
+ * Compares major.minor.patch numerically; ignores pre-release/build metadata.
+ * Exported for unit testing.
+ */
+export function isNewerVersion(current: string, candidate: string): boolean {
+  const parse = (v: string): [number, number, number] => {
+    const parts = v.split('.')
+    const major = Number.parseInt(parts[0] ?? '0', 10)
+    const minor = Number.parseInt(parts[1] ?? '0', 10)
+    const patch = Number.parseInt(parts[2] ?? '0', 10)
+    return [
+      Number.isFinite(major) ? major : 0,
+      Number.isFinite(minor) ? minor : 0,
+      Number.isFinite(patch) ? patch : 0,
+    ]
+  }
+  const [cMaj, cMin, cPat] = parse(current)
+  const [nMaj, nMin, nPat] = parse(candidate)
+  if (nMaj !== cMaj) return nMaj > cMaj
+  if (nMin !== cMin) return nMin > cMin
+  return nPat > cPat
 }

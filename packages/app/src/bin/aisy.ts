@@ -38,6 +38,7 @@ import {
   DEFAULT_GENERAL_CARD,
   runCli,
   harnessVersion,
+  isNewerVersion,
   VoiceUnavailable,
   type AnthropicTool,
   type ApprovalDecision,
@@ -92,6 +93,26 @@ if (argv[0] !== 'run') {
 }
 
 // --- aisy run: boot the live agent ---
+
+// Non-blocking "update available" check. Fire-and-forget: any failure (offline,
+// timeout, parse error) is swallowed. Never delays or throws into the run path.
+void (async () => {
+  try {
+    const res = await fetch('https://registry.npmjs.org/@aisy/app/latest', {
+      signal: AbortSignal.timeout(3000),
+    })
+    const json = (await res.json()) as { version?: unknown }
+    const latest = typeof json.version === 'string' ? json.version : null
+    if (latest !== null && isNewerVersion(harnessVersion(), latest)) {
+      process.stderr.write(
+        `Update available: ${harnessVersion()} → ${latest}. Run \`aisy update\`.\n`,
+      )
+    }
+  } catch {
+    // Offline, timeout, parse failure — silently ignore.
+  }
+})()
+
 const base = process.env['AISY_HOME'] ?? join(homedir(), '.aisy')
 const vaultPath = join(base, 'vault.json')
 const grantsPath = join(base, 'grants.json')
