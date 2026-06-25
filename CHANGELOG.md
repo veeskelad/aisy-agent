@@ -17,6 +17,17 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.6] — 2026-06-25
+
+### Changed
+- **`aisy doctor` matches the single-provider setup and reads clearly.** Before `aisy init`
+  it shows one line (`not configured — run aisy init`) instead of a wall of legacy per-tier
+  failures. When configured it checks only what matters — Telegram token + chat id + the
+  chosen provider's key (and a fallback provider if set) — no more
+  `AISY_PROVIDER_REASONING/CRITIQUE/ROUTINE_KEY` or `AISY_MEMORY_ROOT`/`AISY_DB_PATH`.
+- **Colored doctor output** — `✓`/`✗`/`⚠` with a `N passed, M failed` summary and a fix hint
+  (respects `NO_COLOR` and non-TTY).
+
 ## [0.1.5] — 2026-06-25
 
 ### Fixed

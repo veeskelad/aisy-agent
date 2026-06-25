@@ -1,6 +1,6 @@
 {
   "name": "@aisy/app",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Aisy — the aisy CLI: boot the Telegram agent (run), onboard (init/setup), and health-check (doctor).",
   "license": "Apache-2.0",
   "repository": {
