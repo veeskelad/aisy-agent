@@ -17,6 +17,14 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.5] — 2026-06-25
+
+### Fixed
+- **`aisy update` no longer misreports "Running from source"** on a normal global
+  install. `process.argv[1]` is the bin symlink (e.g. `/opt/homebrew/bin/aisy`), not the
+  real file under `node_modules`; the check now resolves the symlink (realpath) and also
+  inspects the module URL, so a symlinked global install correctly runs `npm i -g @latest`.
+
 ## [0.1.4] — 2026-06-25
 
 ### Changed
