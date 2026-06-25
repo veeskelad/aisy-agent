@@ -166,12 +166,30 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
             }
             // If invalid/out-of-range, loop again (no silent fallback).
           }
-          // Model: always ask, right after the provider, pre-filled with the
-          // catalog default (Enter accepts it; type to override).
-          const defModel = entry.defaultModels?.[0]
-          const model =
-            (await p.ask(`Model (${entry.label})`, defModel !== undefined ? { default: defModel } : {})).trim() ||
-            (defModel ?? '')
+          // Model picker: when the provider has a known model list, show it
+          // numbered and ask for a number (or a verbatim custom model name).
+          // When defaultModels is absent, fall back to the legacy free-text prompt.
+          let model: string
+          const models = entry.defaultModels
+          if (models !== undefined && models.length > 0) {
+            p.info('Models:')
+            models.forEach((m, i) => p.info(`  ${i + 1}. ${m}`))
+            const raw = (await p.ask('Model (number)', { default: '1' })).trim()
+            const n = Number.parseInt(raw, 10)
+            if (raw === '' || raw === '1' || (Number.isFinite(n) && n >= 1 && n <= models.length)) {
+              // Empty or valid in-range number → pick from list (default is #1).
+              const idx = raw === '' ? 0 : n - 1
+              model = models[idx] ?? models[0] ?? ''
+            } else {
+              // Non-number or out-of-range → treat verbatim as custom model name.
+              model = raw
+            }
+          } else {
+            const defModel = entry.defaultModels?.[0]
+            model =
+              (await p.ask(`Model (${entry.label})`, defModel !== undefined ? { default: defModel } : {})).trim() ||
+              (defModel ?? '')
+          }
           if (entry.needsKey && entry.keyEnv) {
             const key = (await p.secret(`API key (${entry.label}):`)).trim()
             if (key.length > 0) collected[entry.keyEnv] = key
@@ -185,11 +203,24 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
           return { provider: entry.id, model }
         }
 
-        // Single-provider flow — no tier prompts.
+        // Primary provider — always required.
         const sel = await pickOne()
-        const config: ProvidersConfig = { default: sel }
         catalogSelections = [sel]
-        deps.providersOut.write(config)
+
+        // Optional fallback provider — used when the primary fails transiently.
+        const wantFallback = await p.confirm(
+          'Set up a fallback provider (used if the primary fails)?',
+          { default: false },
+        )
+        if (wantFallback) {
+          const sel2 = await pickOne()
+          catalogSelections = [sel, sel2]
+          const config: ProvidersConfig = { default: sel, fallback: sel2 }
+          deps.providersOut.write(config)
+        } else {
+          const config: ProvidersConfig = { default: sel }
+          deps.providersOut.write(config)
+        }
       } else {
         // Legacy: prompt the per-tier provider keys (no catalog injected).
         for (const tier of TIERS) {

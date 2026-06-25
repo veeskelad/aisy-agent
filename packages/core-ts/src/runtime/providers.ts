@@ -28,13 +28,13 @@ export interface ProviderEntry {
 }
 
 export const PROVIDER_CATALOG: readonly ProviderEntry[] = [
-  { id: 'anthropic', label: 'Anthropic (Claude API)', kind: 'anthropic', keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY', defaultModels: ['claude-sonnet-4-6', 'claude-opus-4-8'] },
-  { id: 'openai', label: 'OpenAI', kind: 'openai-compat', defaultBaseUrl: 'https://api.openai.com/v1', keyEnv: 'AISY_PROVIDER_OPENAI_KEY', defaultModels: ['gpt-4o'] },
-  { id: 'deepseek', label: 'DeepSeek', kind: 'openai-compat', defaultBaseUrl: 'https://api.deepseek.com/v1', keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY', defaultModels: ['deepseek-chat'] },
+  { id: 'anthropic', label: 'Anthropic (Claude API)', kind: 'anthropic', keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY', defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'] },
+  { id: 'openai', label: 'OpenAI', kind: 'openai-compat', defaultBaseUrl: 'https://api.openai.com/v1', keyEnv: 'AISY_PROVIDER_OPENAI_KEY', defaultModels: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
+  { id: 'deepseek', label: 'DeepSeek', kind: 'openai-compat', defaultBaseUrl: 'https://api.deepseek.com/v1', keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY', defaultModels: ['deepseek-chat', 'deepseek-reasoner'] },
   { id: 'openrouter', label: 'OpenRouter', kind: 'openai-compat', defaultBaseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'AISY_PROVIDER_OPENROUTER_KEY' },
-  { id: 'qwen', label: 'Qwen (DashScope)', kind: 'openai-compat', defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', keyEnv: 'AISY_PROVIDER_QWEN_KEY', defaultModels: ['qwen-plus'] },
-  { id: 'glm', label: 'GLM (Zhipu)', kind: 'openai-compat', defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', keyEnv: 'AISY_PROVIDER_GLM_KEY', defaultModels: ['glm-4-plus'] },
-  { id: 'gemini', label: 'Gemini (OpenAI-compat)', kind: 'openai-compat', defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'AISY_PROVIDER_GEMINI_KEY', defaultModels: ['gemini-2.0-flash'] },
+  { id: 'qwen', label: 'Qwen (DashScope)', kind: 'openai-compat', defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', keyEnv: 'AISY_PROVIDER_QWEN_KEY', defaultModels: ['qwen-plus', 'qwen-max', 'qwen-turbo'] },
+  { id: 'glm', label: 'GLM (Zhipu)', kind: 'openai-compat', defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', keyEnv: 'AISY_PROVIDER_GLM_KEY', defaultModels: ['glm-4-plus', 'glm-4'] },
+  { id: 'gemini', label: 'Gemini (OpenAI-compat)', kind: 'openai-compat', defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'AISY_PROVIDER_GEMINI_KEY', defaultModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'] },
   { id: 'openai-compat', label: 'Custom (OpenAI-compatible)', kind: 'openai-compat', keyEnv: 'AISY_PROVIDER_CUSTOM_KEY' },
   { id: 'claude-cli', label: 'Claude CLI (subprocess, no key)', kind: 'cli', cliCommand: ['claude', '-p'] },
 ]

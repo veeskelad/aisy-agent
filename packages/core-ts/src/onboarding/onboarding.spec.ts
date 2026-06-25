@@ -832,13 +832,15 @@ describe('interactive init (ADR-0049)', () => {
 // ---------------------------------------------------------------------------
 
 /** Catalog-flow prompt double: ask()/secret() replay their scripted queues
- *  in order. confirm() always returns true (retained for legacy path compat). */
+ *  in order. confirm() replays the confirms queue (default false when exhausted). */
 function catalogPrompt(opts: {
   asks: string[]
   secrets: string[]
+  confirms?: boolean[]
 }): PromptPort & { infos: string[]; askCount: number } {
   let ai = 0
   let si = 0
+  let ci = 0
   const infos: string[] = []
   let askCount = 0
   return {
@@ -846,7 +848,7 @@ function catalogPrompt(opts: {
     get askCount() { return askCount },
     ask: async () => { askCount++; return opts.asks[ai++] ?? '' },
     secret: async () => opts.secrets[si++] ?? '',
-    confirm: async () => true,
+    confirm: async () => opts.confirms?.[ci++] ?? false,
     info: (m) => void infos.push(m),
   }
 }
@@ -1026,6 +1028,162 @@ describe('interactive init — provider catalog (ADR-0050)', () => {
     expect(res.completed).toBe(true)
     expect(out.written[0]).toEqual({ default: { provider: 'claude-cli', model: 'sonnet' } })
     expect(res.outcomes.some((o) => o.step === 'validate.provider.claude-cli' && o.result === 'done')).toBe(true)
+  })
+})
+
+describe('interactive init — model picker (Task 4)', () => {
+  // A provider with defaultModels shows a numbered list; '1' selects the first model.
+  it('numbered model list: input "1" selects the first model', async () => {
+    const out = captureProvidersOut()
+    const multi: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    }
+    // provider '1', model '1' (= claude-opus-4-8)
+    const prompt = catalogPrompt({ asks: ['1', '1'], secrets: ['ak'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [multi],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-opus-4-8' } })
+    // Models: header + 3 numbered entries should appear in infos
+    const infos = prompt.infos.join('\n')
+    expect(infos).toContain('Models:')
+    expect(infos).toContain('1. claude-opus-4-8')
+    expect(infos).toContain('2. claude-sonnet-4-6')
+  })
+
+  // Picking by number "2" selects the second model.
+  it('numbered model list: input "2" selects the second model', async () => {
+    const out = captureProvidersOut()
+    const multi: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+    }
+    const prompt = catalogPrompt({ asks: ['1', '2'], secrets: ['ak'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [multi],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-sonnet-4-6' } })
+  })
+
+  // A non-number non-empty input is treated verbatim as a custom model name.
+  it('numbered model list: a non-number input is treated verbatim as a custom model name', async () => {
+    const out = captureProvidersOut()
+    const multi: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+    }
+    // Power user types a custom model name instead of a number.
+    const prompt = catalogPrompt({ asks: ['1', 'claude-sonnet-4-7-custom'], secrets: ['ak'] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [multi],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'anthropic', model: 'claude-sonnet-4-7-custom' } })
+  })
+})
+
+describe('interactive init — fallback provider (Task 5)', () => {
+  // confirm=yes → second pickOne() → config includes fallback
+  it('when user confirms fallback, second pickOne() runs and config includes fallback', async () => {
+    const out = captureProvidersOut()
+    const anthropicEntry: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-opus-4-8', 'claude-sonnet-4-6'],
+    }
+    const deepseekEntry: ProviderCatalogEntry = {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY',
+      defaultModels: ['deepseek-chat', 'deepseek-reasoner'],
+    }
+    const catalog = [anthropicEntry, deepseekEntry]
+    // Primary: provider '1' (anthropic), model '1' (claude-opus-4-8)
+    // Fallback: provider '2' (deepseek), model '1' (deepseek-chat)
+    // confirms: [true] → yes to fallback
+    const prompt = catalogPrompt({
+      asks: ['1', '1', '2', '1'],
+      secrets: ['ak', 'dk'],
+      confirms: [true],
+    })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: catalog,
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({
+      default: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      fallback: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+  })
+
+  // confirm=no → no second pickOne(), config has no fallback key
+  it('when user declines fallback, config has no fallback key', async () => {
+    const out = captureProvidersOut()
+    const deepseekEntry: ProviderCatalogEntry = {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY',
+      defaultModels: ['deepseek-chat'],
+    }
+    // confirms: [] → defaults to false
+    const prompt = catalogPrompt({ asks: ['1', '1'], secrets: ['dk'], confirms: [false] })
+    const deps = makeDeps({
+      env: { ...PRESENT_ENV },
+      vault: makeFakeVault(),
+      prompt,
+      providerCatalog: [deepseekEntry],
+      providersOut: out.port,
+    })
+
+    const res = await makeOnboardingOps(deps).init({})
+
+    expect(res.completed).toBe(true)
+    expect(out.written[0]).toEqual({ default: { provider: 'deepseek', model: 'deepseek-chat' } })
+    expect(out.written[0]).not.toHaveProperty('fallback')
   })
 })
 

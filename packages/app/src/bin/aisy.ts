@@ -74,6 +74,7 @@ import {
   makeGoalSpec,
   makeExactCache,
   makeMemoryExactCacheStore,
+  makeFailoverProvider,
   type GoalMode,
   type NightlyConfig,
   type TriggerBudget,
@@ -145,6 +146,8 @@ interface ProviderSel {
 interface ProvidersConfig {
   default?: ProviderSel
   tiers?: { reasoning: ProviderSel; critique: ProviderSel; routine: ProviderSel }
+  /** Fallback provider used when the primary fails with a transient error. */
+  fallback?: ProviderSel
   /** Per-(sub)agent overrides + budgets (ADR-0050 Phase 3). The main agent's
    *  budget may also come from AISY_BUDGET_USD. */
   agents?: Record<string, { provider?: string; model?: string; budgetUsd?: number }>
@@ -266,13 +269,16 @@ function adapterFor(sel: ProviderSel): ProviderAdapter {
     ...(baseUrl ? { baseUrl } : {}),
   })
 }
-const provider: ProviderAdapter = providersCfg.tiers
+const primaryAdapter: ProviderAdapter = providersCfg.tiers
   ? makeTieredProvider({
       reasoning: adapterFor(providersCfg.tiers.reasoning),
       critique: adapterFor(providersCfg.tiers.critique),
       routine: adapterFor(providersCfg.tiers.routine),
     })
   : adapterFor(defaultSel)
+const provider: ProviderAdapter = providersCfg.fallback
+  ? makeFailoverProvider(primaryAdapter, adapterFor(providersCfg.fallback))
+  : primaryAdapter
 // The 'mixed (per-tier)' sentinel is matched by event-bridge.ts renderEvent
 // (cost.summary) to show the tiered note instead of a fake model name (#15).
 // Keep the two literals in sync; the event-bridge spec asserts on this exact value.

@@ -289,10 +289,14 @@ export interface ProviderSelection {
 }
 
 /** Persisted provider config (`~/.aisy/providers.json`). `tiers` absent ⇒ the
- *  single `default` model serves every tier (the "one model" simple mode). */
+ *  single `default` model serves every tier (the "one model" simple mode).
+ *  `fallback` is used when the primary errors with a transient failure. */
 export interface ProvidersConfig {
   default?: ProviderSelection
   tiers?: Record<RouteTier, ProviderSelection>
+  /** Optional fallback provider, used when the primary fails with a transient
+   *  error (network, 5xx, 429, timeout). Only set when chosen during init. */
+  fallback?: ProviderSelection
 }
 
 /** Port that persists the chosen ProvidersConfig (the node adapter writes
