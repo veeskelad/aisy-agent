@@ -156,6 +156,18 @@ docs/guides/           # quick-start, dev setup, deployment
   [nightly consolidation](docs/concepts/nightly-consolidation.md)
 - **Build & run:** [DEVELOPMENT.md](DEVELOPMENT.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)
 
+## Releasing
+
+Releases are **tag-driven** — CI builds and publishes; no manual `pnpm publish`.
+
+1. Add the version's entry to [CHANGELOG.md](CHANGELOG.md).
+2. `scripts/release.sh X.Y.Z` — bumps every package version, commits, tags `vX.Y.Z`, pushes.
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the gates,
+`pnpm -r publish --provenance` to npm (so the packages show "Built and signed on GitHub
+Actions"), and cuts the GitHub Release. Requires the `NPM_TOKEN` repo secret to hold a
+granular **read-write + bypass-2FA** npm token.
+
 ## License
 
 [Apache-2.0](LICENSE) — chosen for its explicit patent grant; see
