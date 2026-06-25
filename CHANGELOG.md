@@ -17,6 +17,14 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.7] — 2026-06-25
+
+### Fixed
+- **`aisy run` no longer crashes on a fresh install.** A new `aisy init` scaffolds the
+  memory tree but not the derived FTS index; `aisy run` read `listLive()` at boot and
+  threw `CorruptIndexError` ("cold start: no index on disk") before the bot ever polled —
+  so the bot never responded. Boot now builds the index first (idempotent, cheap).
+
 ## [0.1.6] — 2026-06-25
 
 ### Changed
