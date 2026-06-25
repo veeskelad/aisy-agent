@@ -17,6 +17,15 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.4] — 2026-06-25
+
+### Changed
+- **`aisy init` uses arrow-key selection** (↑/↓ + Enter) to choose the provider and
+  model — no more typing numbers. Falls back to a numbered prompt when stdin is not a TTY.
+- **Cleaner provider names** — dropped implementation jargon: `Gemini` (was "Gemini
+  (OpenAI-compat)"), `Qwen` (was "Qwen (DashScope)"), `Other — OpenAI-compatible API
+  (you provide the URL)` (was "Custom (OpenAI-compatible)"), `Claude CLI (no API key)`.
+
 ## [0.1.3] — 2026-06-25
 
 More `aisy init` fixes + two requested features, all from dogfooding.

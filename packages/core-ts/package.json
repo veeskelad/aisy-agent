@@ -1,6 +1,6 @@
 {
   "name": "@aisy/core",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Aisy core — agent loop, memory, safety, provider adapters, and the runtime composition surface.",
   "license": "Apache-2.0",
   "repository": {
