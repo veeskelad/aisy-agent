@@ -446,6 +446,10 @@ const processStartTime = Date.now()
 // v1 limitation: facts/validators are captured at process boot; facts added during
 // the session are consolidated only after a restart — a facts-thunk for live
 // freshness is a follow-up. Both facts AND validators are boot-time → internally consistent.
+// Cold start (fresh `aisy init`): the memory tree exists but the derived FTS index
+// (memory.db) does not yet — build it before the first read, or listLive() throws
+// CorruptIndexError and the bot never reaches polling. Idempotent + cheap.
+await memoryStore.rebuildFromFiles()
 const bootLiveFacts = await memoryStore.listLive()
 const exactStore = makeMemoryExactCacheStore()
 const nightlyExact = process.env['AISY_NIGHTLY_EXACT_CACHE'] === '1'
