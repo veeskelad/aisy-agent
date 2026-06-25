@@ -17,6 +17,22 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.9] — 2026-06-25
+
+### Fixed
+- **The agent now has a real identity and behaviour out of the box.** `aisy init`
+  scaffolded placeholder files AND wrote them to the working directory instead of
+  `~/.aisy/memory` (where the runtime reads the frozen system prefix) — so a fresh agent
+  ran with an empty system prompt and behaved as a generic assistant (wrong identity,
+  shallow replies, no tool follow-through, switched to English). Init now writes a real
+  **SOUL.md** (Aisy persona: use your tools and follow through, remember, answer in the
+  operator's language), **constitution.md**, **USER.md**, and **MEMORY.md** into
+  `~/.aisy/memory`, and the init filesystem operates inside `AISY_HOME` rather than the cwd.
+
+### Added
+- **Telegram UX** — a "typing…" indicator while the agent works, the `/` command menu
+  (`setMyCommands`), and persistent menu buttons on every reply.
+
 ## [0.1.8] — 2026-06-25
 
 ### Added
