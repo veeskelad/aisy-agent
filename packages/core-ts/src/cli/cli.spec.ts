@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { runCli, parseArgs, SETUP_ELEMENTS } from './index.js'
-import type { OnboardingOps, DoctorReport, InitResult } from '../onboarding/index.js'
+import type { OnboardingOps, DoctorReport, DoctorCheck, InitResult } from '../onboarding/index.js'
 
 function report(over: Partial<DoctorReport> = {}): DoctorReport {
   return { ok: true, ranAt: '2026-06-13T00:00:00.000Z', harnessVersion: '0.0.0', checks: [], ...over }
@@ -10,7 +10,7 @@ function initResult(over: Partial<InitResult> = {}): InitResult {
 }
 
 interface Cap { out: string[]; err: string[]; ops: OnboardingOps }
-function makeCli(over: Partial<OnboardingOps> = {}): Cap & { run(argv: string[]): Promise<number> } {
+function makeCli(over: Partial<OnboardingOps> = {}, color?: boolean): Cap & { run(argv: string[]): Promise<number> } {
   const out: string[] = []
   const err: string[] = []
   const ops: OnboardingOps = {
@@ -20,7 +20,18 @@ function makeCli(over: Partial<OnboardingOps> = {}): Cap & { run(argv: string[])
     diagnostics: vi.fn(async () => ({ bundlePath: '/tmp/aisy-diag.tgz', redactedFields: ['AISY_PROVIDER_KEY'] })),
     ...over,
   }
-  return { out, err, ops, run: (argv) => runCli(argv, { ops, out: (s) => out.push(s), err: (s) => err.push(s), version: '0.0.0' }) }
+  const base = { ops, out: (s: string) => out.push(s), err: (s: string) => err.push(s), version: '0.0.0' }
+  return { out, err, ops, run: (argv) => runCli(argv, color !== undefined ? { ...base, color } : base) }
+}
+
+// Small fake DoctorReport with pass + fail checks for printReport tests.
+function fakeReport(ok: boolean): DoctorReport {
+  const checks: DoctorCheck[] = [
+    { id: 'env.required-keys', domain: 'env', status: 'pass', severity: 'critical', detail: 'all required keys present', fixable: false },
+    { id: 'telegram.token-valid', domain: 'telegram', status: ok ? 'pass' : 'fail', severity: 'critical', detail: ok ? 'bot token valid' : 'token rejected (HTTP 401)', fixable: false },
+    { id: 'vault.loads', domain: 'vault', status: 'pass', severity: 'critical', detail: 'vault loads; seeded secrets decrypt', fixable: false },
+  ]
+  return { ok, ranAt: '2026-06-13T00:00:00.000Z', harnessVersion: '0.0.0', checks }
 }
 
 describe('CLI router', () => {
@@ -168,5 +179,64 @@ describe('CLI router', () => {
     const usage = c.out.join('\n')
     expect(usage).toMatch(/aisy update/)
     expect(usage).toMatch(/latest published version/i)
+  })
+})
+
+describe('printReport — Hermes-style colored output', () => {
+  it('color:false emits ✓/✗ and summary, no ANSI escape codes', async () => {
+    const passReport = fakeReport(true)
+    const c = makeCli({ doctor: vi.fn(async () => passReport) }, false)
+    await c.run(['doctor'])
+    const text = c.out.join('\n')
+
+    // Contains tick symbols.
+    expect(text).toContain('✓')
+    // Contains summary (N passed).
+    expect(text).toMatch(/\d+ passed/)
+    // No ANSI escape codes.
+    expect(text).not.toContain('\x1b[')
+  })
+
+  it('color:false with fail: emits ✗ and summary, no ANSI escape codes', async () => {
+    const failReport = fakeReport(false)
+    const c = makeCli({ doctor: vi.fn(async () => failReport) }, false)
+    await c.run(['doctor'])
+    const text = c.out.join('\n')
+
+    expect(text).toContain('✗')
+    expect(text).toMatch(/\d+ failed/)
+    expect(text).not.toContain('\x1b[')
+  })
+
+  it('color:true emits green ANSI for pass and red ANSI for fail', async () => {
+    const failReport = fakeReport(false)
+    const c = makeCli({ doctor: vi.fn(async () => failReport) }, true)
+    await c.run(['doctor'])
+    const text = c.out.join('\n')
+
+    // Green for pass lines (dim green), red for fail (header + ✗ + summary).
+    expect(text).toContain('\x1b[32m')  // green
+    expect(text).toContain('\x1b[31m')  // red
+  })
+
+  it('color:true healthy report has green "healthy" headline and no red', async () => {
+    const passReport = fakeReport(true)
+    const c = makeCli({ doctor: vi.fn(async () => passReport) }, true)
+    await c.run(['doctor'])
+    const text = c.out.join('\n')
+
+    expect(text).toContain('\x1b[32m')  // green
+    // No red when all pass.
+    expect(text).not.toContain('\x1b[31m')
+  })
+
+  it('header line contains check count and harness version', async () => {
+    const r = fakeReport(true)
+    const c = makeCli({ doctor: vi.fn(async () => r) }, false)
+    await c.run(['doctor'])
+    const text = c.out.join('\n')
+
+    expect(text).toContain(`${r.checks.length} checks`)
+    expect(text).toContain(r.harnessVersion)
   })
 })

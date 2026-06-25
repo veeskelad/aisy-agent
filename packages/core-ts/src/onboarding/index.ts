@@ -453,50 +453,51 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     // providers (keys from the merged env/vault map) instead of legacy tiers.
     const provCfg = deps.providersIn?.read() ?? null
     const catalog = deps.providerCatalog ?? []
-    const chosenSelections = provCfg
-      ? [
-          ...(provCfg.default ? [provCfg.default] : []),
-          ...(provCfg.tiers ? Object.values(provCfg.tiers) : []),
-        ]
-      : []
-    const distinctChosen = [...new Map(chosenSelections.map((s) => [s.provider, s])).values()]
-    const requiredKeys: readonly string[] = provCfg
-      ? [
-          'AISY_TELEGRAM_BOT_TOKEN',
-          'AISY_TELEGRAM_CHAT_ID',
-          'AISY_MEMORY_ROOT',
-          'AISY_DB_PATH',
-          ...distinctChosen
-            .map((s) => catalog.find((e) => e.id === s.provider))
-            .filter((e): e is NonNullable<typeof e> => !!e && e.needsKey && !!e.keyEnv)
-            .map((e) => e.keyEnv as string),
-        ]
-      : REQUIRED_ENV_KEYS
 
-    // env (critical) — required keys present.
-    {
-      let missing: string[]
-      if (provCfg) {
-        missing = requiredKeys.filter((k) => envValueOf(k).length === 0)
-      } else {
-        const body = deps.fs.exists('.env') ? deps.fs.read('.env') : ''
-        const present = parseEnvBody(body)
-        missing = requiredKeys.filter((k) => !present.has(k))
-      }
-      const ok = missing.length === 0
+    // Unconfigured state (no providers.json): emit a single setup.configured
+    // fail and skip all per-provider checks — nothing to ping yet.
+    if (provCfg === null) {
       add({
-        id: 'env.required-keys',
+        id: 'setup.configured',
         domain: 'env',
-        status: ok ? 'pass' : 'fail',
+        status: 'fail',
         severity: 'critical',
-        detail: ok ? 'all required keys present' : `missing required keys: ${missing.join(', ')}`,
+        detail: 'not configured — run `aisy init`',
         fixable: false,
       })
-    }
+      // Skip env.required-keys and all provider reachability checks.
+    } else {
+      // Configured: validate the chosen provider set (default + tiers + fallback).
+      const chosenSelections = [
+        ...(provCfg.default ? [provCfg.default] : []),
+        ...(provCfg.tiers ? Object.values(provCfg.tiers) : []),
+        ...(provCfg.fallback ? [provCfg.fallback] : []),
+      ]
+      const distinctChosen = [...new Map(chosenSelections.map((s) => [s.provider, s])).values()]
+      const requiredKeys: readonly string[] = [
+        'AISY_TELEGRAM_BOT_TOKEN',
+        'AISY_TELEGRAM_CHAT_ID',
+        ...distinctChosen
+          .map((s) => catalog.find((e) => e.id === s.provider))
+          .filter((e): e is NonNullable<typeof e> => !!e && e.needsKey && !!e.keyEnv)
+          .map((e) => e.keyEnv as string),
+      ]
 
-    // providers (high) — reachability ping. Catalog install ⇒ ping the chosen
-    // providers; otherwise the legacy per-tier ping.
-    if (provCfg) {
+      // env (critical) — required keys present.
+      {
+        const missing = requiredKeys.filter((k) => envValueOf(k).length === 0)
+        const ok = missing.length === 0
+        add({
+          id: 'env.required-keys',
+          domain: 'env',
+          status: ok ? 'pass' : 'fail',
+          severity: 'critical',
+          detail: ok ? 'all required keys present' : `missing required keys: ${missing.join(', ')}`,
+          fixable: false,
+        })
+      }
+
+      // providers (high) — reachability ping for each distinct chosen provider.
       for (const sel of distinctChosen) {
         const entry = catalog.find((e) => e.id === sel.provider)
         if (!entry || !entry.needsKey || !entry.keyEnv) {
@@ -521,19 +522,6 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
           status: ping.ok ? 'pass' : 'fail',
           severity: 'high',
           detail: ping.ok ? `${sel.provider} key reachable` : redact(`${sel.provider} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
-          fixable: false,
-        })
-      }
-    } else {
-      for (const tier of TIERS) {
-        const key = envValueOf(`AISY_PROVIDER_${tier.toUpperCase()}_KEY`)
-        const ping = await deps.validators.pingProvider(tier, key)
-        add({
-          id: `providers.${tier}.reachable`,
-          domain: 'providers',
-          status: ping.ok ? 'pass' : 'fail',
-          severity: 'high',
-          detail: ping.ok ? `${tier} key reachable` : redact(`${tier} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
           fixable: false,
         })
       }

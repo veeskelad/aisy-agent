@@ -90,6 +90,7 @@ if (argv[0] !== 'run') {
       out: (s) => process.stdout.write(s + '\n'),
       err: (s) => process.stderr.write(s + '\n'),
       version: harnessVersion(),
+      color: process.stdout.isTTY === true && !process.env['NO_COLOR'],
     })
     process.exit(exitCode)
   } catch (err) {

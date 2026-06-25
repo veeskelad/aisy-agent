@@ -36,6 +36,8 @@ export interface CliDeps {
   out: (s: string) => void
   err: (s: string) => void
   version?: string
+  /** Enable ANSI color in printReport output. Default: false. */
+  color?: boolean
 }
 
 export const SETUP_ELEMENTS = ['provider', 'telegram', 'memory', 'personality'] as const
@@ -56,16 +58,53 @@ Usage:
 const list = (v: string | boolean | undefined): DoctorDomain[] | undefined =>
   typeof v === 'string' && v.length > 0 ? (v.split(',') as DoctorDomain[]) : undefined
 
-function printReport(r: DoctorReport, out: (s: string) => void): void {
-  out(`doctor: ${r.ok ? 'OK' : 'FAIL'} (${r.checks.length} checks, harness ${r.harnessVersion})`)
+// ---------------------------------------------------------------------------
+// Hermes-style colored doctor output.
+// ---------------------------------------------------------------------------
+
+function printReport(r: DoctorReport, out: (s: string) => void, color: boolean): void {
+  // ANSI helpers — only emit escape codes when color is enabled.
+  const green = (s: string): string => (color ? `\x1b[32m${s}\x1b[0m` : s)
+  const red = (s: string): string => (color ? `\x1b[31m${s}\x1b[0m` : s)
+  const yellow = (s: string): string => (color ? `\x1b[33m${s}\x1b[0m` : s)
+  const dim = (s: string): string => (color ? `\x1b[2m${s}\x1b[0m` : s)
+
+  const headline = r.ok ? green('healthy') : red('issues found')
+  out(`aisy doctor — ${headline}  (${r.checks.length} checks · harness ${r.harnessVersion})`)
+
+  let passed = 0
+  let failed = 0
+  let warned = 0
+
   for (const c of r.checks) {
-    if (c.status !== 'pass') out(`  [${c.status}/${c.severity}] ${c.id} — ${c.detail}`)
+    if (c.status === 'pass') {
+      passed++
+      out(dim(`  ✓ ${c.id}`))
+    } else if (c.status === 'warn') {
+      warned++
+      out(`  ${yellow('⚠')} ${c.id} — ${c.detail}`)
+    } else {
+      failed++
+      out(`  ${red('✗')} ${c.id} — ${c.detail}`)
+    }
+  }
+
+  const parts: string[] = []
+  if (passed > 0) parts.push(green(`${passed} passed`))
+  if (failed > 0) parts.push(red(`${failed} failed`))
+  if (warned > 0) parts.push(yellow(`${warned} warnings`))
+  out('')
+  out(parts.join(', '))
+
+  if (failed > 0) {
+    out('Run `aisy init` to configure, then `aisy doctor` again.')
   }
 }
 
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   const { command, flags, positional } = parseArgs(argv)
   const { ops, out, err } = deps
+  const color = deps.color === true
 
   if (command === '' || command === 'help' || flags['help'] === true) {
     out(USAGE)
@@ -114,7 +153,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       if (skip) dopts.skip = skip
       const report = await ops.doctor(dopts)
       if (flags['json'] === true) out(ops.toJson(report))
-      else printReport(report, out)
+      else printReport(report, out, color)
       return report.ok ? 0 : 1
     }
     case 'diagnostics': {

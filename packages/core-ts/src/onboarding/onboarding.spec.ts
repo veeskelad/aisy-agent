@@ -27,6 +27,7 @@ import type {
   ProviderCatalogEntry,
   ProvidersConfig,
   ProvidersOutPort,
+  ProvidersInPort,
 } from './types.js'
 import type { PendingAction } from '../gateway/types.js'
 
@@ -84,7 +85,7 @@ function makeFakePrereqs(overrides: Partial<Record<string, string | null>> = {})
 }
 
 function makeFakeValidators(
-  opts: { provider?: boolean; providerStatus?: number; telegram?: boolean; telegramStatus?: number } = {},
+  opts: { provider?: boolean; providerStatus?: number; telegram?: boolean; telegramStatus?: number; catalogProvider?: boolean } = {},
 ): CredentialValidators & { seenSecrets: string[] } {
   const seenSecrets: string[] = []
   return {
@@ -99,7 +100,25 @@ function makeFakeValidators(
       const ok = opts.telegram ?? true
       return ok ? { ok: true, httpStatus: 200 } : { ok: false, httpStatus: opts.telegramStatus ?? 401 }
     },
+    pingCatalogProvider: async () => {
+      const ok = opts.catalogProvider ?? true
+      return ok ? { ok: true, httpStatus: 200 } : { ok: false, httpStatus: 401 }
+    },
   }
+}
+
+// Minimal catalog entry used by healthyDeps so doctor has a provider to validate.
+const HEALTHY_CATALOG_ENTRY: ProviderCatalogEntry = {
+  id: 'deepseek',
+  label: 'DeepSeek',
+  needsKey: true,
+  keyEnv: 'AISY_PROVIDER_DEEPSEEK_KEY',
+  defaultBaseUrl: 'https://api.deepseek.com/v1',
+  defaultModels: ['deepseek-chat'],
+}
+
+const HEALTHY_PROVIDERS_IN: ProvidersInPort = {
+  read: () => ({ default: { provider: 'deepseek', model: 'deepseek-chat' } }),
 }
 
 function makeFakeMemory(opts: { integrity?: boolean; facts?: number } = {}): MemoryPort & {
@@ -215,13 +234,22 @@ function makeDeps(overrides: Partial<OnboardingDeps> = {}): OnboardingDeps {
   }
 }
 
-/** Deps wired against a healthy, already-scaffolded tree (for doctor green). */
+/** Deps wired against a healthy, already-scaffolded tree (for doctor green).
+ * Includes a single-provider config so doctor uses the new single-provider path. */
 function healthyDeps(overrides: Partial<OnboardingDeps> = {}): OnboardingDeps {
   const vaultSecrets: Record<string, string> = {}
   for (const k of REQUIRED_ENV_KEYS) vaultSecrets[k] = `value-${k}`
+  vaultSecrets['AISY_PROVIDER_DEEPSEEK_KEY'] = 'value-deepseek-key'
+  const env: Record<string, string> = {}
+  for (const k of REQUIRED_ENV_KEYS) env[k] = `value-${k}`
+  env['AISY_PROVIDER_DEEPSEEK_KEY'] = 'value-deepseek-key'
   return makeDeps({
     fs: makeFakeFs(healthySeed()),
     vault: makeFakeVault(vaultSecrets),
+    env,
+    validators: makeFakeValidators({ catalogProvider: true }),
+    providerCatalog: [HEALTHY_CATALOG_ENTRY],
+    providersIn: HEALTHY_PROVIDERS_IN,
     ...overrides,
   })
 }
@@ -423,12 +451,12 @@ describe('Onboarding & Operations (component 13)', () => {
 
   // AC-13-9 — missing required env key => ok:false, exactly one env critical fail.
   it('AC-13-9: a missing required env key yields ok:false and exactly one critical fail in domain env', async () => {
-    const seed = healthySeed()
-    // Drop one required key from the .env body.
-    seed['.env'] = REQUIRED_ENV_KEYS.filter((k) => k !== 'AISY_DB_PATH')
-      .map((k) => `${k}=value-${k}`)
-      .join('\n')
-    const deps = healthyDeps({ fs: makeFakeFs(seed) })
+    // Drop AISY_TELEGRAM_BOT_TOKEN from the env (required by the new single-provider path).
+    const envWithout: Record<string, string> = {
+      AISY_TELEGRAM_CHAT_ID: 'value-AISY_TELEGRAM_CHAT_ID',
+      AISY_PROVIDER_DEEPSEEK_KEY: 'value-deepseek-key',
+    }
+    const deps = healthyDeps({ env: envWithout })
 
     const report = await makeOnboardingOps(deps).doctor({})
 
@@ -441,13 +469,12 @@ describe('Onboarding & Operations (component 13)', () => {
   // AC-13-8b — telegram doctor row requires exactly one allowlisted chat_id (spec §4 matrix).
   it('AC-13-8b: doctor telegram domain fails (critical) when zero or multiple chat_ids are allowlisted, passes for exactly one', async () => {
     const withChatId = (value: string): OnboardingDeps => {
-      const seed = healthySeed()
-      seed['.env'] = REQUIRED_ENV_KEYS.map((k) =>
-        k === 'AISY_TELEGRAM_CHAT_ID' ? `${k}=${value}` : `${k}=value-${k}`,
-      ).join('\n')
-      const env: Record<string, string> = {}
-      for (const k of REQUIRED_ENV_KEYS) env[k] = k === 'AISY_TELEGRAM_CHAT_ID' ? value : `value-${k}`
-      return healthyDeps({ fs: makeFakeFs(seed), env })
+      const env: Record<string, string> = {
+        AISY_TELEGRAM_BOT_TOKEN: 'value-AISY_TELEGRAM_BOT_TOKEN',
+        AISY_TELEGRAM_CHAT_ID: value,
+        AISY_PROVIDER_DEEPSEEK_KEY: 'value-deepseek-key',
+      }
+      return healthyDeps({ env })
     }
 
     // Zero chat_ids configured: telegram domain must report a critical fail
@@ -504,7 +531,7 @@ describe('Onboarding & Operations (component 13)', () => {
 
   // AC-13-12 — --json deterministic (byte-identical) + secret-free.
   it('AC-13-12: doctor --json is byte-identical across two runs over identical state and contains no secret', async () => {
-    const secret = 'value-AISY_PROVIDER_REASONING_KEY'
+    const secret = 'value-deepseek-key'
     const run1 = await makeOnboardingOps(healthyDeps()).doctor({})
     const run2 = await makeOnboardingOps(healthyDeps()).doctor({})
 
@@ -1316,7 +1343,7 @@ describe('interactive init — fallback provider (Task 5)', () => {
 })
 
 describe('doctor — provider-aware (ADR-0050)', () => {
-  it('with providers.json: pings the chosen provider, not legacy tiers; required-keys pass from vault env', async () => {
+  it('with providers.json: pings the chosen provider; required-keys are telegram + provider key (not memory/db)', async () => {
     const pinged: string[] = []
     const validators: CredentialValidators = {
       ...makeFakeValidators(),
@@ -1325,13 +1352,12 @@ describe('doctor — provider-aware (ADR-0050)', () => {
         return { ok: true, httpStatus: 200 }
       },
     }
-    // env carries the chosen provider key + telegram/memory (vault-merged in prod).
+    // env carries only the required keys for the new single-provider model.
+    // AISY_MEMORY_ROOT and AISY_DB_PATH are NOT required (they default in the bin).
     const env: Record<string, string> = {
       AISY_PROVIDER_DEEPSEEK_KEY: 'dk',
       AISY_TELEGRAM_BOT_TOKEN: 'tok',
       AISY_TELEGRAM_CHAT_ID: '42',
-      AISY_MEMORY_ROOT: '/m',
-      AISY_DB_PATH: '/db',
     }
     const deps = makeDeps({
       fs: makeFakeFs(healthySeed()),
@@ -1348,11 +1374,82 @@ describe('doctor — provider-aware (ADR-0050)', () => {
     expect(prov?.status).toBe('pass')
     const env0 = report.checks.find((c) => c.id === 'env.required-keys')
     expect(env0?.status).toBe('pass')
+    // AISY_MEMORY_ROOT and AISY_DB_PATH are NOT in the required keys.
+    expect(env0?.detail).not.toContain('AISY_MEMORY_ROOT')
+    expect(env0?.detail).not.toContain('AISY_DB_PATH')
+    // setup.configured is absent (we are configured).
+    expect(report.checks.find((c) => c.id === 'setup.configured')).toBeUndefined()
   })
 
-  it('without providers.json: legacy per-tier checks still run', async () => {
-    const deps = healthyDeps() // no providersIn ⇒ legacy path
+  it('unconfigured (no providers.json): exactly one setup.configured fail, no tier keys, no provider reachability checks', async () => {
+    // No providersIn → provCfg is null → unconfigured path.
+    const deps = makeDeps({
+      fs: makeFakeFs(healthySeed()),
+    })
     const report = await makeOnboardingOps(deps).doctor({})
-    expect(report.checks.some((c) => c.id === 'providers.reasoning.reachable')).toBe(true)
+
+    // Exactly one setup.configured fail.
+    const setupCheck = report.checks.filter((c) => c.id === 'setup.configured')
+    expect(setupCheck).toHaveLength(1)
+    expect(setupCheck[0]?.status).toBe('fail')
+    expect(setupCheck[0]?.severity).toBe('critical')
+    expect(setupCheck[0]?.detail).toContain('aisy init')
+
+    // No tier-key checks (AISY_PROVIDER_REASONING_KEY etc.).
+    const tierKeyCheck = report.checks.find((c) => c.id === 'env.required-keys')
+    expect(tierKeyCheck).toBeUndefined()
+
+    // No provider reachability checks.
+    const reachabilityChecks = report.checks.filter((c) => c.domain === 'providers')
+    expect(reachabilityChecks).toHaveLength(0)
+
+    // report.ok is false because setup.configured is critical + fail.
+    expect(report.ok).toBe(false)
+  })
+
+  it('configured with fallback: fallback provider is included in reachability checks', async () => {
+    const pinged: string[] = []
+    const validators: CredentialValidators = {
+      ...makeFakeValidators(),
+      pingCatalogProvider: async (o) => {
+        pinged.push(o.providerId)
+        return { ok: true, httpStatus: 200 }
+      },
+    }
+    const anthropicEntry: ProviderCatalogEntry = {
+      id: 'anthropic',
+      label: 'Anthropic',
+      needsKey: true,
+      keyEnv: 'AISY_PROVIDER_ANTHROPIC_KEY',
+      defaultModels: ['claude-sonnet-4-6'],
+    }
+    const env: Record<string, string> = {
+      AISY_PROVIDER_DEEPSEEK_KEY: 'dk',
+      AISY_PROVIDER_ANTHROPIC_KEY: 'ak',
+      AISY_TELEGRAM_BOT_TOKEN: 'tok',
+      AISY_TELEGRAM_CHAT_ID: '42',
+    }
+    const deps = makeDeps({
+      fs: makeFakeFs(healthySeed()),
+      env,
+      validators,
+      providerCatalog: [DEEPSEEK_ENTRY, anthropicEntry],
+      providersIn: {
+        read: () => ({
+          default: { provider: 'deepseek', model: 'deepseek-chat' },
+          fallback: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        }),
+      },
+    })
+
+    const report = await makeOnboardingOps(deps).doctor({})
+
+    // Both providers were pinged.
+    expect(pinged.sort()).toEqual(['anthropic', 'deepseek'])
+    expect(report.checks.find((c) => c.id === 'providers.deepseek.reachable')?.status).toBe('pass')
+    expect(report.checks.find((c) => c.id === 'providers.anthropic.reachable')?.status).toBe('pass')
+    // Required keys include both provider keys.
+    const envCheck = report.checks.find((c) => c.id === 'env.required-keys')
+    expect(envCheck?.status).toBe('pass')
   })
 })
