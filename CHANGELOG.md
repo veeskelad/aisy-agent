@@ -17,6 +17,15 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.2] — 2026-06-25
+
+### Added
+- **`aisy update`** — update the global install to the latest published version
+  (`npm i -g @aisy/app@latest`); prints a `git pull && pnpm -r build` hint when run
+  from a source checkout. Suggests `aisy doctor --post-upgrade` after updating.
+- **Boot update notice** — `aisy run` prints a non-blocking "update available" line
+  when a newer version is published (best-effort registry check; never blocks the bot).
+
 ## [0.1.1] — 2026-06-24
 
 CLI/onboarding fixes from dogfooding 0.1.0.
