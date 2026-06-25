@@ -17,6 +17,23 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.3] — 2026-06-25
+
+More `aisy init` fixes + two requested features, all from dogfooding.
+
+### Fixed
+- **`aisy init` no longer crashes on a fresh machine** — `~/.aisy` is created before
+  writing `providers.json` / `vault.json` (was a first-run `ENOENT`).
+- **Clean CLI errors** — a failed command prints `aisy: <message>`, never a raw Node stack trace.
+- **Visible key entry** — the API-key prompt masks input with `*` instead of hiding it entirely.
+
+### Added
+- **Model picker** — `aisy init` lists current models for the chosen provider; pick a
+  number or type a custom model id.
+- **Optional fallback provider** — `aisy init` can configure a backup provider; the agent
+  fails over to it on a transient error (5xx / 429 / network) from the primary. 4xx client
+  errors (bad key/request) propagate and are not masked.
+
 ## [0.1.2] — 2026-06-25
 
 ### Added
