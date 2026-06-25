@@ -175,13 +175,14 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
             p.info('Models:')
             models.forEach((m, i) => p.info(`  ${i + 1}. ${m}`))
             const raw = (await p.ask('Model (number)', { default: '1' })).trim()
+            const isNum = /^\d+$/.test(raw)
             const n = Number.parseInt(raw, 10)
-            if (raw === '' || raw === '1' || (Number.isFinite(n) && n >= 1 && n <= models.length)) {
-              // Empty or valid in-range number → pick from list (default is #1).
+            if (raw === '' || (isNum && n >= 1 && n <= models.length)) {
+              // Empty or a clean in-range number → pick from list (default is #1).
               const idx = raw === '' ? 0 : n - 1
               model = models[idx] ?? models[0] ?? ''
             } else {
-              // Non-number or out-of-range → treat verbatim as custom model name.
+              // Anything else (a custom model id, or out-of-range) → verbatim custom.
               model = raw
             }
           } else {
