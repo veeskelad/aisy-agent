@@ -6,7 +6,7 @@
 // both the (legacy) core entry and the app's unified `aisy` CLI share one
 // wiring. No business logic — env vars and the local filesystem are the seams.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, unlinkSync } from 'node:fs'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
@@ -22,6 +22,7 @@ import type {
   ProvidersConfig,
 } from '../onboarding/types.js'
 import { PROVIDER_CATALOG, findProvider } from './providers.js'
+import { systemdUnit, launchdPlist } from './service-files.js'
 
 /** Readline-backed interactive prompt; secret() mutes echo for token entry. */
 function makeReadlinePrompt(): PromptPort {
@@ -447,7 +448,147 @@ export function makeNodeOnboardingOps(): OnboardingOps {
     ...(process.stdin.isTTY ? { prompt: makeReadlinePrompt() } : {}),
   })
 
-  return { ...base_ops, update: nodeUpdate }
+  return { ...base_ops, update: nodeUpdate, service: nodeService }
+}
+
+type ServiceAction = 'install' | 'start' | 'stop' | 'restart' | 'status' | 'uninstall'
+
+/** Run a command via execFile; returns stdout on success or an error message. */
+function runCmd(cmd: string, args: string[]): Promise<{ ok: boolean; out: string; message: string }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        resolve({ ok: false, out: '', message: (stderr ?? '').trim() || error.message })
+      } else {
+        resolve({ ok: true, out: (stdout ?? '').trim(), message: (stdout ?? '').trim() })
+      }
+    })
+  })
+}
+
+async function nodeService(action: ServiceAction): Promise<{ ok: boolean; message: string }> {
+  const execPath = process.execPath
+  const rawBin = process.argv[1] ?? ''
+  let binPath = rawBin
+  try {
+    if (rawBin) binPath = realpathSync(rawBin)
+  } catch {
+    /* fall back to the raw path */
+  }
+  const home = process.env['AISY_HOME'] ?? join(homedir(), '.aisy')
+  const logPath = join(home, 'run.log')
+
+  const platform = process.platform
+
+  if (platform === 'linux') {
+    const unitDir = join(homedir(), '.config', 'systemd', 'user')
+    const unitPath = join(unitDir, 'aisy.service')
+
+    if (action === 'install') {
+      try {
+        mkdirSync(unitDir, { recursive: true })
+        writeFileSync(unitPath, systemdUnit({ execPath, binPath, home, logPath }), 'utf8')
+      } catch (e) {
+        return { ok: false, message: `service: failed to write unit file: ${String(e)}` }
+      }
+      const reload = await runCmd('systemctl', ['--user', 'daemon-reload'])
+      if (!reload.ok) return { ok: false, message: `service: daemon-reload failed: ${reload.message}` }
+      const enable = await runCmd('systemctl', ['--user', 'enable', '--now', 'aisy.service'])
+      if (!enable.ok) return { ok: false, message: `service: enable failed: ${enable.message}` }
+      return {
+        ok: true,
+        message:
+          'Aisy service installed and started.\nNote: run `loginctl enable-linger $USER` so the service survives logout and reboot.',
+      }
+    }
+
+    if (action === 'uninstall') {
+      const disable = await runCmd('systemctl', ['--user', 'disable', '--now', 'aisy.service'])
+      try {
+        unlinkSync(unitPath)
+      } catch {
+        /* already gone — that is fine */
+      }
+      await runCmd('systemctl', ['--user', 'daemon-reload'])
+      return disable.ok
+        ? { ok: true, message: 'Aisy service disabled and unit file removed.' }
+        : { ok: false, message: `service: disable failed: ${disable.message}` }
+    }
+
+    if (action === 'status') {
+      const r = await runCmd('systemctl', ['--user', 'is-active', 'aisy.service'])
+      const state = r.out.length > 0 ? r.out : r.message
+      return { ok: r.ok, message: `aisy.service: ${state}` }
+    }
+
+    // start / stop / restart
+    const r = await runCmd('systemctl', ['--user', action, 'aisy.service'])
+    return r.ok
+      ? { ok: true, message: `aisy.service ${action}ed.` }
+      : { ok: false, message: `service: ${action} failed: ${r.message}` }
+  }
+
+  if (platform === 'darwin') {
+    const plistDir = join(homedir(), 'Library', 'LaunchAgents')
+    const plistPath = join(plistDir, 'com.aisy.agent.plist')
+
+    if (action === 'install') {
+      try {
+        mkdirSync(plistDir, { recursive: true })
+        writeFileSync(plistPath, launchdPlist({ execPath, binPath, home, logPath }), 'utf8')
+      } catch (e) {
+        return { ok: false, message: `service: failed to write plist: ${String(e)}` }
+      }
+      // Unload first (ignore error — not loaded yet on first install).
+      await runCmd('launchctl', ['unload', plistPath])
+      const load = await runCmd('launchctl', ['load', '-w', plistPath])
+      return load.ok
+        ? { ok: true, message: 'Aisy agent installed and loaded.' }
+        : { ok: false, message: `service: launchctl load failed: ${load.message}` }
+    }
+
+    if (action === 'uninstall') {
+      const unload = await runCmd('launchctl', ['unload', plistPath])
+      try {
+        unlinkSync(plistPath)
+      } catch {
+        /* already gone */
+      }
+      return unload.ok
+        ? { ok: true, message: 'Aisy agent unloaded and plist removed.' }
+        : { ok: false, message: `service: launchctl unload failed: ${unload.message}` }
+    }
+
+    if (action === 'status') {
+      const r = await runCmd('launchctl', ['list'])
+      if (!r.ok) return { ok: false, message: `service: launchctl list failed: ${r.message}` }
+      const line = r.out.split('\n').find((l) => l.includes('com.aisy.agent'))
+      return line !== undefined
+        ? { ok: true, message: `com.aisy.agent: ${line.trim()}` }
+        : { ok: false, message: 'com.aisy.agent: not loaded' }
+    }
+
+    if (action === 'restart') {
+      const stop = await runCmd('launchctl', ['stop', 'com.aisy.agent'])
+      if (!stop.ok) return { ok: false, message: `service: stop failed: ${stop.message}` }
+      const start = await runCmd('launchctl', ['start', 'com.aisy.agent'])
+      return start.ok
+        ? { ok: true, message: 'com.aisy.agent restarted.' }
+        : { ok: false, message: `service: start failed: ${start.message}` }
+    }
+
+    // start / stop
+    const subcmd = action === 'start' ? 'start' : 'stop'
+    const r = await runCmd('launchctl', [subcmd, 'com.aisy.agent'])
+    return r.ok
+      ? { ok: true, message: `com.aisy.agent ${action}ed.` }
+      : { ok: false, message: `service: ${action} failed: ${r.message}` }
+  }
+
+  return {
+    ok: false,
+    message: "service: unsupported platform — run `aisy run` under tmux/your own supervisor",
+  }
 }
 
 /**

@@ -168,6 +168,14 @@ export interface OnboardingOps {
    * error; message is always a human-readable one-liner.
    */
   update?(): Promise<UpdateResult>
+
+  /**
+   * CLI: `aisy service <install|start|stop|restart|status|uninstall>`.
+   * Registers the bot as a systemd user unit (Linux) or launchd agent (macOS)
+   * that auto-restarts on crash and survives reboots. Optional so fakes and
+   * non-node environments need no changes.
+   */
+  service?(action: 'install' | 'start' | 'stop' | 'restart' | 'status' | 'uninstall'): Promise<{ ok: boolean; message: string }>
 }
 
 export interface UpdateResult {

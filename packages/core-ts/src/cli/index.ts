@@ -43,6 +43,9 @@ export interface CliDeps {
 export const SETUP_ELEMENTS = ['provider', 'telegram', 'memory', 'personality'] as const
 export type SetupElement = (typeof SETUP_ELEMENTS)[number]
 
+export const SERVICE_ACTIONS = ['install', 'start', 'stop', 'restart', 'status', 'uninstall'] as const
+export type ServiceAction = (typeof SERVICE_ACTIONS)[number]
+
 const USAGE = `aisy — personal agent harness
 
 Usage:
@@ -53,6 +56,7 @@ Usage:
               [--only=a,b] [--skip=a,b]
   aisy diagnostics [--out=path]                     Write a redacted support bundle
   aisy update                                       Update to the latest published version
+  aisy service <install|start|stop|restart|status|uninstall>   Run the bot as an auto-restarting OS service
   aisy --help                                       Show this help`
 
 const list = (v: string | boolean | undefined): DoctorDomain[] | undefined =>
@@ -170,6 +174,21 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       const r = await ops.update()
       out(r.message)
       return r.updated ? 0 : 1
+    }
+    case 'service': {
+      const raw = positional[0] ?? 'status'
+      if (!(SERVICE_ACTIONS as readonly string[]).includes(raw)) {
+        err(`service: unknown action "${raw}". Valid actions: ${SERVICE_ACTIONS.join(', ')}`)
+        return 2
+      }
+      const action = raw as ServiceAction
+      if (ops.service === undefined) {
+        err('service: not supported')
+        return 2
+      }
+      const r = await ops.service(action)
+      out(r.message)
+      return r.ok ? 0 : 1
     }
     default:
       err(`unknown command: ${command}`)

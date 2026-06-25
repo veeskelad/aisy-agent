@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { runCli, parseArgs, SETUP_ELEMENTS } from './index.js'
+import { runCli, parseArgs, SETUP_ELEMENTS, SERVICE_ACTIONS } from './index.js'
 import type { OnboardingOps, DoctorReport, DoctorCheck, InitResult } from '../onboarding/index.js'
 
 function report(over: Partial<DoctorReport> = {}): DoctorReport {
@@ -179,6 +179,73 @@ describe('CLI router', () => {
     const usage = c.out.join('\n')
     expect(usage).toMatch(/aisy update/)
     expect(usage).toMatch(/latest published version/i)
+  })
+})
+
+describe('service command routing', () => {
+  const makeServiceCli = (
+    serviceImpl?: OnboardingOps['service'],
+  ): ReturnType<typeof makeCli> => {
+    return makeCli(serviceImpl !== undefined ? { service: serviceImpl } : {})
+  }
+
+  it('`service install` routes to ops.service("install"), prints message, returns 0 on ok:true', async () => {
+    const svcFn = vi.fn(async () => ({ ok: true, message: 'Installed.' }))
+    const c = makeServiceCli(svcFn)
+    const code = await c.run(['service', 'install'])
+    expect(svcFn).toHaveBeenCalledWith('install')
+    expect(c.out.join('')).toContain('Installed.')
+    expect(code).toBe(0)
+  })
+
+  it('`service install` returns 1 when ok:false', async () => {
+    const svcFn = vi.fn(async () => ({ ok: false, message: 'Failed.' }))
+    const c = makeServiceCli(svcFn)
+    const code = await c.run(['service', 'install'])
+    expect(code).toBe(1)
+    expect(c.out.join('')).toContain('Failed.')
+  })
+
+  it('`service` with no action defaults to "status"', async () => {
+    const svcFn = vi.fn(async () => ({ ok: true, message: 'active' }))
+    const c = makeServiceCli(svcFn)
+    await c.run(['service'])
+    expect(svcFn).toHaveBeenCalledWith('status')
+  })
+
+  it('`service <unknown>` exits 2 and names the valid actions', async () => {
+    const svcFn = vi.fn(async () => ({ ok: true, message: 'ok' }))
+    const c = makeServiceCli(svcFn)
+    const code = await c.run(['service', 'frobnicate'])
+    expect(code).toBe(2)
+    const errText = c.err.join('\n')
+    expect(errText).toContain('frobnicate')
+    for (const a of SERVICE_ACTIONS) expect(errText).toContain(a)
+  })
+
+  it('`service install` when ops.service is absent exits 2 with error', async () => {
+    // makeCli creates ops without service by default
+    const c = makeCli()
+    const code = await c.run(['service', 'install'])
+    expect(code).toBe(2)
+    expect(c.err.join('')).toContain('service: not supported')
+  })
+
+  it('USAGE contains the service line', async () => {
+    const c = makeCli()
+    await c.run(['--help'])
+    const usage = c.out.join('\n')
+    expect(usage).toMatch(/aisy service/)
+    expect(usage).toMatch(/auto-restarting OS service/)
+  })
+
+  it('SERVICE_ACTIONS contains all six expected values', () => {
+    expect(SERVICE_ACTIONS).toContain('install')
+    expect(SERVICE_ACTIONS).toContain('start')
+    expect(SERVICE_ACTIONS).toContain('stop')
+    expect(SERVICE_ACTIONS).toContain('restart')
+    expect(SERVICE_ACTIONS).toContain('status')
+    expect(SERVICE_ACTIONS).toContain('uninstall')
   })
 })
 

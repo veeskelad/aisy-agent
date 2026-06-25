@@ -93,6 +93,8 @@ export { makeJsonlSessionLog } from './runtime/session-log.js'
 // --- CLI (the app's unified `aisy` reuses these for init/doctor/diagnostics) ---
 export { makeNodeOnboardingOps, harnessVersion, isNewerVersion } from './runtime/onboarding-node.js'
 export { runCli } from './cli/index.js'
+export { systemdUnit, launchdPlist } from './runtime/service-files.js'
+export type { ServiceOpts } from './runtime/service-files.js'
 
 // --- Safety: grant store (transport records grants; app may inspect/reset) ---
 export { makeGrantStore } from './safety/index.js'
