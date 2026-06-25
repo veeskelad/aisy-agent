@@ -6,7 +6,7 @@
 // both the (legacy) core entry and the app's unified `aisy` CLI share one
 // wiring. No business logic — env vars and the local filesystem are the seams.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
@@ -454,12 +454,32 @@ export function makeNodeOnboardingOps(): OnboardingOps {
  * Detect whether we're running from a global npm install or source checkout,
  * then update accordingly.
  */
+/**
+ * True when the running code is an installed package (under node_modules), not a
+ * source checkout. `process.argv[1]` is the bin SYMLINK path (e.g.
+ * /opt/homebrew/bin/aisy), so we also check its realpath and the module URL —
+ * either of those lands under node_modules for a global install. Pure + testable.
+ */
+export function detectGlobalInstall(binPath: string, binReal: string, moduleUrl: string): boolean {
+  return (
+    binReal.includes('/node_modules/') ||
+    binPath.includes('node_modules/@aisy/app') ||
+    moduleUrl.includes('/node_modules/')
+  )
+}
+
 function nodeUpdate(): Promise<UpdateResult> {
   const from = harnessVersion()
   const binPath = process.argv[1] ?? ''
+  let binReal = binPath
+  try {
+    if (binPath) binReal = realpathSync(binPath)
+  } catch {
+    /* not resolvable — fall back to the raw path */
+  }
 
-  // Global npm install: the bin lives inside node_modules/@aisy/app
-  if (binPath.includes('node_modules/@aisy/app')) {
+  // Global npm install: the resolved bin / module lives inside node_modules.
+  if (detectGlobalInstall(binPath, binReal, import.meta.url)) {
     return new Promise((resolve) => {
       execFile('npm', ['install', '-g', '@aisy/app@latest'], (error, _stdout, stderr) => {
         if (error) {
