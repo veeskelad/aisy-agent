@@ -83,13 +83,19 @@ const argv = process.argv.slice(2)
 
 // Non-run commands → onboarding CLI. `setup` is a validated alias for init (see SETUP_ELEMENTS).
 if (argv[0] !== 'run') {
-  const exitCode = await runCli(argv, {
-    ops: makeNodeOnboardingOps(),
-    out: (s) => process.stdout.write(s + '\n'),
-    err: (s) => process.stderr.write(s + '\n'),
-    version: harnessVersion(),
-  })
-  process.exit(exitCode)
+  try {
+    const exitCode = await runCli(argv, {
+      ops: makeNodeOnboardingOps(),
+      out: (s) => process.stdout.write(s + '\n'),
+      err: (s) => process.stderr.write(s + '\n'),
+      version: harnessVersion(),
+    })
+    process.exit(exitCode)
+  } catch (err) {
+    // Surface a clean status line, never a raw Node stack trace.
+    process.stderr.write(`aisy: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
+  }
 }
 
 // --- aisy run: boot the live agent ---

@@ -63,7 +63,13 @@ function makeReadlinePrompt(): PromptPort {
         const out = rl as unknown as { _writeToOutput?: (s: string) => void }
         let muted = false
         out._writeToOutput = (s: string): void => {
-          if (!muted) process.stdout.write(s)
+          if (!muted) {
+            process.stdout.write(s)
+          } else if (s === '\n' || s === '\r' || s === '\r\n') {
+            process.stdout.write(s) // pass newlines through
+          } else {
+            process.stdout.write('*'.repeat(s.length)) // mask typed input so entry is visible
+          }
         }
         rl.question(`${q} `, (a) => {
           rl.close()
@@ -224,6 +230,7 @@ export function makeNodeOnboardingOps(): OnboardingOps {
 
   const providersOut = {
     write(config: ProvidersConfig): void {
+      mkdirSync(base, { recursive: true }) // first-run: ~/.aisy may not exist yet
       writeFileSync(join(base, 'providers.json'), JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 })
     },
   }
@@ -293,6 +300,7 @@ export function makeNodeOnboardingOps(): OnboardingOps {
     seed(name: string, value: string): void {
       const s = loadVault()
       s[name] = value
+      mkdirSync(base, { recursive: true }) // first-run: ~/.aisy may not exist yet
       writeFileSync(vaultPath, JSON.stringify(s, null, 2), { encoding: 'utf8', mode: 0o600 })
     },
     loads: (): boolean => existsSync(vaultPath),
