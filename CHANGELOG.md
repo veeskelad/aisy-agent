@@ -17,6 +17,14 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.8] — 2026-06-25
+
+### Added
+- **`aisy service`** — run the bot as an auto-restarting OS service. `aisy service install`
+  writes a systemd user unit (Linux: `Restart=always` + start on boot) or a launchd agent
+  (macOS: `KeepAlive`), plus `start` / `stop` / `restart` / `status` / `uninstall`. The bot
+  now survives crashes, terminal close, and reboot.
+
 ## [0.1.7] — 2026-06-25
 
 ### Fixed
