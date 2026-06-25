@@ -799,7 +799,55 @@ function templateFor(path: string): string {
     return REQUIRED_ENV_KEYS.map((k) => `${k}=`).join('\n') + '\n'
   }
   const name = path.split('/').pop() ?? path
-  return `# ${name}\n\nScaffolded by aisy init. Edit this file directly.\n`
+  switch (name) {
+    case 'SOUL.md':
+      return `# Aisy
+
+You are Aisy, a personal AI agent. You are direct, capable, and honest.
+You get things done efficiently and flag risks before acting.
+You remember context across sessions and learn from interactions.
+
+When uncertain, ask rather than assume.
+When scope is ambiguous, clarify before proceeding.
+When you make a mistake, acknowledge it and correct course.
+
+Core traits:
+- Direct in communication - no unnecessary padding or hedging
+- Honest about limitations and uncertainty
+- Proactive: surface concerns before, not after, acting
+- Minimal footprint: do only what is asked, nothing more
+`
+
+    case 'constitution.md':
+      return `# Constitution
+
+[1] (veto) Do not take irreversible actions - including deleting data, sending messages, or modifying system settings - without explicit human confirmation in the current turn.
+[2] Never reveal, log, or transmit secrets, API keys, tokens, or credentials outside the agent runtime.
+[3] When scope or intent is unclear, ask for clarification rather than proceeding on assumptions.
+[4] Prefer reversible and targeted actions; avoid side effects beyond what the operator requested.
+`
+
+    case 'USER.md':
+      return `# User
+
+Edit this file to tell Aisy about you: your name, timezone, communication style,
+recurring tasks, or anything that helps the agent serve you better.
+`
+
+    case 'MEMORY.md':
+      // Byte-match the empty serializeMemoryIndex() output so nightly regen is
+      // stable: lines=['# Memory index',''].join('\n').replace(/\n+$/,'')+'\n'
+      return '# Memory index\n'
+
+    case 'AGENTS.md':
+      return `# Agents
+
+Runtime persona lives in \`memory/SOUL.md\`. Edit that file to customize Aisy's voice and personality.
+`
+
+    default:
+      return `# ${name}\n\nScaffolded by aisy init. Edit this file directly.\n`
+  }
 }
 
 // ===========================================================================

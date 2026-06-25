@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, unlin
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { makeOnboardingOps } from '../onboarding/index.js'
 import type {
@@ -170,21 +170,25 @@ export function makeNodeOnboardingOps(): OnboardingOps {
 
   const clock = { nowIso: (): string => new Date().toISOString() }
 
+  // Resolve relative paths against AISY_HOME so init scaffolds into ~/.aisy/
+  // rather than the cwd. Absolute paths are left unchanged (e.g. vaultPath).
+  const at = (p: string): string => (isAbsolute(p) ? p : join(base, p))
+
   const nodeFs = {
-    exists: (p: string): boolean => existsSync(p),
+    exists: (p: string): boolean => existsSync(at(p)),
     isPopulated: (p: string): boolean => {
-      if (!existsSync(p)) return false
-      return readFileSync(p, 'utf8').split('\n').some((l) => l.trim().length > 0 && !l.startsWith('#'))
+      if (!existsSync(at(p))) return false
+      return readFileSync(at(p), 'utf8').split('\n').some((l) => l.trim().length > 0 && !l.startsWith('#'))
     },
-    read: (p: string): string => readFileSync(p, 'utf8'),
+    read: (p: string): string => readFileSync(at(p), 'utf8'),
     write: (p: string, c: string): void => {
       // Ensure the parent dir exists — scaffolds like memory/constitution.md
       // are written before the memory tree dirs are mkdirp'd.
-      mkdirSync(dirname(p), { recursive: true })
-      writeFileSync(p, c, 'utf8')
+      mkdirSync(dirname(at(p)), { recursive: true })
+      writeFileSync(at(p), c, 'utf8')
     },
     mkdirp: (p: string): void => {
-      mkdirSync(p, { recursive: true })
+      mkdirSync(at(p), { recursive: true })
     },
   }
 

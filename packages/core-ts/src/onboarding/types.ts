@@ -441,17 +441,18 @@ export const REQUIRED_ENV_KEYS = [
   'AISY_DB_PATH',
 ] as const
 
-/** The fixed scaffolding manifest (spec §4) — top-level files + memory tree. */
+/** The fixed scaffolding manifest (spec §4) — top-level files + memory tree.
+ * The four frozen identity/memory files live exclusively under memory/ so they
+ * are co-located with memoryRoot and readable by readFrozenSnapshot(). */
 export const SCAFFOLD_FILES = [
   '.env',
-  'SOUL.md',
-  'constitution.md',
   'AGENTS.md',
-  'USER.md',
 ] as const
 
 export const MEMORY_TREE_FILES = [
   'memory/constitution.md',
+  'memory/SOUL.md',
+  'memory/USER.md',
   'memory/MEMORY.md',
 ] as const
 

@@ -4,6 +4,7 @@ import {
   REQUIRED_ENV_KEYS,
   MEMORY_TREE_DIRS,
 } from './types.js'
+import { parseConstitution, validateIdentity, parseSoul } from '../personality/index.js'
 import type {
   OnboardingDeps,
   InSessionDeps,
@@ -195,17 +196,16 @@ function makeFakeNightly(opts: { lockHeld?: boolean; cron?: boolean } = {}): Nig
 }
 
 /** A fully-scaffolded, healthy install seed (so init re-run is idempotent and
- * doctor passes). */
+ * doctor passes). The four frozen files live under memory/ matching MEMORY_TREE_FILES. */
 function healthySeed(): Record<string, string> {
   const env = REQUIRED_ENV_KEYS.map((k) => `${k}=value-${k}`).join('\n')
   return {
     '.env': env,
-    'SOUL.md': 'persona',
-    'constitution.md': 'rules',
     'AGENTS.md': 'agents',
-    'USER.md': 'user',
-    'memory/constitution.md': 'mc',
-    'memory/MEMORY.md': 'index',
+    'memory/constitution.md': '[1] (veto) no harm',
+    'memory/SOUL.md': 'persona',
+    'memory/USER.md': 'user',
+    'memory/MEMORY.md': '# Memory index',
     'memory/working': '<<DIR>>',
     'memory/daily': '<<DIR>>',
     'memory/archive': '<<DIR>>',
@@ -298,17 +298,19 @@ function makeInSessionDeps(overrides: Partial<InSessionDeps> = {}): InSessionDep
 
 describe('Onboarding & Operations (component 13)', () => {
   // AC-13-1 — init --non-interactive scaffolds all files + returns completed.
-  it('AC-13-1: init --non-interactive scaffolds .env, SOUL/constitution/AGENTS/USER + memory tree and completes', async () => {
+  // The four frozen identity files now live under memory/ (matching memoryRoot).
+  it('AC-13-1: init --non-interactive scaffolds .env, AGENTS.md + memory tree (SOUL/constitution/USER/MEMORY under memory/) and completes', async () => {
     const deps = makeDeps()
     const ops = makeOnboardingOps(deps)
     const res = await ops.init({ nonInteractive: true, yes: true })
 
     expect(res.completed).toBe(true)
-    for (const f of ['.env', 'SOUL.md', 'constitution.md', 'AGENTS.md', 'USER.md']) {
+    for (const f of ['.env', 'AGENTS.md']) {
       expect(res.scaffolded).toContain(f)
     }
-    expect(res.scaffolded).toContain('memory/constitution.md')
-    expect(res.scaffolded).toContain('memory/MEMORY.md')
+    for (const f of ['memory/constitution.md', 'memory/SOUL.md', 'memory/USER.md', 'memory/MEMORY.md']) {
+      expect(res.scaffolded).toContain(f)
+    }
     for (const d of MEMORY_TREE_DIRS) {
       expect((deps.fs as ReturnType<typeof makeFakeFs>).files.has(d)).toBe(true)
     }
@@ -333,22 +335,23 @@ describe('Onboarding & Operations (component 13)', () => {
   })
 
   // AC-13-3 — --force overwrites a populated file; no --force leaves it.
+  // SOUL.md now lives under memory/SOUL.md (matching memoryRoot).
   it('AC-13-3: --force overwrites a populated scaffolded file; without --force it is untouched', async () => {
     const seed = healthySeed()
-    seed['SOUL.md'] = 'OPERATOR EDITED PERSONA'
+    seed['memory/SOUL.md'] = 'OPERATOR EDITED PERSONA'
 
     const depsNoForce = healthyDeps({ fs: makeFakeFs({ ...seed }) })
     const fsNoForce = depsNoForce.fs as ReturnType<typeof makeFakeFs>
     await makeOnboardingOps(depsNoForce).init({ nonInteractive: true })
-    expect(fsNoForce.read('SOUL.md')).toBe('OPERATOR EDITED PERSONA')
-    expect(fsNoForce.writes).not.toContain('SOUL.md')
+    expect(fsNoForce.read('memory/SOUL.md')).toBe('OPERATOR EDITED PERSONA')
+    expect(fsNoForce.writes).not.toContain('memory/SOUL.md')
 
     const depsForce = healthyDeps({ fs: makeFakeFs({ ...seed }) })
     const fsForce = depsForce.fs as ReturnType<typeof makeFakeFs>
     const res = await makeOnboardingOps(depsForce).init({ nonInteractive: true, force: true })
-    expect(fsForce.read('SOUL.md')).not.toBe('OPERATOR EDITED PERSONA')
-    expect(fsForce.writes).toContain('SOUL.md')
-    expect(res.scaffolded).toContain('SOUL.md')
+    expect(fsForce.read('memory/SOUL.md')).not.toBe('OPERATOR EDITED PERSONA')
+    expect(fsForce.writes).toContain('memory/SOUL.md')
+    expect(res.scaffolded).toContain('memory/SOUL.md')
   })
 
   // AC-13-4 — provider key validated via ping; invalid => failed outcome, no secret in detail.
@@ -419,19 +422,20 @@ describe('Onboarding & Operations (component 13)', () => {
   })
 
   // AC-13-7 — resumable: partial tree completed by a second init, only missing steps redone.
+  // The frozen files now live under memory/ so partial = missing memory/USER.md.
   it('AC-13-7: a crash-partial tree is completed by a second init, redoing only the missing steps', async () => {
-    // Simulate a crash after scaffolding everything except USER.md.
+    // Simulate a crash after scaffolding everything except memory/USER.md.
     const partial = healthySeed()
-    delete partial['USER.md']
+    delete partial['memory/USER.md']
     const deps = healthyDeps({ fs: makeFakeFs(partial) })
     const fs = deps.fs as ReturnType<typeof makeFakeFs>
 
     const res = await makeOnboardingOps(deps).init({ nonInteractive: true })
 
     expect(res.completed).toBe(true)
-    expect(res.scaffolded).toEqual(['USER.md'])
-    expect(fs.writes).toEqual(['USER.md'])
-    const soul = res.outcomes.find((o) => o.step === 'scaffold.SOUL.md')
+    expect(res.scaffolded).toEqual(['memory/USER.md'])
+    expect(fs.writes).toEqual(['memory/USER.md'])
+    const soul = res.outcomes.find((o) => o.step === 'scaffold.memory/SOUL.md')
     expect(soul?.result).toBe('already-present')
   })
 
@@ -1451,5 +1455,99 @@ describe('doctor — provider-aware (ADR-0050)', () => {
     // Required keys include both provider keys.
     const envCheck = report.checks.find((c) => c.id === 'env.required-keys')
     expect(envCheck?.status).toBe('pass')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Part 0 + Part 1: scaffold placement + real template content
+// ---------------------------------------------------------------------------
+
+describe('init scaffold placement — frozen files under memory/', () => {
+  it('four frozen files are written to paths under memory/ (never at top level)', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    // All four frozen identity/memory files must be written under memory/
+    for (const path of ['memory/constitution.md', 'memory/SOUL.md', 'memory/USER.md', 'memory/MEMORY.md']) {
+      expect(fs.writes).toContain(path)
+    }
+    // Top-level frozen files must NOT be written
+    expect(fs.writes).not.toContain('SOUL.md')
+    expect(fs.writes).not.toContain('constitution.md')
+    expect(fs.writes).not.toContain('USER.md')
+  })
+})
+
+describe('templateFor — real persona/memory content', () => {
+  it('memory/SOUL.md template is real persona content (not a placeholder)', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    const soul = fs.files.get('memory/SOUL.md') ?? ''
+    expect(soul).not.toContain('Scaffolded by aisy init')
+    expect(soul.length).toBeGreaterThan(50)
+    // No em-dashes (U+2014) — spec voice rule
+    expect(soul).not.toContain('—')
+  })
+
+  it('memory/constitution.md template is real content (not a placeholder)', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    const constitution = fs.files.get('memory/constitution.md') ?? ''
+    expect(constitution).not.toContain('Scaffolded by aisy init')
+    expect(constitution.length).toBeGreaterThan(50)
+  })
+
+  it('memory/USER.md template is real content (not a placeholder)', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    const user = fs.files.get('memory/USER.md') ?? ''
+    expect(user).not.toContain('Scaffolded by aisy init')
+    expect(user.length).toBeGreaterThan(10)
+  })
+
+  it('memory/MEMORY.md template is exactly the empty serializeMemoryIndex() form', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    // serializeMemoryIndex() with zero rows produces exactly '# Memory index\n'
+    expect(fs.files.get('memory/MEMORY.md')).toBe('# Memory index\n')
+  })
+
+  it('.env template is unchanged (REQUIRED_ENV_KEYS=)', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    const env = fs.files.get('.env') ?? ''
+    for (const key of REQUIRED_ENV_KEYS) {
+      expect(env).toContain(`${key}=`)
+    }
+  })
+})
+
+describe('default constitution validity', () => {
+  it('default constitution parses with unique precedence + exactly one veto at the lowest precedence', async () => {
+    const deps = makeDeps()
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+    await makeOnboardingOps(deps).init({ nonInteractive: true, yes: true })
+
+    const raw = fs.files.get('memory/constitution.md') ?? ''
+    expect(raw.length).toBeGreaterThan(0)
+
+    const constitution = parseConstitution(raw)
+    const soul = parseSoul('default soul') // minimal non-empty soul for validation
+    const report = validateIdentity(constitution, soul)
+
+    expect(report.unique_precedence).toBe(true)
+    expect(report.exactly_one_veto).toBe(true)
+    expect(report.ok).toBe(true)
   })
 })
