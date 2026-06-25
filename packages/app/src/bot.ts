@@ -132,6 +132,25 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
   const debounceMs = deps.debounceMs ?? 1200
   const sessionId = String(deps.allowedChatId)
   const bot = new Bot(deps.token)
+
+  // Register the command menu once on boot (best-effort — a failure must not block startup).
+  void bot.api.setMyCommands([
+    { command: 'start', description: 'Show the menu' },
+    { command: 'menu', description: 'Show the menu' },
+    { command: 'stop', description: 'Abort the current turn' },
+    { command: 'goal', description: 'Start or manage a goal' },
+    { command: 'triggers', description: 'List active reminders/schedules/watches' },
+    { command: 'remind', description: 'Set a reminder' },
+    { command: 'schedule', description: 'Set a recurring task' },
+    { command: 'watch', description: 'Watch a file or URL' },
+    { command: 'untrigger', description: 'Cancel a trigger' },
+    { command: 'grants', description: 'Review tool grants' },
+    { command: 'staging', description: 'Review staged memory edits' },
+    { command: 'consolidate', description: 'Run nightly memory consolidation' },
+  ]).catch((e: unknown) => {
+    process.stderr.write(`aisy bot: setMyCommands failed (non-fatal): ${e instanceof Error ? e.message : String(e)}\n`)
+  })
+
   const pending = new Map<string, PendingCard>()
 
   // --- turn-flow state (Hermes coalescing + steering) ---
@@ -184,7 +203,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
 
   const sendReply = async (text: string): Promise<void> => {
     const fitted = fitBody(text.length > 0 ? text : '(пустой ответ)')
-    await bot.api.sendMessage(deps.allowedChatId, fitted.text, { parse_mode: 'HTML' })
+    await bot.api.sendMessage(deps.allowedChatId, fitted.text, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() })
     if (fitted.document) {
       await bot.api.sendDocument(
         deps.allowedChatId,
@@ -306,6 +325,8 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     agentState = 'running'
     const abort = new AbortController()
     currentAbort = abort
+    void bot.api.sendChatAction(deps.allowedChatId, 'typing').catch(() => {})
+    const typingTimer = setInterval(() => { void bot.api.sendChatAction(deps.allowedChatId, 'typing').catch(() => {}) }, 4000)
     try {
       const result = await runner.handle({
         sessionId,
@@ -366,6 +387,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
           .catch(() => {})
       }
     } finally {
+      clearInterval(typingTimer)
       agentState = 'idle'
       currentAbort = null
       // Drain mid-turn steer input (newest-first) and run it as the next turn.
