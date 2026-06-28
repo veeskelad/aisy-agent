@@ -3,16 +3,21 @@
 // FrozenSnapshot shapes differ — memory yields {bytes, sha256}; the loop wants
 // {prefixBytes, prefixHash, breakpoints, takenAt} — so this is a real translation.
 
+import { createHash } from 'node:crypto'
 import type { MemoryPort } from '../agent-loop/types.js'
 import type { Memory, RankedHit } from '../memory/index.js'
+import { AGENT_PROTOCOL } from './agent-protocol.js'
 
 export function makeMemoryPort(memory: Memory, nowIso: () => string): MemoryPort {
   return {
     snapshot: async () => {
       const snap = await memory.readFrozenSnapshot()
+      // Prepend the harness operating manual ahead of the persona/memory files.
+      // Constant ⇒ the prefix stays KV-cache-stable; hash covers the full prefix.
+      const bytes = Buffer.concat([Buffer.from(AGENT_PROTOCOL, 'utf8'), snap.bytes])
       return {
-        prefixBytes: new Uint8Array(snap.bytes),
-        prefixHash: snap.sha256,
+        prefixBytes: new Uint8Array(bytes),
+        prefixHash: createHash('sha256').update(bytes).digest('hex'),
         breakpoints: [],
         takenAt: nowIso(),
       }

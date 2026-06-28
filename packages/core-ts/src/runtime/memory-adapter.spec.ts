@@ -1,6 +1,7 @@
 // packages/core-ts/src/runtime/memory-adapter.spec.ts
 import { describe, it, expect } from 'vitest'
 import { makeMemoryPort, makeMemorySearch } from './memory-adapter.js'
+import { AGENT_PROTOCOL } from './agent-protocol.js'
 import type { Memory, RankedHit } from '../memory/index.js'
 
 function fakeMemory(over: Partial<Memory> = {}): Memory {
@@ -20,11 +21,14 @@ function fakeMemory(over: Partial<Memory> = {}): Memory {
 }
 
 describe('makeMemoryPort', () => {
-  it('bridges memory FrozenSnapshot {bytes,sha256} to the loop shape', async () => {
+  it('prepends the operating protocol, then the memory files; hashes the full prefix', async () => {
     const port = makeMemoryPort(fakeMemory(), () => '2026-06-16T00:00:00.000Z')
     const snap = await port.snapshot()
-    expect(Array.from(snap.prefixBytes)).toEqual(Array.from(Buffer.from('hello')))
-    expect(snap.prefixHash).toBe('abc123')
+    const text = Buffer.from(snap.prefixBytes).toString('utf8')
+    expect(text.startsWith(AGENT_PROTOCOL)).toBe(true) // harness protocol first
+    expect(text.endsWith('hello')).toBe(true) // then the persona/memory files
+    expect(snap.prefixHash).not.toBe('abc123') // hash covers protocol + files, not files alone
+    expect(snap.prefixHash).toMatch(/^[0-9a-f]{64}$/)
     expect(snap.breakpoints).toEqual([])
     expect(snap.takenAt).toBe('2026-06-16T00:00:00.000Z')
   })

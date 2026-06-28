@@ -124,7 +124,7 @@ function mainMenuKeyboard(): Keyboard {
     for (const b of row) kb.text(b.label)
     kb.row()
   }
-  return kb.resized().persistent()
+  return kb.resized()
 }
 
 export function makeTelegramBot(deps: TelegramBotDeps) {
@@ -203,7 +203,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
 
   const sendReply = async (text: string): Promise<void> => {
     const fitted = fitBody(text.length > 0 ? text : '(пустой ответ)')
-    await bot.api.sendMessage(deps.allowedChatId, fitted.text, { parse_mode: 'HTML', reply_markup: mainMenuKeyboard() })
+    await bot.api.sendMessage(deps.allowedChatId, fitted.text, { parse_mode: 'HTML' })
     if (fitted.document) {
       await bot.api.sendDocument(
         deps.allowedChatId,
@@ -281,7 +281,7 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
       if (sessions.length === 0) {
         await bot.api.sendMessage(deps.allowedChatId, 'Сессий пока нет.')
       } else {
-        const lines = sessions.map((s) => `• ${s.sessionId} · ${s.turns} ход${s.turns === 1 ? '' : 'ов'} · ${s.lastAt.slice(0, 10)}`)
+        const lines = sessions.map((s) => `• ${s.lastAt.slice(0, 10)} · ${s.turns} сообщ. · #${s.sessionId.slice(0, 6)}`)
         await bot.api.sendMessage(deps.allowedChatId, lines.join('\n'))
       }
     } else if (action === 'skills') {
