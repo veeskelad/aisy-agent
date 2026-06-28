@@ -17,6 +17,14 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.12] — 2026-06-28
+
+### Added
+- **The agent can reach the web.** Two new tools: **`web_search`** (keyless DuckDuckGo —
+  top results with title, URL, snippet) and **`fetch_url`** (fetch a public page and read its
+  text). The agent searches for current information, then reads the promising results. `fetch_url`
+  is SSRF-guarded (refuses localhost / private / link-local addresses).
+
 ## [0.1.11] — 2026-06-28
 
 ### Added
