@@ -46,6 +46,22 @@ import {
   type TapOutcome,
 } from '@aisy/telegram-gw'
 
+/**
+ * Pure helper: given a list of user spans and a memory recall string, returns
+ * the combined span list to pass to runner.handle. When mem is empty (no hits /
+ * recall skipped) the original spans are returned unchanged. Exported for unit tests.
+ */
+export function buildSpansWithRecall(
+  userSpans: Array<{ role: 'user'; provenance: Provenance; text: string }>,
+  mem: string,
+): Array<{ role: 'system' | 'user'; provenance: Provenance; text: string }> {
+  if (mem.length === 0) return userSpans
+  return [
+    { role: 'system' as const, provenance: 'operator' as const, text: 'Релевантное из памяти:\n' + mem },
+    ...userSpans,
+  ]
+}
+
 export interface TelegramBotDeps {
   token: string
   allowedChatId: number
@@ -100,6 +116,13 @@ export interface TelegramBotDeps {
   skillsMenu?: () => { name: string; summary?: string }[]
   /** Agent card for the main agent — renders 🧠 Агент menu (Task 13). */
   agentCard?: () => { name: string; description: string; skills: string[] }
+  /**
+   * Per-turn memory recall probe. Called once per turn on the first operator
+   * span; the result is prepended as a trusted system span so the model sees
+   * relevant facts without a tool call. Absent or returning '' ⇒ no injection.
+   * A failure (thrown promise) is swallowed — recall is best-effort.
+   */
+  recall?: (query: string) => Promise<string>
 }
 
 interface PendingCard {
@@ -328,9 +351,15 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
     void bot.api.sendChatAction(deps.allowedChatId, 'typing').catch(() => {})
     const typingTimer = setInterval(() => { void bot.api.sendChatAction(deps.allowedChatId, 'typing').catch(() => {}) }, 4000)
     try {
+      // Build user spans; optionally prepend a trusted system span with recalled facts.
+      const userSpans = spans.map((s) => ({ role: 'user' as const, provenance: s.provenance, text: s.text }))
+      const firstOp = spans.find((s) => s.provenance === 'operator')
+      const mem = deps.recall !== undefined && firstOp !== undefined
+        ? await deps.recall(firstOp.text).catch(() => '')
+        : ''
       const result = await runner.handle({
         sessionId,
-        spans: spans.map((s) => ({ role: 'user', provenance: s.provenance, text: s.text })),
+        spans: buildSpansWithRecall(userSpans, mem),
         signal: abort.signal,
       })
       // Keep the gateway egress lockout truthful: this turn's narrowed verdict

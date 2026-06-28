@@ -87,7 +87,7 @@ export type { BudgetTracker } from './runtime/budget.js'
 
 export { makeMemoryStore } from './memory/index.js'
 export type { Memory, MemoryStore, MemoryStoreDeps, RankedHit, MemoryFact } from './memory/index.js'
-export { makeMemoryPort, makeMemorySearch } from './runtime/memory-adapter.js'
+export { makeMemoryPort, makeMemorySearch, makeMemoryRecall } from './runtime/memory-adapter.js'
 export { AGENT_PROTOCOL } from './runtime/agent-protocol.js'
 export { makeJsonlSessionLog } from './runtime/session-log.js'
 

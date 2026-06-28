@@ -8,6 +8,7 @@
 
 import { isAbsolute, normalize, resolve } from 'node:path'
 import type { ToolCall } from '../agent-loop/types.js'
+import type { Memory } from '../memory/index.js'
 import type { TaskObservation } from '../orchestration/index.js'
 
 export interface ToolResult {
@@ -32,6 +33,8 @@ export interface ExecuteToolDeps {
   searchMemory?: (query: string) => Promise<string> | string
   /** Sub-agent delegation runner. Absent ⇒ spawn_subagent reports unavailable. */
   spawnSubagent?: (planJson: string) => Promise<TaskObservation[]>
+  /** Memory store — enables the `remember` tool. Absent ⇒ remember reports unavailable. */
+  memory?: Memory
 }
 
 function arg(call: ToolCall, key: string): string {
@@ -93,6 +96,21 @@ export function makeToolExecutor(
         if (planArg.length === 0) return { ok: false, output: 'spawn_subagent: plan must be a JSON string' }
         const observations = await deps.spawnSubagent(planArg)
         return { ok: true, output: JSON.stringify(observations) }
+      }
+
+      case 'remember': {
+        const text = arg(call, 'text')
+        if (text.trim().length === 0) return { ok: false, output: 'remember: text required' }
+        if (!deps.memory) return { ok: false, output: 'remember: unavailable' }
+        try {
+          const r = await deps.memory.commit({ op: 'ADD', text }, { withinSession: true })
+          if (r.status === 'COMMITTED') return { ok: true, output: 'Запомнил.' }
+          if (r.status === 'BLOCKED') return { ok: false, output: 'Эта информация ранее удалена из памяти.' }
+          if (r.status === 'ROUTED_TO_REVIEW') return { ok: true, output: 'Похоже на ранее удалённое — отправил на проверку.' }
+          return { ok: false, output: `remember: unexpected status: ${r.status}` }
+        } catch (err) {
+          return { ok: false, output: `remember: ${err instanceof Error ? err.message : 'error'}` }
+        }
       }
 
       case 'goal_done':

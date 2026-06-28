@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { makeToolExecutor, type FsPort, type ExecuteToolDeps } from './execute-tool.js'
 import type { ToolCall } from '../agent-loop/types.js'
+import type { Memory, CommitResult } from '../memory/index.js'
 
 function memFs(seed: Record<string, string> = {}): FsPort & { files: Map<string, string> } {
   const files = new Map(Object.entries(seed))
@@ -126,5 +127,75 @@ describe('makeToolExecutor', () => {
     expect(r.output).toBe('__goal_done__')
     expect(writeSpy).toHaveLength(0)
     expect(bashCalls).toHaveLength(0)
+  })
+})
+
+function fakeMemory(commitResult: CommitResult): Memory {
+  return {
+    search: async () => [],
+    load: async () => '',
+    readFrozenSnapshot: async () => ({ bytes: Buffer.from(''), sha256: '' }),
+    commit: async () => commitResult,
+    forget: async () => {},
+    reindex: async () => {},
+    rebuildFromFiles: async () => {},
+    listLive: async () => [],
+    serializeMemoryIndex: async () => ({ content: '', sha256: '' }),
+    integrityCheck: async () => ({ ok: true }) as never,
+  }
+}
+
+describe('makeToolExecutor — remember tool', () => {
+  it('calls commit with the text and withinSession:true, returns Запомнил on COMMITTED', async () => {
+    const commitSpy = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const memory: Memory = { ...fakeMemory({ status: 'COMMITTED' }), commit: commitSpy }
+    const e = exec({ memory })
+    const r = await e(call('remember', { text: 'User prefers Russian replies' }))
+    expect(r).toEqual({ ok: true, output: 'Запомнил.' })
+    expect(commitSpy).toHaveBeenCalledOnce()
+    expect(commitSpy).toHaveBeenCalledWith(
+      { op: 'ADD', text: 'User prefers Russian replies' },
+      { withinSession: true },
+    )
+  })
+
+  it('returns BLOCKED message on BLOCKED status', async () => {
+    const e = exec({ memory: fakeMemory({ status: 'BLOCKED' }) })
+    const r = await e(call('remember', { text: 'some fact' }))
+    expect(r).toEqual({ ok: false, output: 'Эта информация ранее удалена из памяти.' })
+  })
+
+  it('returns review message on ROUTED_TO_REVIEW status', async () => {
+    const e = exec({ memory: fakeMemory({ status: 'ROUTED_TO_REVIEW' }) })
+    const r = await e(call('remember', { text: 'some fact' }))
+    expect(r).toEqual({ ok: true, output: 'Похоже на ранее удалённое — отправил на проверку.' })
+  })
+
+  it('rejects empty text', async () => {
+    const e = exec({ memory: fakeMemory({ status: 'COMMITTED' }) })
+    const r = await e(call('remember', { text: '' }))
+    expect(r).toEqual({ ok: false, output: 'remember: text required' })
+  })
+
+  it('rejects whitespace-only text', async () => {
+    const e = exec({ memory: fakeMemory({ status: 'COMMITTED' }) })
+    const r = await e(call('remember', { text: '   ' }))
+    expect(r).toEqual({ ok: false, output: 'remember: text required' })
+  })
+
+  it('reports unavailable when memory dep is absent', async () => {
+    const r = await exec()(call('remember', { text: 'hello' }))
+    expect(r).toEqual({ ok: false, output: 'remember: unavailable' })
+  })
+
+  it('surfaces a short error message when commit throws instead of crashing', async () => {
+    const memory: Memory = {
+      ...fakeMemory({ status: 'COMMITTED' }),
+      commit: async () => { throw new Error('disk full') },
+    }
+    const e = exec({ memory })
+    const r = await e(call('remember', { text: 'some fact' }))
+    expect(r.ok).toBe(false)
+    expect(r.output).toContain('disk full')
   })
 })

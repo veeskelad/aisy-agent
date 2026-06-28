@@ -43,3 +43,23 @@ export function makeMemorySearch(memory: Memory, limit = 8): (query: string) => 
     return hits.map((h) => `• [${h.factKey}] ${h.text}`).join('\n')
   }
 }
+
+/**
+ * Bridge Memory.search → a per-turn recall probe used to inject relevant facts
+ * into the non-prefix span before each operator turn.
+ *
+ * Returns '' (empty string) when there are no hits OR on a cold start / search
+ * error so the caller can skip the injection cheaply. Does NOT throw.
+ */
+export function makeMemoryRecall(memory: Memory, limit = 5): (query: string) => Promise<string> {
+  return async (query: string) => {
+    let hits: RankedHit[]
+    try {
+      hits = await memory.search(query, { limit })
+    } catch {
+      return ''
+    }
+    if (hits.length === 0) return ''
+    return hits.map((h) => `• ${h.text}`).join('\n')
+  }
+}

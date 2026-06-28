@@ -1,6 +1,6 @@
 // packages/core-ts/src/runtime/memory-adapter.spec.ts
 import { describe, it, expect } from 'vitest'
-import { makeMemoryPort, makeMemorySearch } from './memory-adapter.js'
+import { makeMemoryPort, makeMemorySearch, makeMemoryRecall } from './memory-adapter.js'
 import { AGENT_PROTOCOL } from './agent-protocol.js'
 import type { Memory, RankedHit } from '../memory/index.js'
 
@@ -68,5 +68,51 @@ describe('makeMemorySearch', () => {
       }),
     )
     await expect(search('q')).resolves.toBe('Память: индекс пуст или недоступен.')
+  })
+})
+
+describe('makeMemoryRecall', () => {
+  it('formats hits as bullet lines (text only, no factKey)', async () => {
+    const hits: RankedHit[] = [
+      { id: '1', factKey: 'pref', text: 'Replies in Russian', score: 1 },
+      { id: '2', factKey: 'proj', text: 'Aisy is the main project', score: 0.8 },
+    ]
+    const recall = makeMemoryRecall(fakeMemory({ search: async () => hits }))
+    expect(await recall('q')).toBe('• Replies in Russian\n• Aisy is the main project')
+  })
+
+  it('returns empty string when there are no hits', async () => {
+    const recall = makeMemoryRecall(fakeMemory({ search: async () => [] }))
+    expect(await recall('q')).toBe('')
+  })
+
+  it('returns empty string on cold start / search error (never throws)', async () => {
+    const recall = makeMemoryRecall(
+      fakeMemory({
+        search: async () => {
+          throw new Error('no index')
+        },
+      }),
+    )
+    await expect(recall('q')).resolves.toBe('')
+  })
+
+  it('respects the limit parameter', async () => {
+    const hits: RankedHit[] = [
+      { id: '1', factKey: 'a', text: 'one', score: 1 },
+      { id: '2', factKey: 'b', text: 'two', score: 0.9 },
+    ]
+    let capturedLimit: number | undefined
+    const recall = makeMemoryRecall(
+      fakeMemory({
+        search: async (_q, opts) => {
+          capturedLimit = opts?.limit
+          return hits
+        },
+      }),
+      3,
+    )
+    await recall('test')
+    expect(capturedLimit).toBe(3)
   })
 })

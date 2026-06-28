@@ -29,6 +29,7 @@ import {
   makeMemoryStore,
   makeMemoryPort,
   makeMemorySearch,
+  makeMemoryRecall,
   makeJsonlSessionLog,
   makeCardResolver,
   makeDelegationManager,
@@ -193,6 +194,7 @@ const TOOLS: AnthropicTool[] = [
   { name: 'list_dir', description: 'List the entries of a workspace directory. Use this FIRST to discover what files exist before reading them, e.g. when asked "what is here" or "what files are there". Arg `path` (omit or "." for the workspace root).', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
   { name: 'bash', description: 'Run a shell command in the workspace and get its stdout/stderr. Use for system facts, searches (ls, grep, find, cat), and running tools. Sandboxed only when AISY_SANDBOX_IMAGE is set; 120s timeout. Prefer read_file/list_dir for plain file reads. Do not pipe secrets or run destructive commands without need.', input_schema: { type: 'object', properties: { cmd: { type: 'string' } }, required: ['cmd'] } },
   { name: 'search_memory', description: 'Full-text search your long-term memory for facts about the operator and past work. Call this BEFORE answering whenever the request refers to something you may have stored (the operator, prior tasks, preferences, decisions). Arg `query` = a few keywords.', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'remember', description: 'Save a durable fact to your long-term memory for future sessions — a preference, decision, or fact about the operator or the work. Use it when you learn something worth keeping, or when the operator says to remember something. Arg text = the fact (one or two sentences).', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { name: 'spawn_subagent', description: 'Delegate a scoped task or a goal-DAG plan to a sub-agent (AgentCard). Arg: plan = JSON of {steps:[{intent}]} or a PlanDAG.', input_schema: { type: 'object', properties: { plan: { type: 'string' } }, required: ['plan'] } },
   { name: 'goal_done', description: 'Signal that you believe the active goal objective is now met. A deterministic probe verifies the claim before the goal is closed.', input_schema: { type: 'object', properties: { summary: { type: 'string' } } } },
 ]
@@ -291,6 +293,7 @@ const executeTool = makeToolExecutor({
   fs: fsPort,
   workspaceRoot,
   searchMemory: memSearch,
+  memory: memoryStore,
   ...(runBash ? { runBash } : {}),
   spawnSubagent: (planJson) => spawnSubagent(planJson),  // thunk → const defined below (after budget)
 })
@@ -566,6 +569,7 @@ const { bot, runProactiveTurn, sendProactive, runGoalTurn } = makeTelegramBot({
   grants,
   setOutboundLocked: (locked) => { outboundLocked = locked },
   sessionLog,
+  recall: makeMemoryRecall(memoryStore),
   skillsMenu: () => [],  // Skills (06) not live yet — returns empty list
   agentCard: () => {
     const c = cardResolver.resolve('general')
