@@ -17,6 +17,15 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.11] — 2026-06-28
+
+### Added
+- **The agent remembers you and recalls automatically.** Before each turn it searches
+  long-term memory for facts relevant to your message and injects them as context (no tool
+  call required), so it carries forward what it already knows about you and the work. A new
+  **`remember`** tool lets it save durable facts mid-session (preferences, decisions, facts
+  about the operator), going through the same resurrection-guard as every other memory write.
+
 ## [0.1.10] — 2026-06-28
 
 ### Changed
