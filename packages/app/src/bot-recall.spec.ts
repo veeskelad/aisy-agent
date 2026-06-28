@@ -16,7 +16,7 @@
 // integration test or grammY mocking and is covered by manual QA.
 
 import { describe, it, expect } from 'vitest'
-import { buildSpansWithRecall, type TelegramBotDeps } from './bot.js'
+import { buildSpansWithRecall, replyLanguageInstruction, type TelegramBotDeps } from './bot.js'
 
 describe('buildSpansWithRecall', () => {
   const user = { role: 'user' as const, provenance: 'operator' as const, text: 'hello' }
@@ -51,6 +51,33 @@ describe('buildSpansWithRecall', () => {
 
   it('returns empty array unchanged when both spans and mem are empty', () => {
     expect(buildSpansWithRecall([], '')).toEqual([])
+  })
+})
+
+describe('replyLanguageInstruction', () => {
+  it('forces Russian when the message contains Cyrillic', () => {
+    expect(replyLanguageInstruction('Найди файлы на пк')).toBe('Отвечай на русском языке.')
+    expect(replyLanguageInstruction('привет')).toBe('Отвечай на русском языке.')
+  })
+  it('returns no instruction for a Latin-only message', () => {
+    expect(replyLanguageInstruction('find the files')).toBe('')
+    expect(replyLanguageInstruction('')).toBe('')
+  })
+})
+
+describe('buildSpansWithRecall language instruction', () => {
+  const user = { role: 'user' as const, provenance: 'operator' as const, text: 'привет' }
+  it('prepends the language instruction FIRST, before recall', () => {
+    const result = buildSpansWithRecall([user], '• fact', 'Отвечай на русском языке.')
+    expect(result[0]).toEqual({ role: 'system', provenance: 'operator', text: 'Отвечай на русском языке.' })
+    expect(result[1]?.text).toBe('Релевантное из памяти:\n• fact')
+    expect(result[2]).toEqual(user)
+  })
+  it('adds only the language span when there is no recall', () => {
+    const result = buildSpansWithRecall([user], '', 'Отвечай на русском языке.')
+    expect(result).toHaveLength(2)
+    expect(result[0]?.text).toBe('Отвечай на русском языке.')
+    expect(result[1]).toEqual(user)
   })
 })
 

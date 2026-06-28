@@ -54,12 +54,24 @@ import {
 export function buildSpansWithRecall(
   userSpans: Array<{ role: 'user'; provenance: Provenance; text: string }>,
   mem: string,
+  langInstruction = '',
 ): Array<{ role: 'system' | 'user'; provenance: Provenance; text: string }> {
-  if (mem.length === 0) return userSpans
-  return [
-    { role: 'system' as const, provenance: 'operator' as const, text: 'Релевантное из памяти:\n' + mem },
-    ...userSpans,
-  ]
+  const out: Array<{ role: 'system' | 'user'; provenance: Provenance; text: string }> = [...userSpans]
+  if (mem.length > 0) {
+    out.unshift({ role: 'system', provenance: 'operator', text: 'Релевантное из памяти:\n' + mem })
+  }
+  // Language instruction goes FIRST so a budget model cannot drift to the
+  // English system prompt's language (the recurring English-reply bug).
+  if (langInstruction.length > 0) {
+    out.unshift({ role: 'system', provenance: 'operator', text: langInstruction })
+  }
+  return out
+}
+
+/** Per-turn reply-language nudge. Cyrillic in the operator's message ⇒ force Russian;
+ *  otherwise no instruction (the English system prompt is the default). */
+export function replyLanguageInstruction(text: string): string {
+  return /[Ѐ-ӿ]/.test(text) ? 'Отвечай на русском языке.' : ''
 }
 
 export interface TelegramBotDeps {
@@ -357,9 +369,10 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
       const mem = deps.recall !== undefined && firstOp !== undefined
         ? await deps.recall(firstOp.text).catch(() => '')
         : ''
+      const lang = firstOp !== undefined ? replyLanguageInstruction(firstOp.text) : ''
       const result = await runner.handle({
         sessionId,
-        spans: buildSpansWithRecall(userSpans, mem),
+        spans: buildSpansWithRecall(userSpans, mem, lang),
         signal: abort.signal,
       })
       // Keep the gateway egress lockout truthful: this turn's narrowed verdict
