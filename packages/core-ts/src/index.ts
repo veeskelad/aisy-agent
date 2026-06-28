@@ -60,6 +60,8 @@ export { makeFailoverProvider } from './runtime/failover-provider.js'
 export { makeToolExecutor } from './runtime/execute-tool.js'
 export type { ExecuteToolDeps, FsPort, ToolResult } from './runtime/execute-tool.js'
 
+export { htmlToText, parseDuckDuckGo, isPublicHttpUrl } from './runtime/web-tools.js'
+
 export { makeHookGate } from './runtime/hook-gate.js'
 export type { HookGateDeps, ApprovalDecision } from './runtime/hook-gate.js'
 

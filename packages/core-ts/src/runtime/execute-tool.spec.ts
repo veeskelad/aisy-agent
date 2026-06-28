@@ -87,6 +87,28 @@ describe('makeToolExecutor', () => {
     expect(r).toEqual({ ok: true, output: 'hits for foo' })
   })
 
+  it('fetch_url routes to the fetchUrl port', async () => {
+    const e = exec({ fetchUrl: async (url) => `content of ${url}` })
+    const r = await e(call('fetch_url', { url: 'https://example.com' }))
+    expect(r).toEqual({ ok: true, output: 'content of https://example.com' })
+  })
+
+  it('fetch_url reports unavailable when the port is absent', async () => {
+    const r = await exec()(call('fetch_url', { url: 'https://example.com' }))
+    expect(r).toEqual({ ok: false, output: 'fetch_url: unavailable' })
+  })
+
+  it('web_search routes to the webSearch port', async () => {
+    const e = exec({ webSearch: async (q) => `results for ${q}` })
+    const r = await e(call('web_search', { query: 'rust programming' }))
+    expect(r).toEqual({ ok: true, output: 'results for rust programming' })
+  })
+
+  it('web_search reports unavailable when the port is absent', async () => {
+    const r = await exec()(call('web_search', { query: 'test' }))
+    expect(r).toEqual({ ok: false, output: 'web_search: unavailable' })
+  })
+
   it('unknown tools return a graceful unsupported result', async () => {
     const r = await exec()(call('telepathy', {}))
     expect(r.ok).toBe(false)

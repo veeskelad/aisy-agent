@@ -35,6 +35,10 @@ export interface ExecuteToolDeps {
   spawnSubagent?: (planJson: string) => Promise<TaskObservation[]>
   /** Memory store — enables the `remember` tool. Absent ⇒ remember reports unavailable. */
   memory?: Memory
+  /** Fetch a public URL and return its text. Absent ⇒ fetch_url reports unavailable. */
+  fetchUrl?: (url: string) => Promise<string>
+  /** Web search returning formatted results text. Absent ⇒ web_search reports unavailable. */
+  webSearch?: (query: string) => Promise<string>
 }
 
 function arg(call: ToolCall, key: string): string {
@@ -111,6 +115,16 @@ export function makeToolExecutor(
         } catch (err) {
           return { ok: false, output: `remember: ${err instanceof Error ? err.message : 'error'}` }
         }
+      }
+
+      case 'fetch_url': {
+        if (!deps.fetchUrl) return { ok: false, output: 'fetch_url: unavailable' }
+        return { ok: true, output: await deps.fetchUrl(arg(call, 'url')) }
+      }
+
+      case 'web_search': {
+        if (!deps.webSearch) return { ok: false, output: 'web_search: unavailable' }
+        return { ok: true, output: await deps.webSearch(arg(call, 'query')) }
       }
 
       case 'goal_done':

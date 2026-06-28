@@ -41,6 +41,9 @@ import {
   harnessVersion,
   isNewerVersion,
   VoiceUnavailable,
+  htmlToText,
+  parseDuckDuckGo,
+  isPublicHttpUrl,
   type AnthropicTool,
   type ApprovalDecision,
   type FsPort,
@@ -197,6 +200,8 @@ const TOOLS: AnthropicTool[] = [
   { name: 'remember', description: 'Save a durable fact to your long-term memory for future sessions — a preference, decision, or fact about the operator or the work. Use it when you learn something worth keeping, or when the operator says to remember something. Arg text = the fact (one or two sentences).', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
   { name: 'spawn_subagent', description: 'Delegate a scoped task or a goal-DAG plan to a sub-agent (AgentCard). Arg: plan = JSON of {steps:[{intent}]} or a PlanDAG.', input_schema: { type: 'object', properties: { plan: { type: 'string' } }, required: ['plan'] } },
   { name: 'goal_done', description: 'Signal that you believe the active goal objective is now met. A deterministic probe verifies the claim before the goal is closed.', input_schema: { type: 'object', properties: { summary: { type: 'string' } } } },
+  { name: 'fetch_url', description: 'Fetch a public web page and get its readable text. Use to read a URL the operator gave you or one you found via web_search. Arg `url` (http/https). Internal/private addresses are refused.', input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+  { name: 'web_search', description: 'Search the web and get the top results (title, URL, snippet). Use when you need current information you do not have. Then fetch_url the promising results to read them. Arg `query`.', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
 ]
 
 const fsPort: FsPort = {
@@ -296,6 +301,38 @@ const executeTool = makeToolExecutor({
   memory: memoryStore,
   ...(runBash ? { runBash } : {}),
   spawnSubagent: (planJson) => spawnSubagent(planJson),  // thunk → const defined below (after budget)
+  fetchUrl: async (url) => {
+    if (!isPublicHttpUrl(url)) return 'fetch_url: refused (non-public or non-http URL)'
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000),
+        redirect: 'follow',
+        headers: { 'user-agent': 'aisy-agent' },
+      })
+      if (!res.ok) return `fetch_url: HTTP ${res.status} ${res.statusText}`
+      const text = await res.text()
+      return htmlToText(text)
+    } catch (err) {
+      return `fetch_url: ${err instanceof Error ? err.message : String(err)}`
+    }
+  },
+  webSearch: async (query) => {
+    try {
+      const res = await fetch(
+        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+        {
+          signal: AbortSignal.timeout(15000),
+          headers: { 'user-agent': 'aisy-agent' },
+        },
+      )
+      const html = await res.text()
+      const results = parseDuckDuckGo(html)
+      if (results.length === 0) return 'web_search: ничего не найдено.'
+      return results.map((r) => `${r.title}\n${r.url}\n${r.snippet}`).join('\n\n')
+    } catch (err) {
+      return `web_search: ${err instanceof Error ? err.message : String(err)}`
+    }
+  },
 })
 
 // Live outbound-lockout source (ADR-0051): mirrors the loop's narrowed state so
