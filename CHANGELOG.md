@@ -17,6 +17,18 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.10] — 2026-06-28
+
+### Changed
+- **The agent is more capable without changing the model.** Its system prompt was only the
+  persona + memory plus seven one-line tool descriptions, so it had no operating instructions
+  and underused its tools (shallow replies, announcing actions it never took). Now a built-in
+  **operating protocol** is prepended to the system prompt — act with your tools this turn,
+  decompose multi-step requests, recall via `search_memory`, verify against real output, act on
+  reversible work without asking — and every **tool description** explains when and how to use it.
+- **Telegram**: the menu keyboard is no longer forced onto every reply (it is collapsible and shown
+  on `/menu`); the Sessions list now reads as a date + message count instead of the unclear "N ходов".
+
 ## [0.1.9] — 2026-06-25
 
 ### Fixed
