@@ -17,6 +17,16 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.13] — 2026-06-28
+
+### Fixed
+- **The bot stops replying in English and stops hedging.** It was drifting to the English
+  system prompt's language and saying things like "I don't have access to your PC, let me
+  check" instead of calling its tools. Now a per-turn language nudge (a Russian message forces
+  a Russian reply) is injected first, and the operating protocol leads with the language rule
+  plus an explicit "never say you lack access without first calling list_dir/bash — your
+  workspace is a real directory."
+
 ## [0.1.12] — 2026-06-28
 
 ### Added
