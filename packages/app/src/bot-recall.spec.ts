@@ -59,9 +59,10 @@ describe('replyLanguageInstruction', () => {
     expect(replyLanguageInstruction('Найди файлы на пк')).toBe('Отвечай на русском языке.')
     expect(replyLanguageInstruction('привет')).toBe('Отвечай на русском языке.')
   })
-  it('returns no instruction for a Latin-only message', () => {
-    expect(replyLanguageInstruction('find the files')).toBe('')
-    expect(replyLanguageInstruction('')).toBe('')
+  it('asks to match the operator language for a Latin/other-script message', () => {
+    expect(replyLanguageInstruction('find the files')).toBe(
+      'Reply in the same language the operator used in their message.',
+    )
   })
 })
 

@@ -68,10 +68,12 @@ export function buildSpansWithRecall(
   return out
 }
 
-/** Per-turn reply-language nudge. Cyrillic in the operator's message ⇒ force Russian;
- *  otherwise no instruction (the English system prompt is the default). */
+/** Per-turn reply-language nudge: always reply in the operator's input language.
+ *  Cyrillic ⇒ name Russian explicitly (strongest signal for a budget model); any
+ *  other input ⇒ a general "match the operator's language" directive. */
 export function replyLanguageInstruction(text: string): string {
-  return /[Ѐ-ӿ]/.test(text) ? 'Отвечай на русском языке.' : ''
+  if (/[Ѐ-ӿ]/.test(text)) return 'Отвечай на русском языке.'
+  return "Reply in the same language the operator used in their message."
 }
 
 export interface TelegramBotDeps {
