@@ -17,6 +17,13 @@ release establishes the changeset baseline.
 
 _No unreleased changes._
 
+## [0.1.14] — 2026-06-29
+
+### Fixed
+- **Reply language now follows the operator's input language generally** (not Russian-only):
+  a Cyrillic message forces a Russian reply, any other script gets a "reply in the same
+  language as the operator's message" directive.
+
 ## [0.1.13] — 2026-06-28
 
 ### Fixed
