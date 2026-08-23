@@ -217,7 +217,8 @@ remote output, environment, credential state или vendor detail.
    согласованную пару; PREPARED не публикуется, malformed/future journal закрыт.
 6. **AC-28-6** — Offline rollback после A→B публикует одной заменой пару
    current=A/previous=B без fetch и отказывается, если previous отсутствует,
-   изменён или не проходит doctor.
+   изменён или не проходит doctor; исключённые post-upgrade domains не
+   исполняют скрытый Telegram/provider network probe.
 7. **AC-28-7** — Concurrent update получает `UPDATE_BUSY`; cleanup не затрагивает
    current/previous и очищает только exact unreferenced managed worktree.
 8. **AC-28-8** — Два clean builds provider/voice exact commit дают одинаковые

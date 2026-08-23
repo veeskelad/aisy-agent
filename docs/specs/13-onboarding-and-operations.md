@@ -192,6 +192,11 @@ crontab. `--post-upgrade` сохраняет fail-closed gates миграции,
 pins и каждого действительно включённого Docker-пути. Exit code is nonzero iff
 `ok === false`.
 
+`--post-upgrade`, `--only` и `--skip` ограничивают не только итоговый
+отчёт, но и исполнение probes до любого внешнего I/O. Validator исключённого
+domain не вызывается: в частности, migration-only или post-upgrade doctor не
+делает скрытый Telegram `getMe`, а domain-only doctor не пингует provider.
+
 Held transcript kernel lease означает, что точный SQLite lease сейчас удерживает
 живой writer, и потому является `pass`, а не «зависшим lock». Corrupt/unsafe
 lease остаётся high-severity fail. Held media-inbox writer остаётся warning:
@@ -382,6 +387,10 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     останавливает своя ⏹-карточка выполнения); в конце она закрывается строкой
     о причине ранней остановки, если та была, и отпускается — следующее
     исследование заводит свою. Сбой доставки карточки не останавливает поиск.
+41. **AC-13-41** — `doctor --post-upgrade`, `--only` и `--skip` применяют
+    domain filter до исполнения network validators: исключённый Telegram
+    `getMe` и provider ping не вызываются и не могут блокировать выбранный
+    read-only corpus.
 
 ## 10. Open questions
 

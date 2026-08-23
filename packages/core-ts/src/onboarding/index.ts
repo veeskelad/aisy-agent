@@ -497,6 +497,13 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
     skip?: DoctorDomain[]
   }): Promise<DoctorCheck[]> {
     const checks: DoctorCheck[] = []
+    const postUpgradeDomains: ReadonlySet<DoctorDomain> = new Set([
+      'env', 'mcp', 'providers', 'memory', 'migration', 'sandbox',
+    ])
+    const includesDomain = (domain: DoctorDomain): boolean =>
+      (!opts.postUpgrade || postUpgradeDomains.has(domain)) &&
+      (opts.only === undefined || opts.only.includes(domain)) &&
+      (opts.skip === undefined || !opts.skip.includes(domain))
     const add = (c: DoctorCheck): void => {
       checks.push(c)
       emit('doctor.check', { id: c.id, status: c.status })
@@ -532,7 +539,11 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
         .map(selection => catalog.find(entry => entry.id === selection.provider))
         .filter((entry): entry is NonNullable<typeof entry> => !!entry?.needsKey && !!entry.keyEnv)
       let brokerFinding: ReturnType<NonNullable<typeof deps.providerBroker>['inspect']> | null = null
-      if (deps.providerBroker !== undefined && keyBackedProviders.length > 0) {
+      if (
+        includesDomain('providers') &&
+        deps.providerBroker !== undefined &&
+        keyBackedProviders.length > 0
+      ) {
         try {
           brokerFinding = deps.providerBroker.inspect(keyBackedProviders.map(entry => entry.id))
         } catch {
@@ -575,51 +586,53 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       }
 
       // providers (high) — reachability ping for each distinct chosen provider.
-      for (const sel of distinctChosen) {
-        const entry = catalog.find((e) => e.id === sel.provider)
-        if (!entry || !entry.needsKey || !entry.keyEnv) {
+      if (includesDomain('providers')) {
+        for (const sel of distinctChosen) {
+          const entry = catalog.find((e) => e.id === sel.provider)
+          if (!entry || !entry.needsKey || !entry.keyEnv) {
+            add({
+              id: `providers.${sel.provider}.reachable`,
+              domain: 'providers',
+              status: 'pass',
+              severity: 'high',
+              detail: `${sel.provider} needs no key`,
+              fixable: false,
+            })
+            continue
+          }
+          if (brokerFinding !== null) {
+            const ready = brokerFinding.state === 'ready' && brokerFinding.readyProviders.includes(sel.provider)
+            add({
+              id: `providers.${sel.provider}.reachable`,
+              domain: 'providers',
+              status: ready ? 'pass' : 'fail',
+              severity: 'high',
+              detail: ready
+                ? `${sel.provider} доступен через read-only attested broker readiness`
+                : `${sel.provider} недоступен через systemd provider broker`,
+              fixable: false,
+            })
+            continue
+          }
+          const key = envValueOf(entry.keyEnv)
+          const baseUrl = envValueOf(`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`) || entry.defaultBaseUrl
+          const ping = deps.validators.pingCatalogProvider
+            ? await deps.validators.pingCatalogProvider({ providerId: sel.provider, key, ...(baseUrl ? { baseUrl } : {}) })
+            : { ok: key.length > 0 }
           add({
             id: `providers.${sel.provider}.reachable`,
             domain: 'providers',
-            status: 'pass',
+            status: ping.ok ? 'pass' : 'fail',
             severity: 'high',
-            detail: `${sel.provider} needs no key`,
+            detail: ping.ok ? `${sel.provider} key reachable` : redact(`${sel.provider} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
             fixable: false,
           })
-          continue
         }
-        if (brokerFinding !== null) {
-          const ready = brokerFinding.state === 'ready' && brokerFinding.readyProviders.includes(sel.provider)
-          add({
-            id: `providers.${sel.provider}.reachable`,
-            domain: 'providers',
-            status: ready ? 'pass' : 'fail',
-            severity: 'high',
-            detail: ready
-              ? `${sel.provider} доступен через read-only attested broker readiness`
-              : `${sel.provider} недоступен через systemd provider broker`,
-            fixable: false,
-          })
-          continue
-        }
-        const key = envValueOf(entry.keyEnv)
-        const baseUrl = envValueOf(`AISY_PROVIDER_${entry.id.toUpperCase()}_BASE_URL`) || entry.defaultBaseUrl
-        const ping = deps.validators.pingCatalogProvider
-          ? await deps.validators.pingCatalogProvider({ providerId: sel.provider, key, ...(baseUrl ? { baseUrl } : {}) })
-          : { ok: key.length > 0 }
-        add({
-          id: `providers.${sel.provider}.reachable`,
-          domain: 'providers',
-          status: ping.ok ? 'pass' : 'fail',
-          severity: 'high',
-          detail: ping.ok ? `${sel.provider} key reachable` : redact(`${sel.provider} key rejected (HTTP ${ping.httpStatus ?? '???'})`),
-          fixable: false,
-        })
       }
     }
 
     // telegram (critical) — getMe + exactly one allowlisted chat_id (spec §4 matrix).
-    {
+    if (includesDomain('telegram')) {
       const token = envValueOf('AISY_TELEGRAM_BOT_TOKEN')
       const me = await deps.validators.telegramGetMe(token)
       add({
@@ -1099,21 +1112,7 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
 
     // Post-upgrade subset: keep the checks that catch migration breakage
     // (env schema drift, MCP descriptor-hash mismatch, provider id resolve).
-    let filtered = checks
-    if (opts.postUpgrade) {
-      const postUpgradeDomains: ReadonlySet<DoctorDomain> = new Set([
-        'env', 'mcp', 'providers', 'memory', 'migration', 'sandbox',
-      ])
-      filtered = filtered.filter((c) => postUpgradeDomains.has(c.domain))
-    }
-    if (opts.only) {
-      const only = new Set(opts.only)
-      filtered = filtered.filter((c) => only.has(c.domain))
-    }
-    if (opts.skip) {
-      const skip = new Set(opts.skip)
-      filtered = filtered.filter((c) => !skip.has(c.domain))
-    }
+    const filtered = checks.filter(check => includesDomain(check.domain))
 
     // Deterministic order: sorted by stable check id (§4, AC-13-12).
     return filtered.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))

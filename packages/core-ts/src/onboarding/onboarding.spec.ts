@@ -592,6 +592,31 @@ describe('Onboarding & Operations (component 13)', () => {
     expect(mcpFail?.severity).toBe('high')
   })
 
+  it('does not call the excluded Telegram validator during post-upgrade doctor', async () => {
+    const validators = makeFakeValidators({ catalogProvider: true })
+    validators.telegramGetMe = async () => {
+      throw new Error('VENDOR_IO_FORBIDDEN')
+    }
+
+    await expect(
+      makeOnboardingOps(healthyDeps({ validators })).doctor({ postUpgrade: true }),
+    ).resolves.toMatchObject({ ok: true })
+  })
+
+  it('does not call excluded network validators for a domain-only doctor', async () => {
+    const validators = makeFakeValidators()
+    validators.telegramGetMe = async () => {
+      throw new Error('VENDOR_IO_FORBIDDEN')
+    }
+    validators.pingCatalogProvider = async () => {
+      throw new Error('VENDOR_IO_FORBIDDEN')
+    }
+
+    await expect(
+      makeOnboardingOps(healthyDeps({ validators })).doctor({ only: ['migration'] }),
+    ).resolves.toMatchObject({ ok: true })
+  })
+
   it('reports an unprepared Workspace v2 migration as a read-only warning', async () => {
     const deps = healthyDeps({
       migration: {
