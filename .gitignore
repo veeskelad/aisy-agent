@@ -1,0 +1,58 @@
+# --- Internal research (NOT published) ---
+# Unknown top-level directories are local/private by default. New public roots
+# require an explicit review and allowlist entry here.
+/*/
+!/.github/
+!/docs/
+!/packaging/
+!/packages/
+!/scripts/
+
+# --- Agent-local project instructions ---
+/CLAUDE.local.md
+
+# --- Runtime memory of the operator's own agent (personal data, never published) ---
+/memory/
+
+# --- Local agent working-state (session handoffs, archives, run scripts) ---
+# Internal Claude Code state; references machine-absolute & transient paths,
+# not suitable for public history. Backed up out-of-band, not via git.
+/.claude/
+/.gstack/
+/packages/app/native/build/
+
+# --- Node / TypeScript ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.pnpm-store/
+coverage/
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# --- Runtime state / secrets / memory ---
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+/worktrees/
+/data/
+secrets/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/

@@ -1,0 +1,58 @@
+[Unit]
+Description=Aisy root provider broker
+After=local-fs.target network-online.target
+Wants=network-online.target
+Wants=aisy-provider-worker@anthropic.socket aisy-provider-worker@deepseek.socket
+Wants=aisy-provider-worker@gemini.socket aisy-provider-worker@glm.socket
+Wants=aisy-provider-worker@openai.socket aisy-provider-worker@openrouter.socket
+Wants=aisy-provider-worker@qwen.socket
+Wants=aisy-provider-validator@anthropic.socket aisy-provider-validator@deepseek.socket
+Wants=aisy-provider-validator@gemini.socket aisy-provider-validator@glm.socket
+Wants=aisy-provider-validator@openai.socket aisy-provider-validator@openrouter.socket
+Wants=aisy-provider-validator@qwen.socket
+After=aisy-provider-worker@anthropic.socket aisy-provider-worker@deepseek.socket
+After=aisy-provider-worker@gemini.socket aisy-provider-worker@glm.socket
+After=aisy-provider-worker@openai.socket aisy-provider-worker@openrouter.socket
+After=aisy-provider-worker@qwen.socket
+After=aisy-provider-validator@anthropic.socket aisy-provider-validator@deepseek.socket
+After=aisy-provider-validator@gemini.socket aisy-provider-validator@glm.socket
+After=aisy-provider-validator@openai.socket aisy-provider-validator@openrouter.socket
+After=aisy-provider-validator@qwen.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3.12 -I /usr/lib/aisy/provider-broker/current/provider_proxy_service.py broker
+RuntimeDirectory=aisy
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=aisy/provider
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ReadWritePaths=/run/aisy /var/lib/aisy/provider
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_CHOWN
+AmbientCapabilities=CAP_CHOWN
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

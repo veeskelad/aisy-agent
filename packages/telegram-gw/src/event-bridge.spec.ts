@@ -1,0 +1,134 @@
+import { describe, it, expect } from 'vitest'
+import { renderEvent, type UiEvent } from './event-bridge.js'
+
+describe('renderEvent', () => {
+  it('budget.capped is an alert with details + resume buttons', () => {
+    const msg = renderEvent({
+      kind: 'budget.capped',
+      limitUsd: 1,
+      spentUsd: 1,
+      stepsDone: 2,
+      stepsTotal: 3,
+    })!
+    expect(msg.html).toContain('⛔ <b>Бюджет исчерпан</b>')
+    expect(msg.html).toContain('$1.00')
+    expect(msg.html).toContain('2 из 3')
+    expect(msg.buttons?.[0]?.map((b) => b.data)).toEqual(['budget:details', 'budget:resume'])
+  })
+
+  it('budget.capped omits the steps line for a pre-turn refusal (stepsTotal 0)', () => {
+    const msg = renderEvent({ kind: 'budget.capped', limitUsd: 2, spentUsd: 2.5, stepsDone: 0, stepsTotal: 0 })!
+    expect(msg.html).toContain('потрачено $2.50')
+    expect(msg.html).not.toContain('шагов')
+  })
+
+  it('cost.summary renders a progress bar and percentage', () => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId: 'abc123',
+      tokensIn: 14200,
+      tokensOut: 3800,
+      dollars: 0.043,
+      limitUsd: 1,
+      model: 'anthropic/claude-sonnet-4-6',
+    })!
+    expect(msg.html).toContain('💰 <b>Сессия abc123</b>')
+    expect(msg.html).toContain('$0.043 / $1.00 (4.3%)')
+    expect(msg.html).toMatch(/[█░]{20}/)
+  })
+
+  it('narrowed lists restrictions and reason', () => {
+    const msg = renderEvent({
+      kind: 'narrowed',
+      restrictions: ['Заблокированы сетевые вызовы'],
+      reason: 'untrusted-контент',
+    })!
+    expect(msg.html).toContain('⚠️ <b>Агент в ограниченном режиме</b>')
+    expect(msg.html).toContain('• Заблокированы сетевые вызовы')
+    expect(msg.html).toContain('Причина: untrusted-контент')
+  })
+
+  it('error renders a retry button', () => {
+    const msg = renderEvent({ kind: 'error', what: 'Провайдер недоступен', detail: 'timeout' })!
+    expect(msg.html).toContain('❌ Провайдер недоступен · timeout')
+    expect(msg.buttons?.[0]?.[0]?.data).toBe('error:retry')
+  })
+
+  it('escapes dynamic content (no HTML injection)', () => {
+    const ev: UiEvent = { kind: 'error', what: '<img src=x>', detail: '&lt;' }
+    const msg = renderEvent(ev)!
+    expect(msg.html).toContain('&lt;img src=x&gt;')
+    expect(msg.html).not.toContain('<img')
+  })
+
+  it('spend.report lists per-model rows + total, with a refresh button', () => {
+    const msg = renderEvent({
+      kind: 'spend.report',
+      rows: [
+        { model: 'opus', tokensIn: 100, tokensOut: 40, dollars: 0.5 },
+        { model: 'haiku', tokensIn: 20, tokensOut: 8, dollars: 0.02 },
+      ],
+      totalUsd: 0.52,
+    })!
+    expect(msg.html).toContain('📡 <b>Расход по моделям</b>')
+    expect(msg.html).toContain('<b>opus</b> — $0.500')
+    expect(msg.html).toContain('Итого: $0.520')
+    expect(msg.buttons?.[0]?.[0]?.data).toBe('spend:refresh')
+  })
+
+  it('spend.report handles the empty state', () => {
+    const msg = renderEvent({ kind: 'spend.report', rows: [], totalUsd: 0 })!
+    expect(msg.html).toContain('Пока ничего не потрачено.')
+  })
+
+  it('settings.panel shows toggles with set: callbacks', () => {
+    const msg = renderEvent({ kind: 'settings.panel', showCostPerTurn: true, budgetEnabled: false, debug: false })!
+    expect(msg.html).toBe('⚙️ <b>Настройки</b>')
+    // Состояние живёт на кнопке и только там: тот же список текстом под ней —
+    // это ровно тот дубль, за который экран и переделывали.
+    expect(msg.buttons?.flat().map((b) => b.text)).toEqual([
+      'Стоимость за ход ✅', 'Бюджет агентов ❌', 'Отладка ❌',
+    ])
+    const datas = msg.buttons?.flat().map((b) => b.data)
+    expect(datas).toEqual(['set:showCostPerTurn', 'set:budgetEnabled', 'set:debug'])
+  })
+
+  it('cost.summary for tiered run: no bare "mixed (per-tier)" token, shows total $ + mixed-pricing note', () => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId: 'sess1',
+      tokensIn: 5000,
+      tokensOut: 1000,
+      dollars: 0.025,
+      limitUsd: 1,
+      model: 'mixed (per-tier)',
+    })!
+    expect(msg.html).not.toContain('mixed (per-tier)')
+    expect(msg.html).toContain('$0.025')
+    expect(msg.html).toContain('по разной цене')
+    expect(msg.html).toContain('📡 Монитор')
+  })
+
+  it('cost.summary for non-tiered run: shows real model name unchanged', () => {
+    const msg = renderEvent({
+      kind: 'cost.summary',
+      sessionId: 'sess2',
+      tokensIn: 100,
+      tokensOut: 50,
+      dollars: 0.001,
+      limitUsd: 1,
+      model: 'claude-sonnet-4-6',
+    })!
+    expect(msg.html).toContain('claude-sonnet-4-6')
+    expect(msg.html).not.toContain('по разной цене')
+  })
+
+  it('settings.panel shows the debug toggle with set:debug callback and correct on/off state', () => {
+    const button = (debug: boolean): string | undefined =>
+      renderEvent({ kind: 'settings.panel', showCostPerTurn: false, budgetEnabled: false, debug })!
+        .buttons?.flat().find((b) => b.data === 'set:debug')?.text
+
+    expect(button(false)).toBe('Отладка ❌')
+    expect(button(true)).toBe('Отладка ✅')
+  })
+})

@@ -1,0 +1,13 @@
+[Unit]
+Description=Aisy one-shot voice worker socket
+After=aisy-voice-broker.service
+Requires=aisy-voice-broker.service
+
+[Socket]
+ListenSequentialPacket=/run/aisy/voice-worker.sock
+SocketMode=0600
+Accept=yes
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

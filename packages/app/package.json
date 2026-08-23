@@ -1,0 +1,41 @@
+{
+  "name": "@aisy/app",
+  "version": "0.1.14",
+  "description": "Aisy — the aisy CLI: boot the Telegram agent (run), onboard (init/setup), and health-check (doctor).",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/veeskelad/aisy-agent.git",
+    "directory": "packages/app"
+  },
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "aisy": "./dist/bin/aisy.js"
+  },
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --project tsconfig.build.json",
+    "postbuild": "chmod +x dist/bin/aisy.js 2>/dev/null || true"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@aisy/core": "workspace:*",
+    "@aisy/telegram-gw": "workspace:*",
+    "better-sqlite3": "12.10.0",
+    "grammy": "^1.30.0"
+  }
+}

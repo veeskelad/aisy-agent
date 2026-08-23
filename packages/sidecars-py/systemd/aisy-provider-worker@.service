@@ -1,0 +1,40 @@
+[Unit]
+Description=Aisy one-shot provider worker for %i
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=aisy-provider-proxy
+Group=aisy-provider-proxy
+Sockets=aisy-provider-worker@%i.socket
+ExecStart=/usr/bin/python3.12 -I /usr/lib/aisy/provider-broker/current/provider_proxy_service.py worker --provider=%i --material-path=%d/aisy-provider
+LoadCredentialEncrypted=aisy-provider:/var/lib/aisy/provider/%i.active.cred
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+IPAddressDeny=localhost
+IPAddressDeny=link-local
+IPAddressDeny=multicast
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=fc00::/7

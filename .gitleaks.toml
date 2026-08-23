@@ -1,0 +1,40 @@
+title = "Aisy secret scanning"
+minVersion = "8.25.0"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Синтетические service-key fixtures в точном test-файле"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^packages/app/src/service-keys\.spec\.ts$''']
+regexTarget = "line"
+regexes = [
+  '''AISY_DEEPGRAM_KEY\s*:''',
+  '''AISY_TELEGRAM_BOT_TOKEN=''',
+  '''CLAUDE_CODE_OAUTH_TOKEN=''',
+]
+
+[[allowlists]]
+description = "Code-owned authProtocol enum в двух runtime validators"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^packages/core-ts/src/runtime/opaque-credential-proxy\.ts$''',
+  '''^packages/core-ts/src/runtime/openai-api-credential-validator\.ts$''',
+]
+regexTarget = "line"
+regexes = ['''\bauthProtocol\s*:\s*['"][a-z][a-z0-9-]*['"]''']
+
+[[allowlists]]
+description = "Синтетические Stripe-like строки adversarial redaction corpus"
+condition = "AND"
+targetRules = ["generic-api-key", "stripe-access-token"]
+paths = ['''^packages/core-ts/src/safety/safety\.spec\.ts$''']
+regexTarget = "line"
+regexes = [
+  '''body:\s*'Here is the key:\s*sk_live_[A-Za-z0-9]+''',
+  '''const logLine\s*=\s*'Connecting with token\s+sk_live_[A-Za-z0-9]+\s+to api''',
+  '''not\.toContain\('sk_live_[A-Za-z0-9]+'\)''',
+]

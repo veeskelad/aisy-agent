@@ -1,0 +1,40 @@
+[Unit]
+Description=Aisy root voice broker
+After=local-fs.target network-online.target
+Wants=network-online.target
+Before=aisy-voice-worker.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3.12 -I /usr/lib/aisy/voice-proxy/current/voice_proxy_service.py broker
+RuntimeDirectory=aisy
+RuntimeDirectoryMode=0755
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ReadWritePaths=/run/aisy /var/lib/aisy/voice
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_CHOWN
+AmbientCapabilities=CAP_CHOWN
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

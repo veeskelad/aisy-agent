@@ -1,0 +1,12 @@
+[Unit]
+Description=Aisy one-shot provider worker socket for %i
+
+[Socket]
+ListenStream=/run/aisy/provider/worker-%i.sock
+SocketMode=0600
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
