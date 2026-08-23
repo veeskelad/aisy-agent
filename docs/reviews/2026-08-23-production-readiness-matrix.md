@@ -1,7 +1,9 @@
 # Матрица production-готовности Aisy
 
 **Дата среза:** 2026-08-23  
-**Code baseline:** audited Git tree `fc1e2c5f7d8123332aff5c679a8be7631635cc2c`  
+**Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
+audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
+
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
 
@@ -43,12 +45,12 @@ host.
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
 | Supervisor restart/rollback | **LIVE для текущего source release** | Target service active на проверенном source checkout; provider/voice A/B rollback и controlled restart пройдены | Повторить после managed Git cutover |
-| Managed Git install/update/rollback | **РЕАЛИЗОВАН; production DORMANT до публикации** | Component 28, 125 targeted App tests и disposable Linux rehearsal подтверждают atomic generation, hermetic Git, cleanup и offline rollback | Public raw bootstrap, A→B→A→B и target cutover |
+| Managed Git install/update/rollback | **LIVE: public bootstrap принят** | Public raw bootstrap из clean root `2de457f` прошёл на disposable Ubuntu с Node 22: exact HTTPS origin, frozen install/build, private `0700` layout и active generation подтверждены | A→B→A→B и target cutover |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **ПРИНЯТО ADR-0107; публикация в работе** | Current snapshot: exact tree, strict fsck, private-reference markers 0, Gitleaks 0; прежние server-owned PR refs остаются private | Новый public root snapshot; archive не менять на public |
+| Public history/privacy boundary | **LIVE по ADR-0107** | Новый PUBLIC repository содержит только root `2de457f` и `master`: source/root tree exact, strict fsck clean, private-reference markers 0, Gitleaks 0; прежняя история переименована и подтверждена PRIVATE | После финального status commit повторить refs/tree/history scan; archive не менять на public |
 
 ## Проверки текущего среза
 
@@ -60,8 +62,11 @@ host.
   source checkout; managed install пока отсутствует;
 - current tracked tree: private-reference markers **0**, legacy APT/GPG delivery
   surface **0**;
-- public root candidate: один commit, tree exact, `git fsck --strict` clean,
-  Gitleaks **0**.
+- public root: один commit и одна ветка `master`, tree exact,
+  `git fsck --strict` clean, Gitleaks **0**;
+- публичный one-line bootstrap на disposable Ubuntu: Node **22.23.2**, exact
+  origin, frozen install/build, private managed layout и active generation
+  `2de457f` — green.
 
 ## Release gate
 
