@@ -4,7 +4,9 @@
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current public code head:** `a88919eaef97ae9d15b08e8b58c25dbf43c91908`
+**Current verified code head:** `a88919eaef97ae9d15b08e8b58c25dbf43c91908`
+
+**Accepted status descendant:** `343ae2ff27e1c34a8033e1ace37d8f9f33244186`
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -47,7 +49,7 @@ host.
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
 | Supervisor restart/rollback | **LIVE для текущего source release** | Target service active на проверенном source checkout; provider/voice A/B rollback и controlled restart пройдены | Повторить после managed Git cutover |
-| Managed Git install/update/rollback | **LIVE: public bootstrap и A→B→A→B приняты** | Public raw bootstrap из clean root `2de457f`, update `547f7b3`, rollback и roll-forward прошли на disposable Ubuntu; excluded doctor domains теперь блокируются до network validators в `a88919e` | D→C zero-external-network rollback на двух исправленных releases и target cutover |
+| Managed Git install/update/rollback | **LIVE: public disposable acceptance принят** | Public raw bootstrap, A→B→A→B и D→C→D прошли на disposable Ubuntu; исправленный rollback под `strace` не создал AF_INET socket/connect и не обратился к Telegram | Controlled target cutover |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
@@ -71,7 +73,11 @@ host.
   `2de457f` — green;
 - цикл `2de457f → 547f7b3 → 2de457f → 547f7b3` — green; fail-closed
   staged doctor сохранил A при неинициализированном state, после штатного
-  fixture-init update/rollback/roll-forward завершились без duplicate cutover.
+  fixture-init update/rollback/roll-forward завершились без duplicate cutover;
+- исправление `a88919e` прошло Core **2354 passed / 1 skipped**, App
+  distribution/doctor **57 passed / 1 skipped**, workspace typecheck/build;
+  цикл `a88919e → 343ae2f → a88919e → 343ae2f` — green, rollback trace
+  содержит zero AF_INET socket/connect.
 
 ## Release gate
 
