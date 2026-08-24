@@ -4,13 +4,13 @@
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current verified code head:** `a74419ca917254e6468dd6f64b07f89d762c6199`
+**Current verified code head:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
 
 **Production runtime release из public `master`:**
-`a74419ca917254e6468dd6f64b07f89d762c6199`
+`fdfd477f1b84d0155819acaa8d35b03778acba12`
 
-**Managed production current:** `a74419ca917254e6468dd6f64b07f89d762c6199`
-**Managed production previous:** `df6e837289008e53c9e716669e415a88f0cb637c`
+**Managed production current:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
+**Managed production previous:** `a74419ca917254e6468dd6f64b07f89d762c6199`
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -49,7 +49,7 @@ operator surfaces. Единственный новый разрыв, котор�
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
 |---|---|---|---|
-| Telegram text, streaming, attachments и forwarded batches | **LIVE** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в `packages/app/src/bin/aisy.ts`; restart/media/stream suites входят в App corpus | Один operator round-trip после managed cutover |
+| Telegram text, streaming, attachments и forwarded batches | **LIVE** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в `packages/app/src/bin/aisy.ts`; после managed cutover operator composite round-trip доставил один terminal ответ | Повторять короткий operator smoke для каждого UX release |
 | Workspace, Projects, Sessions и files | **LIVE** | Registry v2, ProjectService, session lease, scoped files и Telegram lifecycle controls находятся в production composition | Project create/switch/resume и restart E2E на целевом host |
 | Transcript v2 и compaction | **LIVE в коде** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; failure деградирует до bounded truncation | Target-FS self-test и long-session Telegram acceptance; day-log/activity pipeline DORMANT |
 | Keyword/scoped memory и forgetting | **LIVE** | Protected global/Project stores и `makeScopedMemoryLiveView` — единственный live path; nightly проходит shared forget filter | Restart, recall, correction и human-confirmed forget E2E |
@@ -61,9 +61,9 @@ operator surfaces. Единственный новый разрыв, котор�
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
 | Streamable HTTP MCP | **DORMANT** | Transport policy и wire foundation существуют, но live binding выключен | Отдельное security/authority решение и acceptance |
 | Native API providers | **LIVE под supervisor** | Семь fixed descriptors, root-owned broker, validator/worker sockets, host-encrypted A/B slots и rollback развёрнуты; arbitrary URL не принимается | TTY enrollment, bounded vendor call, switch, restart и revoke real slot |
-| Claude/Codex subscription brains | **LIVE на target; receipt fix развёрнут** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы; production trace `13:09:55Z–13:10:23Z` доказал успешную delegation evidence, но прежний Plan protocol отбросил `verified:true` уже выполненного `remember`. Release `a74419c` сохраняет только literal code-owned receipt, fail-closed отклоняет truthy/extra/accessor/Proxy/symbol terminal и развёрнут через managed update | Повторный составной Telegram turn без recovery/unverified |
+| Claude/Codex subscription brains | **LIVE на target; receipt fix принят** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы; release `a74419c` сохранил literal code-owned receipt, fail-closed отклонил truthy/extra/accessor/Proxy/symbol terminal, а повторный operator composite turn завершил durable memory mutation и настоящую delegation одним terminal ответом без recovery/unverified | Повторять composite smoke после изменений action protocol |
 | Voice provider registry / Deepgram proxy | **LIVE framework; text-only по умолчанию; structural target gate принят** | Telegram voice ingress, общий `Transcriber` для local/model-native/cloud adapter, one-use media capability, root-owned Deepgram broker/worker, consent/spend boundary и A/B rollback реализованы; target Doctor подтверждает artifact/backend/proxy/outbox, stale/unsafe choice изолирован с zero egress | Optional Deepgram acceptance отдельно: TTY enrollment, consent, Telegram voice, bounded vendor call и revoke; отсутствие подключения не блокирует harness cutover |
-| Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены; tool contract прямо требует реальный `spawn_subagent` и запрещает role-play результата | Повторить ordinary delegation через Telegram после `a74419c`, затем отдельно ambiguity и `/stop` |
+| Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены; ordinary delegation через Telegram после `a74419c` вернула проверенный terminal result | Отдельные target ambiguity и `/stop` fault drills |
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
 | Telegram/YouTube/GitHub monitoring collectors и feedback learning | **DORMANT / ОТСУТСТВУЕТ по подтипу** | Core collector/ranking pieces существуют не для всех platform flows | Отдельные normalized collectors, UI и deterministic cursor/feedback corpus |
@@ -73,8 +73,8 @@ operator surfaces. Единственный новый разрыв, котор�
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
-| Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `a74419c→df6e837→a74419c` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
-| Managed Git install/update/rollback | **LIVE: target cutover принят** | fr1 current=`a74419c`, previous=`df6e837`; staged Doctor, offline rollback и roll-forward зелёные, release worktree clean | Operator-level Telegram E2E для `a74419c` и следующий release cycle |
+| Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `fdfd477→a74419c→fdfd477` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
+| Managed Git install/update/rollback | **LIVE: target cutover принят** | fr1 current=`fdfd477`, previous=`a74419c`; staged Doctor, offline rollback и roll-forward зелёные, release worktree clean | Следующий release cycle |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
@@ -110,6 +110,13 @@ operator surfaces. Единственный новый разрыв, котор�
   `a74419c→df6e837→a74419c` завершены; оба release дали Doctor `ok=true`
   (18 pass, 7 optional warn, 0 fail), финальный service active,
   `NRestarts=0`, current release worktree clean;
+- composite Telegram E2E на `a74419c` завершил реальный subagent result и
+  durable memory mutation одним terminal ответом без recovery/unverified;
+- UX release `fdfd477`: Core **2364 passed / 1 skipped**, App **2559 passed /
+  2 skipped**, targeted remember/Project corpus **85 passed**, Core/App
+  typecheck/build green; managed update и offline цикл
+  `fdfd477→a74419c→fdfd477` завершены, оба Doctor `ok=true` (18 pass,
+  7 optional warn, 0 fail), финальный service active и `NRestarts=0`;
 - составной Telegram ход на `df6e837` создал настоящий terminal subagent result
   и durable memory write. Обезличенный session log независимо зафиксировал
   `delegate-required + requiresMutation`, затем только `missing:mutation` и
