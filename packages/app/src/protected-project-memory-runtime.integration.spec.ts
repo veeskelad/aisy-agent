@@ -244,7 +244,11 @@ describe('protected Project + memory preview composition', () => {
       await expect(first.execute()({
         name: 'remember',
         args: { text: 'Секретный проектный маяк Альфа' },
-      })).resolves.toEqual({ ok: true, output: 'Запомнил.', verified: true })
+      })).resolves.toEqual({
+        ok: true,
+        output: 'Запомнил — Секретный проектный маяк Альфа',
+        verified: true,
+      })
       await expect(first.execute()({
         name: 'search_memory',
         args: { query: 'маяк' },
@@ -300,7 +304,11 @@ describe('protected Project + memory preview composition', () => {
       await expect(restarted.execute()({
         name: 'remember',
         args: { text: 'Секретный проектный маяк Гамма' },
-      })).resolves.toEqual({ ok: true, output: 'Запомнил.', verified: true })
+      })).resolves.toEqual({
+        ok: true,
+        output: 'Запомнил — Секретный проектный маяк Гамма',
+        verified: true,
+      })
       await expect(restarted.execute()({
         name: 'search_memory',
         args: { query: 'Гамма' },
@@ -344,7 +352,11 @@ describe('protected Project + memory preview composition', () => {
       await expect(restarted.execute()({
         name: 'remember',
         args: { text: 'Глобальный маяк Бета' },
-      })).resolves.toEqual({ ok: true, output: 'Запомнил.', verified: true })
+      })).resolves.toEqual({
+        ok: true,
+        output: 'Запомнил — Глобальный маяк Бета',
+        verified: true,
+      })
       await expect(restarted.execute()({
         name: 'search_memory',
         args: { query: 'Бета' },

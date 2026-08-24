@@ -262,7 +262,7 @@ describe('makeInteractiveTurnRuntimeFactory', () => {
     })
     await expect(execute(call('remember', { text: 'remember me' }))).resolves.toEqual({
       ok: true,
-      output: 'Запомнил.',
+      output: 'Запомнил — remember me',
       verified: true,
     })
     await expect(execute(call('web_search', { query: 'Aisy' }))).resolves.toEqual({

@@ -290,7 +290,10 @@ JSON/cache и prose evidence не создают. Несогласованная
 самостоятельный расчёт или role-play ответа субагента запрещён и evidence не
 создаёт. Императивы `запомни` / `remember` выбирают `mutate-required`.
 Успешный durable `remember` со статусом `COMMITTED` возвращает typed
-`verified:true`, поэтому повторный readback памяти в том же ходе не нужен.
+`verified:true` и пользовательское подтверждение `Запомнил — <факт>` с
+обрезанными внешними пробелами. Provider показывает это подтверждение без
+перефразирования в системный отчёт о хранилище; повторный readback памяти в том
+же ходе не нужен.
 Составная команда с делегированием и мутацией сохраняет оба обязательства:
 делегирование не маскирует запись, а receipt записи не заменяет результат
 субагента.
@@ -702,8 +705,8 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     минимальный `{"intent":"standalone task"}` и запрещают имитацию child result.
 61. **AC-01-61** — `запомни` / `remember` классифицируются как
     `mutate-required`, а tool получает typed `verified:true` только после
-    durable `COMMITTED`; BLOCKED/error и невалидный MCP terminal receipt не
-    удовлетворяют mutation contract.
+    durable `COMMITTED` и возвращает `Запомнил — <trimmed fact>`; BLOCKED/error
+    и невалидный MCP terminal receipt не удовлетворяют mutation contract.
 62. **AC-01-62** — Provider-neutral Plan protocol сохраняет literal
     `verified:true` code-owned executor result через `auto`/`confirm` и exact
     planned path; truthy/false receipt, accessor/Proxy/symbol и любое лишнее

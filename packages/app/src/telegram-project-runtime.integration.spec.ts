@@ -415,7 +415,7 @@ describe.runIf(
 
     try {
       const first = compose(makeProjectRuntime())
-      await send(first, 'remember:Проектный маяк Альфа', 'Запомнил.')
+      await send(first, 'remember:Проектный маяк Альфа', 'Запомнил — Проектный маяк Альфа')
       await send(first, 'import:upload-1', '"relativePath":"imports/upload-1"')
       await send(first, 'read:imports/upload-1', payload.toString('utf8'))
 
@@ -426,7 +426,7 @@ describe.runIf(
       await send(first, 'search:Альфа', 'Память: ничего не найдено.')
       await send(first, 'read:imports/upload-1', 'read_file:')
       expect(sentTexts(first.calls).at(-1)).not.toContain(payload.toString('utf8'))
-      await send(first, 'remember:Проектный маяк Гамма', 'Запомнил.')
+      await send(first, 'remember:Проектный маяк Гамма', 'Запомнил — Проектный маяк Гамма')
       await send(first, 'search:Гамма', 'Проектный маяк Гамма')
 
       await switchTo(first, 'Workspace')

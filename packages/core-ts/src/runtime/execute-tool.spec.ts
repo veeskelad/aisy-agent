@@ -317,11 +317,15 @@ describe('makeToolExecutor — remember tool', () => {
     const commitSpy = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
     const memory: Memory = { ...fakeMemory({ status: 'COMMITTED' }), commit: commitSpy }
     const e = exec({ memory })
-    const r = await e(call('remember', { text: 'User prefers Russian replies' }))
-    expect(r).toEqual({ ok: true, output: 'Запомнил.', verified: true })
+    const r = await e(call('remember', { text: '  User prefers Russian replies  ' }))
+    expect(r).toEqual({
+      ok: true,
+      output: 'Запомнил — User prefers Russian replies',
+      verified: true,
+    })
     expect(commitSpy).toHaveBeenCalledOnce()
     expect(commitSpy).toHaveBeenCalledWith(
-      { op: 'ADD', text: 'User prefers Russian replies' },
+      { op: 'ADD', text: '  User prefers Russian replies  ' },
       { withinSession: true },
     )
   })
