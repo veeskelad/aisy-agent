@@ -15,6 +15,8 @@ import { validateRuntimeToolCall } from './tool-catalog.js'
 export interface ToolResult {
   ok: boolean
   output: string
+  /** Code-owned durable postcondition; never inferred from model prose. */
+  verified?: true
 }
 
 export interface FsPort {
@@ -191,7 +193,7 @@ export function makeToolExecutor(
             { op: 'ADD', text },
             { withinSession: true, ...(topic.length === 0 ? {} : { topic }) },
           )
-          if (r.status === 'COMMITTED') return { ok: true, output: 'Запомнил.' }
+          if (r.status === 'COMMITTED') return { ok: true, output: 'Запомнил.', verified: true }
           if (r.status === 'BLOCKED') return { ok: false, output: 'Эта информация ранее удалена из памяти.' }
           if (r.status === 'ROUTED_TO_REVIEW') return { ok: true, output: 'Похоже на ранее удалённое — отправил на проверку.' }
           return { ok: false, output: `remember: unexpected status: ${r.status}` }

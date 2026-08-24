@@ -1,4 +1,9 @@
-import type { ModelProgressEvent, ModelRequest, RuntimeToolDefinition } from '@aisy/core'
+import {
+  readProviderActionEvidence,
+  type ModelProgressEvent,
+  type ModelRequest,
+  type RuntimeToolDefinition,
+} from '@aisy/core'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -151,6 +156,9 @@ describe('claude subscription provider', () => {
     expect(Object.isFrozen(contexts[0])).toBe(true)
     expect(answer.reply).toBe('готово')
     expect(answer.usage).toEqual({ inputTokens: 12, outputTokens: 3, dollars: 0 })
+    expect(readProviderActionEvidence(answer)).toEqual([{
+      tool: 'read_file', family: 'inspect', successful: true, receipt: false,
+    }])
     expect(events.map((event) => event.type)).toContain('tool-requested')
     expect(events.map((event) => event.type)).toContain('tool-result')
   })

@@ -148,7 +148,9 @@ async function makeLeaseTurnRuntime(input: {
             ? deps.scopedMemory.commitProject(lease, { op: 'ADD', text }, { withinSession: true })
             : deps.scopedMemory.commitGlobal(lease, { op: 'ADD', text }, { withinSession: true })
           const result = await commit
-          if (result.status === 'COMMITTED') return { ok: true, output: 'Запомнил.' }
+          if (result.status === 'COMMITTED') {
+            return { ok: true, output: 'Запомнил.', verified: true }
+          }
           if (result.status === 'BLOCKED') {
             return { ok: false, output: 'Эта информация ранее удалена из памяти.' }
           }

@@ -15,6 +15,7 @@ import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { Api } from 'grammy'
 import {
+  actionEvidence,
   makeAgentRunner,
   runtimeToolDefinition,
   runtimeToolMinimumTiers,
@@ -3359,7 +3360,11 @@ invokeSubscriptionTool = async (call, signal, runtimeContext) => {
       code: error instanceof Error ? error.message : 'unknown',
     })
   }
-  return { text: result.output, isError: !result.ok }
+  return {
+    text: result.output,
+    isError: !result.ok,
+    receipt: actionEvidence(preflight.call, result).receipt,
+  }
 }
 
 // The mutex for the search the operator just confirmed. The approval authority

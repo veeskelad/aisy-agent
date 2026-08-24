@@ -4,6 +4,7 @@ import {
   actionRecoveryInstruction,
   classifyActionContract,
   evaluateActionContract,
+  readProviderActionEvidence,
 } from './action-contract.js'
 import type { ActionEvidence } from './action-contract.js'
 import type {
@@ -460,6 +461,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             provenance: 'untrusted',
             text: r.reply,
           })
+          actionEvidenceLog.push(...readProviderActionEvidence(r))
           if (r.usage) {
             usageIn += r.usage.inputTokens
             usageOut += r.usage.outputTokens

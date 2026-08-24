@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isGenuineToolExecutionContextFor, makeAgentLoop } from './index.js'
+import { actionEvidence, attachProviderActionEvidence } from './action-contract.js'
 import { fakeClock } from '../testing/index.js'
 import type {
   AgentLoopDeps,
@@ -1652,6 +1653,77 @@ describe('Tier-2 loop control seams', () => {
       expect(exec.calls.map(c => c.name)).toEqual(['spawn_subagent'])
       expect(result.actionContractKind).toBe('delegate-required')
       expect(result.actionStatus).toBe('verified')
+    })
+
+    it('AC-01-59: accepts a subscription bridge delegation attested by the local adapter', async () => {
+      const response = attachProviderActionEvidence(
+        { reply: 'AISY-TEXT-OK; субагент: 323' },
+        [
+          actionEvidence({ name: 'remember', args: {} }, { ok: true, verified: true }),
+          actionEvidence({ name: 'spawn_subagent', args: {} }, { ok: true }),
+        ],
+      )
+      const requests: ModelRequest[] = []
+      const provider: ProviderAdapter = {
+        complete: async (request) => {
+          requests.push(request)
+          return response
+        },
+      }
+      const loop = makeAgentLoop(makeDeps({ provider }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        spans: [makeOperatorSpan(
+          'Ответь AISY-TEXT-OK. Запомни факт. Поручи субагенту вычислить 17×19 и покажи ответ.',
+        )],
+      }))
+
+      expect(result.reply).toBe('AISY-TEXT-OK; субагент: 323')
+      expect(result.actionContractKind).toBe('delegate-required')
+      expect(result.actionStatus).toBe('verified')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]!.spans.some(span =>
+        span.role === 'system' && span.text.includes('spawn_subagent') &&
+        span.text.includes('{"intent":"standalone task"}'))).toBe(true)
+    })
+
+    it('AC-01-59: rejects mixed subscription work when only delegation is attested', async () => {
+      const response = attachProviderActionEvidence(
+        { reply: 'AISY-TEXT-OK; субагент: 323' },
+        [actionEvidence({ name: 'spawn_subagent', args: {} }, { ok: true })],
+      )
+      const provider: ProviderAdapter = { complete: async () => response }
+      const loop = makeAgentLoop(makeDeps({ provider }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        spans: [makeOperatorSpan('Запомни факт и поручи субагенту вычислить 17×19.')],
+      }))
+
+      expect(result.actionContractKind).toBe('delegate-required')
+      expect(result.actionStatus).toBe('unverified')
+    })
+
+    it('AC-01-61: accepts the durable receipt of a committed subscription memory write', async () => {
+      const response = attachProviderActionEvidence(
+        { reply: 'Запомнил.' },
+        [actionEvidence({ name: 'remember', args: {} }, { ok: true, verified: true })],
+      )
+      let calls = 0
+      const provider: ProviderAdapter = {
+        complete: async () => {
+          calls++
+          return response
+        },
+      }
+      const loop = makeAgentLoop(makeDeps({ provider }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        spans: [makeOperatorSpan('Запомни факт')],
+      }))
+
+      expect(result.actionContractKind).toBe('mutate-required')
+      expect(result.actionStatus).toBe('verified')
+      expect(calls).toBe(1)
     })
 
     it('AC-01-39: treats an externally verified plan as satisfying the action contract', async () => {

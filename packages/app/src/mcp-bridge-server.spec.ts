@@ -5,6 +5,7 @@ import {
   startAisyMcpBridge,
   type AisyMcpBridge,
   type McpBridgeInvocation,
+  type McpBridgeResult,
 } from './mcp-bridge-server.js'
 
 const bridges: AisyMcpBridge[] = []
@@ -23,12 +24,14 @@ const TOOLS = [
 ] as const
 
 async function bridge(input: {
-  invoke?: (call: McpBridgeInvocation) => Promise<{ text: string; isError: boolean }>
+  invoke?: (call: McpBridgeInvocation) => Promise<McpBridgeResult>
+  onResult?: (call: McpBridgeInvocation, result: McpBridgeResult) => void
   requireCodexTurnBinding?: boolean
 }): Promise<AisyMcpBridge> {
   const started = await startAisyMcpBridge({
     tools: TOOLS,
     invoke: input.invoke ?? (async () => ({ text: 'ok', isError: false })),
+    ...(input.onResult === undefined ? {} : { onResult: input.onResult }),
     ...(input.requireCodexTurnBinding === undefined
       ? {}
       : { requireCodexTurnBinding: input.requireCodexTurnBinding }),
@@ -105,11 +108,13 @@ describe('Aisy MCP bridge server', () => {
 
   it('routes a call to the injected executor and passes arguments through', async () => {
     const seen: McpBridgeInvocation[] = []
+    const settled: Array<{ call: McpBridgeInvocation; result: McpBridgeResult }> = []
     const target = await bridge({
       invoke: async (call) => {
         seen.push(call)
-        return { text: `read ${String(call.args['path'])}`, isError: false }
+        return { text: `read ${String(call.args['path'])}`, isError: false, receipt: true }
       },
+      onResult: (call, result) => { settled.push({ call, result }) },
     })
 
     const called = await rpc(target, {
@@ -120,10 +125,15 @@ describe('Aisy MCP bridge server', () => {
     })
 
     expect(seen).toEqual([{ name: 'read_file', args: { path: 'notes.md' } }])
+    expect(settled).toEqual([{
+      call: { name: 'read_file', args: { path: 'notes.md' } },
+      result: { text: 'read notes.md', isError: false, receipt: true },
+    }])
     expect(called.body).toMatchObject({
       id: 7,
       result: { content: [{ type: 'text', text: 'read notes.md' }], isError: false },
     })
+    expect(JSON.stringify(called.body)).not.toContain('receipt')
   })
 
   it('reports a refusal as an error result instead of killing the caller loop', async () => {

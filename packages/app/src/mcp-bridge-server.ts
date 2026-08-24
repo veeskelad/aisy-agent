@@ -34,6 +34,8 @@ export interface McpBridgeInvocation {
 export interface McpBridgeResult {
   readonly text: string
   readonly isError: boolean
+  /** In-process verification metadata. Never serialized onto the MCP wire. */
+  readonly receipt?: boolean
 }
 
 export interface AisyMcpBridge {
@@ -152,6 +154,8 @@ function send(response: ServerResponse, status: number, payload: unknown): void 
 export async function startAisyMcpBridge(input: {
   tools: readonly McpBridgeToolDefinition[]
   invoke(call: McpBridgeInvocation): Promise<McpBridgeResult>
+  /** Runs only after the executor result passed the bridge's shape/size checks. */
+  onResult?: (call: McpBridgeInvocation, result: McpBridgeResult) => void
   /** Test seam; production mints a fresh 256-bit token per process. */
   newToken?: () => string
   serverName?: string
@@ -267,9 +271,11 @@ export async function startAisyMcpBridge(input: {
             result = { text: 'TOOL_EXECUTION_FAILED', isError: true }
           }
           if (typeof result?.text !== 'string' || typeof result.isError !== 'boolean' ||
+            (result.receipt !== undefined && typeof result.receipt !== 'boolean') ||
             Buffer.byteLength(result.text, 'utf8') > MAX_RESULT_BYTES) {
             result = { text: 'TOOL_EXECUTION_FAILED', isError: true }
           }
+          try { input.onResult?.({ name, args }, result) } catch { /* evidence stays fail-closed */ }
           return {
             jsonrpc: '2.0',
             id: request.id,

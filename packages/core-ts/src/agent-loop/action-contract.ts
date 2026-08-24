@@ -2,12 +2,15 @@ import type {
   ActionContractKind,
   ActionMissingEvidence,
   ContextSpan,
+  ModelResponse,
   ToolCall,
 } from './types.js'
 
 export interface ActionContract {
   kind: ActionContractKind
   reasonCode: 'ANSWER' | 'INSPECT_VERB' | 'MUTATE_VERB' | 'DELEGATE_VERB'
+  /** A mixed operator request must not lose its mutation behind delegation precedence. */
+  requiresMutation?: true
 }
 
 export type ActionToolFamily = 'inspect' | 'mutate' | 'delegate' | 'unknown'
@@ -24,13 +27,62 @@ export interface ActionContractVerdict {
   missing: ActionMissingEvidence
 }
 
+// A subscription adapter executes Aisy capabilities inside its supervised MCP
+// loop, so those calls do not pass through AgentLoop.dispatch(). Keep their
+// evidence on an in-process, non-serializable channel: vendor JSON, transcript
+// text, cached responses and provider progress cannot manufacture this symbol.
+const providerActionEvidence = Symbol('aisy.provider-action-evidence')
+
+type AttestedModelResponse = ModelResponse & {
+  readonly [providerActionEvidence]?: readonly ActionEvidence[]
+}
+
+function snapshotProviderEvidence(item: ActionEvidence): Readonly<ActionEvidence> {
+  if (typeof item.tool !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(item.tool) ||
+    typeof item.successful !== 'boolean' || typeof item.receipt !== 'boolean') {
+    throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
+  }
+  const validFamily = item.tool === 'bash'
+    ? item.family === 'inspect' || item.family === 'mutate'
+    : item.family === actionToolFamily({ name: item.tool, args: {} })
+  if (!validFamily) throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
+  return Object.freeze({
+    tool: item.tool,
+    family: item.family,
+    successful: item.successful,
+    receipt: item.receipt,
+  })
+}
+
+export function attachProviderActionEvidence(
+  response: ModelResponse,
+  evidence: readonly ActionEvidence[],
+): ModelResponse {
+  if (evidence.length > 128) throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
+  const snapshot = Object.freeze(evidence.map(snapshotProviderEvidence))
+  const attached: AttestedModelResponse = { ...response }
+  Object.defineProperty(attached, providerActionEvidence, {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: snapshot,
+  })
+  return attached
+}
+
+export function readProviderActionEvidence(
+  response: ModelResponse,
+): readonly ActionEvidence[] {
+  return (response as AttestedModelResponse)[providerActionEvidence] ?? []
+}
+
 const INFORMATIONAL_PREFIX = /^(?:объясни|расскажи|почему|что такое|можно ли|как (?:мне |нам )?(?:сделать|создать|настроить|установить)|explain|describe|why|what is|how (?:do|can|should|to)\b)/i
 // JavaScript's `\b` is ASCII-centric: it does not form reliable boundaries
 // around Cyrillic words. Keep Russian alternatives explicit, and use `\b`
 // only inside the English-only branches.
 const DELEGATE_RE = /(?:делегируй|делегировать|субагент(?:у|ам|а|ы)?|параллельн(?:ый|ые|о) агент)|\b(?:subagents?|spawn (?:a )?subagent|delegate (?:this )?to|parallel agents?)\b/i
 const INSPECT_RE = /(?:проверь|проверить|посмотри|изучи|изучить|проанализируй|найди|покажи|прочитай|сверь|протестируй|запусти тесты)|\b(?:inspect|check|verify|analy[sz]e|find|show|read|list|run (?:the )?tests?)\b/i
-const MUTATE_RE = /(?:создай|добавь|измени|исправь|обнови|удали|запусти|установи|настрой|отправь|сохрани|перенеси|реализуй|доработай|почини)|\b(?:create|add|change|edit|fix|update|delete|remove|run|install|configure|send|save|move|implement)\b/i
+const MUTATE_RE = /(?:создай|добавь|измени|исправь|обнови|удали|запусти|установи|настрой|отправь|сохрани|запомни|запомнить|перенеси|реализуй|доработай|почини)|\b(?:create|add|change|edit|fix|update|delete|remove|run|install|configure|send|save|remember|move|implement)\b/i
 const INSPECTION_OVERRIDE_RE = /(?:запусти тесты|протестируй)|\b(?:run (?:the )?tests?|test)\b/i
 
 const INSPECT_TOOLS = new Set([
@@ -57,7 +109,15 @@ export function classifyActionContract(spans: ContextSpan[]): ActionContract {
   const texts = operatorTexts(spans).filter((text) => !INFORMATIONAL_PREFIX.test(text))
   if (texts.length === 0) return { kind: 'answer-only', reasonCode: 'ANSWER' }
   const text = texts.join('\n')
-  if (DELEGATE_RE.test(text)) return { kind: 'delegate-required', reasonCode: 'DELEGATE_VERB' }
+  if (DELEGATE_RE.test(text)) {
+    return {
+      kind: 'delegate-required',
+      reasonCode: 'DELEGATE_VERB',
+      ...(MUTATE_RE.test(text) && !INSPECTION_OVERRIDE_RE.test(text)
+        ? { requiresMutation: true as const }
+        : {}),
+    }
+  }
   // A mixed “inspect and fix” request needs mutation postconditions. Explicit
   // test-running phrases are the exception: generic “run/запусти” means inspect.
   if (MUTATE_RE.test(text) && !INSPECTION_OVERRIDE_RE.test(text)) {
@@ -100,27 +160,7 @@ export function actionEvidence(call: ToolCall, result: unknown): ActionEvidence 
   }
 }
 
-export function evaluateActionContract(
-  contract: ActionContract,
-  evidence: ActionEvidence[],
-  planVerified = false,
-): ActionContractVerdict {
-  if (contract.kind === 'answer-only' || planVerified) return { satisfied: true, missing: 'none' }
-
-  if (contract.kind === 'inspect-required') {
-    const observed = evidence.some((item) => item.successful && item.family === 'inspect')
-    return observed
-      ? { satisfied: true, missing: 'none' }
-      : { satisfied: false, missing: 'observation' }
-  }
-
-  if (contract.kind === 'delegate-required') {
-    const delegated = evidence.some((item) => item.successful && item.family === 'delegate')
-    return delegated
-      ? { satisfied: true, missing: 'none' }
-      : { satisfied: false, missing: 'delegation' }
-  }
-
+function mutationVerdict(evidence: ActionEvidence[]): ActionContractVerdict {
   let mutationIndex = -1
   for (let i = evidence.length - 1; i >= 0; i--) {
     const item = evidence[i]!
@@ -138,13 +178,41 @@ export function evaluateActionContract(
     : { satisfied: false, missing: 'postcondition' }
 }
 
+export function evaluateActionContract(
+  contract: ActionContract,
+  evidence: ActionEvidence[],
+  planVerified = false,
+): ActionContractVerdict {
+  if (contract.kind === 'answer-only' || planVerified) return { satisfied: true, missing: 'none' }
+
+  if (contract.kind === 'inspect-required') {
+    const observed = evidence.some((item) => item.successful && item.family === 'inspect')
+    return observed
+      ? { satisfied: true, missing: 'none' }
+      : { satisfied: false, missing: 'observation' }
+  }
+
+  if (contract.kind === 'delegate-required') {
+    const delegated = evidence.some((item) => item.successful && item.family === 'delegate')
+    if (!delegated) return { satisfied: false, missing: 'delegation' }
+    return contract.requiresMutation === true
+      ? mutationVerdict(evidence)
+      : { satisfied: true, missing: 'none' }
+  }
+
+  return mutationVerdict(evidence)
+}
+
 export function actionRecoveryInstruction(
   contract: ActionContract,
   verdict: ActionContractVerdict,
 ): string {
+  const nextAction = verdict.missing === 'delegation'
+    ? 'Call spawn_subagent now with a JSON string such as {"intent":"standalone task"}. Do not calculate or role-play the subagent result yourself.'
+    : 'Call a relevant tool now; after a mutation, independently verify the postcondition.'
   return [
     `Action contract: ${contract.kind}.`,
     `Missing evidence: ${verdict.missing}.`,
-    'Do not claim completion. Call a relevant tool now; after a mutation, independently verify the postcondition.',
+    `Do not claim completion. ${nextAction}`,
   ].join(' ')
 }

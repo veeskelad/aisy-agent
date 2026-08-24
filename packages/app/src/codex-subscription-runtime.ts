@@ -11,12 +11,15 @@ import {
 import { isAbsolute, join, normalize } from 'node:path'
 
 import {
+  actionEvidence,
+  attachProviderActionEvidence,
   makeAisyCapabilityBrainProviderAdapter,
   makeCodexAppServerCapabilityDriver,
   makeCodexSubscriptionAuth,
   makeNodeCodexAppServerSessionFactory,
   makeNodeCodexAuthProcessPort,
   makeSqliteCodexThreadStore,
+  type ActionEvidence,
   type CodexAppServerSpawnPort,
   type CodexAuthProcessPort,
   type ModelToolRuntimeContext,
@@ -224,6 +227,9 @@ export function makeNodeCodexSubscriptionRuntime(input: {
       const tools = snapshotTools(providerInput.tools)
       const names = tools.map(tool => tool.name)
       const invokeTool = providerInput.invokeTool
+      const evidenceByTurn = new Map<string, ActionEvidence[]>()
+      const evidenceKey = (request: { sessionId: string; turnId?: string }): string =>
+        `${request.sessionId}\0${request.turnId ?? ''}`
       const driver = makeCodexAppServerCapabilityDriver({
         auth,
         sessions,
@@ -238,6 +244,8 @@ export function makeNodeCodexSubscriptionRuntime(input: {
         capabilityBridges: {
           async open(turn, signal) {
             if (signal.aborted) throw new Error('CODEX_TURN_INTERRUPTED')
+            const evidence = evidenceByTurn.get(evidenceKey(turn.request))
+            if (evidence === undefined) throw new Error('CODEX_TURN_EVIDENCE_UNAVAILABLE')
             const bridge = await startAisyMcpBridge({
               serverName: 'aisy',
               tools,
@@ -246,6 +254,12 @@ export function makeNodeCodexSubscriptionRuntime(input: {
                 sessionId: turn.request.sessionId,
                 ...(turn.request.turnId === undefined ? {} : { turnId: turn.request.turnId }),
               })),
+              onResult: (call, result) => {
+                evidence.push(actionEvidence(
+                  { name: call.name, args: call.args },
+                  { ok: !result.isError, ...(result.receipt === true ? { verified: true } : {}) },
+                ))
+              },
             })
             return Object.freeze({
               url: bridge.url,
@@ -260,9 +274,23 @@ export function makeNodeCodexSubscriptionRuntime(input: {
           },
         },
       })
-      return makeAisyCapabilityBrainProviderAdapter({
+      const adapter = makeAisyCapabilityBrainProviderAdapter({
         driver,
         projectId: providerInput.projectId,
+      })
+      return Object.freeze<ProviderAdapter>({
+        async complete(request, signal, onProgress) {
+          const key = evidenceKey(request)
+          if (evidenceByTurn.has(key)) throw new Error('CODEX_TURN_ALREADY_ACTIVE')
+          const evidence: ActionEvidence[] = []
+          evidenceByTurn.set(key, evidence)
+          try {
+            const response = await adapter.complete(request, signal, onProgress)
+            return attachProviderActionEvidence(response, evidence)
+          } finally {
+            evidenceByTurn.delete(key)
+          }
+        },
       })
     },
     close() {

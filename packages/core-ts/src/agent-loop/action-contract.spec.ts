@@ -3,8 +3,10 @@ import type { ContextSpan, ToolCall } from './types.js'
 import {
   actionEvidence,
   actionRecoveryInstruction,
+  attachProviderActionEvidence,
   classifyActionContract,
   evaluateActionContract,
+  readProviderActionEvidence,
 } from './action-contract.js'
 
 function operator(text: string): ContextSpan[] {
@@ -33,6 +35,7 @@ describe('Action Contract', () => {
   it('classifies Russian and English inspect/mutate/delegate requests', () => {
     expect(classifyActionContract(operator('Проверь все файлы')).kind).toBe('inspect-required')
     expect(classifyActionContract(operator('Fix the failing test')).kind).toBe('mutate-required')
+    expect(classifyActionContract(operator('Запомни факт')).kind).toBe('mutate-required')
     expect(classifyActionContract(operator('Проверь и исправь файл')).kind).toBe('mutate-required')
     expect(classifyActionContract(operator('Запусти тесты')).kind).toBe('inspect-required')
     expect(classifyActionContract(operator('Делегируй анализ субагенту')).kind).toBe('delegate-required')
@@ -73,6 +76,25 @@ describe('Action Contract', () => {
     expect(evaluateActionContract(contract, [actionEvidence(call('spawn_subagent'), [])]).satisfied).toBe(true)
   })
 
+  it('requires both durable mutation and delegation for a mixed request', () => {
+    const contract = classifyActionContract(operator('Запомни факт и поручи задачу субагенту'))
+    const delegated = actionEvidence(call('spawn_subagent'), { ok: true })
+    const remembered = actionEvidence(call('remember'), { ok: true, verified: true })
+
+    expect(evaluateActionContract(contract, [delegated])).toEqual({
+      satisfied: false,
+      missing: 'mutation',
+    })
+    expect(evaluateActionContract(contract, [remembered])).toEqual({
+      satisfied: false,
+      missing: 'delegation',
+    })
+    expect(evaluateActionContract(contract, [remembered, delegated])).toEqual({
+      satisfied: true,
+      missing: 'none',
+    })
+  })
+
   it('emits a constrained recovery instruction without claiming success', () => {
     const contract = classifyActionContract(operator('Update the file'))
     const verdict = evaluateActionContract(contract, [])
@@ -80,5 +102,32 @@ describe('Action Contract', () => {
     expect(instruction).toContain('mutate-required')
     expect(instruction).toContain('Missing evidence: mutation')
     expect(instruction).toContain('Do not claim completion')
+  })
+
+  it('names spawn_subagent and forbids role-play for missing delegation evidence', () => {
+    const contract = classifyActionContract(operator('Поручи задачу субагенту'))
+    const instruction = actionRecoveryInstruction(contract, evaluateActionContract(contract, []))
+
+    expect(instruction).toContain('spawn_subagent')
+    expect(instruction).toContain('{"intent":"standalone task"}')
+    expect(instruction).toContain('Do not calculate or role-play the subagent result yourself')
+  })
+
+  it('keeps provider evidence in-process and rejects inconsistent families', () => {
+    const attached = attachProviderActionEvidence(
+      { reply: 'done' },
+      [actionEvidence(call('spawn_subagent'), { ok: true })],
+    )
+
+    expect(readProviderActionEvidence(attached)).toHaveLength(1)
+    expect(readProviderActionEvidence({ ...attached })).toEqual([])
+    expect(JSON.stringify(attached)).toBe('{"reply":"done"}')
+    expect(readProviderActionEvidence(attachProviderActionEvidence(
+      { reply: 'inspected' },
+      [actionEvidence(call('bash', { cmd: 'git status' }), { ok: true })],
+    ))[0]?.family).toBe('inspect')
+    expect(() => attachProviderActionEvidence({ reply: 'bad' }, [{
+      tool: 'spawn_subagent', family: 'inspect', successful: true, receipt: false,
+    }])).toThrow('INVALID_PROVIDER_ACTION_EVIDENCE')
   })
 })

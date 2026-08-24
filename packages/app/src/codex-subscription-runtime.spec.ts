@@ -11,7 +11,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 
-import type { CodexAppServerSpawnPort, CodexAuthProcessPort, ModelProgressEvent } from '@aisy/core'
+import {
+  readProviderActionEvidence,
+  type CodexAppServerSpawnPort,
+  type CodexAuthProcessPort,
+  type ModelProgressEvent,
+} from '@aisy/core'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -205,10 +210,14 @@ describe('live Codex subscription runtime', () => {
       _context: { sessionId: string; turnId?: string },
     ) => ({ text: 'wrong executor', isError: true }))
 
-    await expect(provider.complete({
+    const response = await provider.complete({
       sessionId: 'session-a', turnId: 'operator-turn-a', prefixBytes: new Uint8Array(),
       spans: [{ role: 'user', provenance: 'operator', text: 'Прочитай README' }],
-    }, undefined, event => { progress.push(event) })).resolves.toMatchObject({ reply: 'Готово' })
+    }, undefined, event => { progress.push(event) })
+    expect(response).toMatchObject({ reply: 'Готово' })
+    expect(readProviderActionEvidence(response)).toEqual([{
+      tool: 'read_file', family: 'inspect', successful: true, receipt: false,
+    }])
 
     expect(invoked).toHaveBeenCalledWith(
       { name: 'read_file', args: { path: 'README.md' } },

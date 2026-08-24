@@ -10,7 +10,10 @@
 import { spawn } from 'node:child_process'
 
 import {
+  actionEvidence,
+  attachProviderActionEvidence,
   promptFromSpans,
+  type ActionEvidence,
   type ModelProgressSink,
   type ModelRequest,
   type ModelResponse,
@@ -234,6 +237,7 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
     ): Promise<ModelResponse> {
       const abort = signal ?? new AbortController().signal
       let sequence = 0
+      const actionEvidenceLog: ActionEvidence[] = []
       const bridge = await startAisyMcpBridge({
         serverName: MCP_SERVER_NAME,
         tools: deps.tools,
@@ -248,6 +252,12 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
           }))
           void onProgress?.({ type: 'tool-result', toolCallId, result: result.text })
           return result
+        },
+        onResult: (call, result) => {
+          actionEvidenceLog.push(actionEvidence(
+            { name: call.name, args: call.args },
+            { ok: !result.isError, ...(result.receipt === true ? { verified: true } : {}) },
+          ))
         },
       })
 
@@ -287,10 +297,10 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
           throw new ClaudeSubscriptionError('server-error', 'NATIVE_TOOLS_EXPOSED')
         }
         if (parsed.usage !== undefined) void onProgress?.({ type: 'usage', ...parsed.usage })
-        return {
+        return attachProviderActionEvidence({
           reply: parsed.reply,
           ...(parsed.usage === undefined ? {} : { usage: parsed.usage }),
-        }
+        }, actionEvidenceLog)
       } finally {
         await bridge.close()
       }

@@ -277,6 +277,24 @@ loop, code issues exactly one constrained recovery model call. Hooks, approvals,
 narrowing, and loop caps remain authoritative. If evidence is still absent, the returned
 text is a safe non-completion message with `actionStatus:"unverified"`.
 
+Для Claude/Codex subscription фактически выполненный вызов проходит внутри
+supervised MCP loop и потому не попадает в обычный `AgentLoop.dispatch()`.
+Локальный adapter после валидированного terminal result прикрепляет к
+`ModelResponse` не перечислимое и не сериализуемое in-process evidence. Loop
+принимает только этот канал; provider progress, transcript/tool-result text,
+JSON/cache и prose evidence не создают. Несогласованная family, malformed
+поле или более 128 evidence records дают fail-closed ошибку.
+
+При `missing:delegation` code-owned инструкция прямо требует
+`spawn_subagent` и минимальный однозадачный JSON `{"intent":"standalone task"}`;
+самостоятельный расчёт или role-play ответа субагента запрещён и evidence не
+создаёт. Императивы `запомни` / `remember` выбирают `mutate-required`.
+Успешный durable `remember` со статусом `COMMITTED` возвращает typed
+`verified:true`, поэтому повторный readback памяти в том же ходе не нужен.
+Составная команда с делегированием и мутацией сохраняет оба обязательства:
+делегирование не маскирует запись, а receipt записи не заменяет результат
+субагента.
+
 ### 4.8 Production Plan Mode submission state (ADR-0092)
 
 LIVE Plan Mode не ждёт ручного переключения после плана. Для action-required
@@ -666,6 +684,18 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 58. **AC-01-58** — Research observation записывается только для успешного
     read/search результата после output filtering; withheld/redaction failure
     не позволяет принять `submit_plan`.
+59. **AC-01-59** — Успешный `spawn_subagent`, выполненный через Claude/Codex
+    subscription bridge, создаёт in-process evidence и закрывает
+    `delegate-required` за один provider call; prose/progress без реального
+    вызова оставляет `actionStatus:"unverified"`. Если тот же operator span
+    требует мутацию, контракт закрывается только при evidence обоих действий.
+60. **AC-01-60** — Для отсутствующей delegation evidence recovery instruction
+    и provider tool description явно называют `spawn_subagent`, показывают
+    минимальный `{"intent":"standalone task"}` и запрещают имитацию child result.
+61. **AC-01-61** — `запомни` / `remember` классифицируются как
+    `mutate-required`, а tool получает typed `verified:true` только после
+    durable `COMMITTED`; BLOCKED/error и невалидный MCP terminal receipt не
+    удовлетворяют mutation contract.
 
 ## 10. Open questions
 

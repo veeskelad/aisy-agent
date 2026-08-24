@@ -972,8 +972,10 @@ export {
   actionEvidence,
   actionRecoveryInstruction,
   actionToolFamily,
+  attachProviderActionEvidence,
   classifyActionContract,
   evaluateActionContract,
+  readProviderActionEvidence,
 } from './agent-loop/action-contract.js'
 export type {
   ActionContract,

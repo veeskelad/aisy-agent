@@ -62,6 +62,14 @@ describe('единый runtime tool catalog', () => {
     expect(isRuntimeToolName('arbitrary_plugin_tool')).toBe(false)
   })
 
+  it('объясняет модели минимальный однозадачный формат делегирования', () => {
+    const tool = runtimeProviderTools().find(item => item.name === 'spawn_subagent')
+
+    expect(tool?.description).toContain('Required when the operator asks')
+    expect(tool?.description).toContain('{"intent":"standalone task"}')
+    expect(tool?.description).toContain('never imitate the sub-agent')
+  })
+
   it('malformed call не вызывает ни один executor port', async () => {
     const readFile = vi.fn(() => 'not reached')
     const writeFile = vi.fn()
