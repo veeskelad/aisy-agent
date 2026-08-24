@@ -1,6 +1,6 @@
 # ADR-0015: Skill Format + Staged Creation
 
-**Status:** Proposed
+**Status:** Proposed (partly superseded by [ADR-0108](./2026-08-25-typed-auto-skills-without-authority.md))
 **Date:** 2026-06-11
 **Tags:** skills
 
@@ -42,8 +42,10 @@ approval before prod; each approved save is a git commit.
   failure; git history gives auditable, revertible skill evolution.
 - **Neutral:** `description` ≤60 chars forces terse, trigger-oriented naming; telemetry lives in a
   second store that must be joined for analytics.
-- **Negative:** A human is in the loop for every agent-authored skill, so self-improvement is
-  gated by reviewer throughput; staging adds a promotion step versus writing files in place.
+- **Negative:** A human is in the loop for every free-form agent-authored skill,
+  so that class of self-improvement is gated by reviewer throughput; staging
+  adds a promotion step versus writing files in place. ADR-0108 defines the
+  narrower typed zero-authority exception.
 
 ## Alternatives considered
 **Write agent skills straight to prod.** Fastest self-improvement loop, but it is precisely
@@ -58,6 +60,9 @@ the always-loaded prefix and bloats the KV-cached region. Rejected on token budg
 ecosystem interop with Claude Code / anima_sdk and makes skills non-diffable in git. Rejected.
 
 ## References
+- [ADR-0108](./2026-08-25-typed-auto-skills-without-authority.md) — typed
+  zero-authority auto-skills may activate without a human tap; free-form skills
+  keep this ADR's staging gate.
 - Hermes issue #6051 — skill fossilized from a transient failure (learned helplessness).
 - [ADR-0016](./2026-06-11-generator-judge-self-learning.md) — nightly loop that authors skills.
 - [ADR-0025](./2026-06-11-transient-vs-permanent-skill-failure.md) — human-approval staging gate.

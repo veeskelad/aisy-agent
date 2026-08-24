@@ -1,6 +1,6 @@
 # ADR-0016: Generator + Separate Judge for Self-Learning
 
-**Status:** Proposed
+**Status:** Proposed (partly superseded by [ADR-0108](./2026-08-25-typed-auto-skills-without-authority.md))
 **Date:** 2026-06-11
 **Tags:** skills, memory
 
@@ -11,8 +11,10 @@ with no external judge, so the model that wrote a change is also the one that gr
 it — the judge is the defendant. This self-evaluation bias compounds because the loop
 learns mainly from "successes" and rarely from corrected failures, so weak or wrong
 rules get blessed and fossilized (cf. Hermes #6051, a skill frozen from a transient
-failure = learned helplessness). Agent-created skills must never ship straight to
-prod (per the skills policy: staging + human approval). We also want cost discipline:
+failure = learned helplessness). Free-form/nightly agent-created skills must
+never ship straight to prod (per the skills policy: staging + human approval).
+ADR-0108 separately constrains typed auto-skills to code-owned registry ids.
+We also want cost discipline:
 drafting is high-volume routine work suited to a cheap model, while validation must be
 independent and a bit sharper. Finally, generated artifacts can silently break the
 constitution, reference files that do not exist, or omit the mandatory verification
@@ -25,6 +27,7 @@ drafts candidate rules/skills; **deterministic validators** run first and gate
 anything malformed; then a **separate judge** (a different model, e.g. Sonnet 4.6)
 that does not see the generator's reasoning validates what survives. Output goes to
 **staging** and ships to prod only after human approval in the morning card.
+This decision describes free-form nightly drafts, not ADR-0108 typed recipes.
 
 - **Deterministic validators (run before the judge, 100% enforcement):**
   `refs_exist` (every referenced file/skill resolves), `no_constitution_conflict`
@@ -66,6 +69,9 @@ no-skip-permissions stance on consequential changes and invites chaos in the liv
 prompt/skill set. Rejected.
 
 ## References
+- [ADR-0108](./2026-08-25-typed-auto-skills-without-authority.md) — separate
+  immediate typed-recipe generator/judge path with automatic zero-authority
+  activation; nightly free-form drafts keep the human gate.
 - [ADR-0015](./2026-06-11-skill-format-staged-creation.md)
 - [ADR-0023](./2026-06-11-durable-forgetting-tombstones.md)
 - Hermes issues #6051 (fossilized skill / learned helplessness), #23023, #25526

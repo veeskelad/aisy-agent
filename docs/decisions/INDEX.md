@@ -13,6 +13,7 @@ in this index so cross-references stay stable.
 
 | ID | Status | Date | Title | Tags |
 |----|--------|------|-------|------|
+| ADR-0108 | Принято | 2026-08-25 | [Типизированные auto-skills активируются без выдачи полномочий](./2026-08-25-typed-auto-skills-without-authority.md) | skills, safety, learning |
 | ADR-0107 | Принято | 2026-08-23 | [Чистый публичный snapshot вместо раскрытия приватной истории](./2026-08-23-clean-public-snapshot.md) | security, publishing, git |
 | ADR-0106 | Принято | 2026-08-22 | [Managed Git и SSH-bundles вместо APT](./2026-08-22-managed-git-distribution-without-apt.md) | packaging, supply-chain, git, ssh |
 | ADR-0105 | Заменено ADR-0106 | 2026-08-21 | [Подписанные системные пакеты как root trust root](./2026-08-21-signed-system-packages.md) | packaging, supply-chain, systemd |
@@ -79,8 +80,8 @@ in this index so cross-references stay stable.
 | ADR-0012 | Proposed | 2026-06-11 | [Docker Sandbox as Default](./2026-06-11-docker-sandbox-default.md) | security |
 | ADR-0013 | Proposed | 2026-06-11 | [MCP Allowlist + Version Pinning + Descriptor Hashing](./2026-06-11-mcp-allowlist-pinning-hashing.md) | security, mcp |
 | ADR-0014 | Proposed | 2026-06-11 | [Narrow-Waist Tool Set (<20)](./2026-06-11-narrow-waist-tool-set.md) | architecture |
-| ADR-0015 | Proposed | 2026-06-11 | [Skill Format + Staged Creation](./2026-06-11-skill-format-staged-creation.md) | skills |
-| ADR-0016 | Proposed | 2026-06-11 | [Generator + Separate Judge for Self-Learning](./2026-06-11-generator-judge-self-learning.md) | skills, memory |
+| ADR-0015 | Proposed (partly superseded by ADR-0108) | 2026-06-11 | [Skill Format + Staged Creation](./2026-06-11-skill-format-staged-creation.md) | skills |
+| ADR-0016 | Proposed (partly superseded by ADR-0108) | 2026-06-11 | [Generator + Separate Judge for Self-Learning](./2026-06-11-generator-judge-self-learning.md) | skills, memory |
 | ADR-0017 | Proposed | 2026-06-11 | [External Verification by Real Traces](./2026-06-11-external-verification-by-traces.md) | verification |
 | ADR-0018 | Proposed | 2026-06-11 | [3-Tier Model Router with Hysteresis Fallback](./2026-06-11-model-router-hysteresis-fallback.md) | routing |
 | ADR-0019 | Accepted | 2026-06-11 | [Stable-Prefix KV-Cache](./2026-06-11-stable-prefix-kv-cache.md) | performance |

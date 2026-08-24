@@ -1,9 +1,9 @@
 # Компонент 21: Production runtime Skills
 
 **Статус:** LIVE для hash-pinned чтения, prompt-композиции, CLI install/remove и
-Telegram-каталога/управления; automatic Skill drafting и verification-probe
-promotion не входят в LIVE path  
-**Связанные ADR:** ADR-0015, ADR-0017, ADR-0019, ADR-0027, ADR-0029  
+Telegram-каталога/управления; typed auto-skill path ADR-0108 принят для
+operator canary, но остаётся DORMANT до реализации всех AC §7  
+**Связанные ADR:** ADR-0015, ADR-0017, ADR-0019, ADR-0027, ADR-0029, ADR-0108  
 **Зависит от:** Agent Loop (01), Skills (06), Safety (05), Agent DNA (20)
 
 ## 1. Назначение
@@ -14,9 +14,11 @@ Production runtime должен давать модели только акти�
 совпадении trigger. Повреждение файла или манифеста закрывает конкретный Skill,
 но не делает базового агента недоступным.
 
-Этот компонент не разрешает модели публиковать Skill. Он только читает уже
-принятое оператором состояние. Staging, approval, git promotion и живое
-выполнение verification probes остаются в компонентах 06, 10 и 12.
+Этот компонент не разрешает модели публиковать свободный Skill. Staging,
+approval, git promotion и живое выполнение verification probes для свободного
+Markdown остаются в компонентах 06, 10 и 12. Typed auto-skill ADR-0108 имеет
+отдельный private manifest и может активироваться без тапа только потому, что
+его vocabulary, scope и prompt projection полностью ограничены кодом.
 
 ## 2. Durable contract
 
@@ -90,13 +92,40 @@ menu extension оставляет доступным базового агент
   Skills из своей immutable AgentCard;
 - `touchedPaths` разрешаются из того же проверенного snapshot;
 - неизвестная или неактивная ссылка на Skill блокирует AgentCard до model I/O;
-- каталог формируется один раз при startup, поэтому изменение manifest требует
-  контролируемого restart и не меняет frozen session незаметно.
+- legacy/free-form каталог v1 формируется один раз при startup, поэтому его
+  изменение требует контролируемого restart; только typed auto-skill overlay
+  §5.1 имеет отдельный versioned next-turn path.
 
 MCP registry, promotion UI, telemetry результата Skill и выполнение
 verification probes этим компонентом пока не объявляются готовыми.
 Main-agent capability matrix доступна в live binary только через
 opt-in настройку; её default cutover требует отдельного согласования.
+
+## 5.1 Typed auto-skill canary
+
+При `AISY_AUTO_SKILLS=1` private schema v2 хранит immutable recipe revisions,
+scoped active/previous pointers, evidence/jobs, forget tombstones и delivery
+outbox. `AutoSkillScope` состоит из operator/profile, Project, resource scope и
+capability revision без session id. Все файлы `0600`, каталоги `0700`; unknown
+schema fail-closed.
+
+До terminal reply одна bounded local transaction фиксирует verified evidence,
+candidate job и reply-release state. Generator/judge worker идёт после reply.
+Lifecycle `queued → generated → validated → shadow_verified → prepared → active`
+и forget `forget_claimed → purging → tombstoned` восстанавливаются idempotently.
+Active pointer меняется только atomic CAS; durable previous не теряется при
+активации другого Skill.
+
+Следующий turn исходной session получает versioned `learned-procedure` overlay
+без изменения frozen memory/history prefix. Новая session видит revision в
+обычном scoped menu. Другой Project и child без exact scope/capability её не
+видят. Notification использует durable at-most-once outbox: ambiguous Telegram
+send не повторяется и отражается в Doctor.
+
+Закрытый permanent failure enum — `descriptor_missing`,
+`placeholder_missing`, `postcondition_mismatch`, `required_step_omitted`,
+`scope_mismatch`; только receipt с exact recipe hash может демоутить revision.
+Provider/network/timeout всегда transient. Re-enable повторяет все gates.
 
 ## 6. Критерии приёмки
 
@@ -120,7 +149,25 @@ opt-in настройку; её default cutover требует отдельно�
 11. **AC-21-11:** Telegram-меню имеет явное empty state, сортирует metadata,
     удаляет управляющие символы и не превышает 4096 символов.
 
-## 7. Трассировка тестов
+## 7. Критерии приёмки typed auto-skill canary
+
+1. **AC-21-12:** два verified success разных sessions одного AutoSkillScope
+   создают одну activation; same-session/retry/replay — ни одной.
+2. **AC-21-13:** untrusted/narrowed/unverified/ambiguous turn не создаёт evidence.
+3. **AC-21-14:** model output вне registry ids, same judge identity и broken/
+   missing shadow effect fail-closed.
+4. **AC-21-15:** next-turn overlay scoped по Project/resource/capability и не
+   расширяет HookGate authority или child AgentCard.
+5. **AC-21-16:** concurrent activation и crash каждой lifecycle/forget фазы не
+   дублируют job/pointer/notification и сохраняют previous.
+6. **AC-21-17:** permanent exact-revision receipt демоутит; transient failure —
+   нет; re-enable повторно проходит gates.
+7. **AC-21-18:** forget удаляет replayable/raw evidence, оставляет только
+   минимальный tombstone и не допускает resurrection.
+8. **AC-21-19:** canary-off делает zero auto-skill observation/overlay I/O;
+   schema rollback и Doctor fail-closed проверены.
+
+## 8. Трассировка тестов
 
 - `runtime/active-skill-catalog.spec.ts`: AC-21-1, 2, 4, 7;
 - `runtime/skill-prompt-runtime.spec.ts`: AC-21-5, 8;
@@ -131,3 +178,7 @@ opt-in настройку; её default cutover требует отдельно�
 - `app/skill-menu-runtime.spec.ts`: AC-21-9, 10;
 - `telegram-gw/skill-catalog-view.spec.ts`: AC-21-11;
 - `app/bot-skill-menu.spec.ts`: AC-21-1, 11.
+- `core/auto-skill-learning/*.spec.ts`: AC-21-12, 13, 14, 15, 17, 18;
+- `app/auto-skill-runtime*.spec.ts`: AC-21-12–19, включая concurrency,
+  crash/restart, outbox и canary-off;
+- `app/telegram-project-runtime.integration.spec.ts`: AC-21-15, 16.

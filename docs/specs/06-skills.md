@@ -2,12 +2,14 @@
 
 **Status:** Draft
 **Component:** 06 / 17
-**Related ADRs:** ADR-0015, ADR-0025, ADR-0017, ADR-0029
+**Related ADRs:** ADR-0015, ADR-0025, ADR-0017, ADR-0029, ADR-0108
 **Depends on:** Memory (03), Nightly Consolidation (10), Observability & Verification (12)
 
 > Skills is Aisy's procedural-memory layer: it owns the `SKILL.md` format, the
 > menu-in-prompt / body-on-trigger loading split, and the deterministic staging gate that
-> keeps an agent-authored recipe out of prod until a human approves verified traces.
+> keeps a free-form agent-authored recipe out of prod until a human approves
+> verified traces. The only exception is ADR-0108's typed zero-authority recipe,
+> whose complete vocabulary and scope are derived by code.
 
 ## 1. Purpose
 
@@ -27,8 +29,10 @@ The OS-around-the-model split runs straight through this component:
   threshold (ADR-0025), and binding a human tap to a specific hash-pinned staged artifact
   before anything is committed to prod git (ADR-0029).
 
-A skill is *drafted* by the model; it is *promoted* by code plus a human. The component never
-lets those two roles blur.
+A free-form skill is *drafted* by the model and *promoted* by code plus a human.
+A typed auto-skill is proposed only as registry ids and activated by code after
+the ADR-0108 evidence/validator/judge/shadow gates. It cannot express Markdown,
+authority or a new tool, so these paths do not share a promotion boundary.
 
 ## 2. Responsibilities
 
@@ -58,6 +62,9 @@ lets those two roles blur.
   ([ADR-0025](../decisions/2026-06-11-transient-vs-permanent-skill-failure.md)).
 - The reviewer surface payload for a staged skill: full text, the diff, and the triggering
   context that produced it.
+- The typed auto-skill registry and planner: code-owned descriptors,
+  placeholders/postconditions, deterministic rendering, `AutoSkillScope`,
+  content-addressed revisions and learned-procedure prompt projection.
 
 **Does not do (boundaries):**
 
@@ -78,6 +85,25 @@ lets those two roles blur.
 - **General fact memory and bi-temporal fact storage** — owned by **Memory (03)**
   ([ADR-0023](../decisions/2026-06-11-durable-forgetting-tombstones.md)); the negative-skill
   record reuses Memory's bi-temporal columns rather than defining its own.
+
+### 2.1 Typed auto-skill exception
+
+ADR-0108 permits unattended activation only for a strict manifest whose model
+payload contains ordered `descriptorId`, `placeholderId` and `postconditionId`
+values already present in code-owned registries and the two source evidences.
+Code, not the model, supplies name, triggers, display text, scope and
+verification. `AutoSkillScope = { operatorProfileId, projectId, resourceScope,
+capabilityRevision }`; session id is evidence identity and never part of scope.
+
+The v1 placeholder source enum is `current_request | verified_scope_metadata`.
+Missing or ambiguous binding blocks planning before HookGate. The planner emits
+ordinary tool calls; every call retains approvals, HARD_DENY, sandbox, budget
+and egress checks. The typed recipe enters context as `learned-procedure` below
+constitution/operator/project instructions, never as an operator system span.
+
+Free-form `SKILL.md`, nightly draft, imported edit and any candidate containing
+new text/tool/scope/authority remain on the human approval path. Auto-skill
+artifacts and evidence live only in private runtime state, never source Git.
 
 ## 3. Interfaces
 
@@ -118,6 +144,21 @@ export interface Skills {
   // ---- failure / negative-skill path (ADR-0025) ----
   recordFailure(name: string | null, f: FailureSignal): void   // tags transient|permanent
   probe(): Promise<ProbeReport>                        // nightly un-fossilize re-test
+}
+
+export interface AutoSkillScope {
+  operatorProfileId: string
+  projectId: string
+  resourceScope: string
+  capabilityRevision: string
+}
+
+export interface SkillRecipeDraft {
+  steps: Array<{
+    descriptorId: string
+    placeholderIds: string[]
+    postconditionIds: string[]
+  }>
 }
 
 export interface ValidationReport {

@@ -16,24 +16,34 @@ Aisy: Запомнил, что ты любишь получать деньги
 
 ## Контракт
 
-Remember принимает одно поле `fact`: короткое утверждение в форме, пригодной и
-для личной памяти, и для ответа пользователю. Для факта о пользователе модель
-передаёт второе лицо, например `ты любишь получать деньги`. Для безличного
-факта допустимо `production cutover принят 24 августа 2026`.
+Remember принимает ровно одно из полей `fact` или legacy `text`. Значение —
+короткое утверждение в форме, пригодной и для личной памяти, и для ответа
+пользователю. Для факта о пользователе модель передаёт второе лицо, например
+`ты любишь получать деньги`. Для безличного факта допустимо
+`production cutover принят 24 августа 2026`.
 
 Именно эта строка записывается в canonical memory. Отдельного модельного
 `acknowledgement` нет, поэтому сохранить чай и подтвердить кофе невозможно.
 Пользователь видит сохранённую формулировку и может сразу её исправить.
+Second-person facts маркируются code-owned subject `operator` и входят в prompt
+с явной рамкой «ты = текущий оператор»; retrieval не вправе приписать факт Aisy
+или третьему лицу.
 
-Код проверяет: одна непустая строка, bounded length, отсутствие control chars и
-служебных receipt/status prefixes. После durable `COMMITTED` executor возвращает
-typed receipt `{ fact, committed: true }`, а terminal renderer, не synthesis
-model, строит `Запомнил, что <fact>`. Точка добавляется только если её нет.
+Код проверяет `oneOf`: missing и одновременные `fact + text` отклоняются до
+mutation; legacy `text` нормализуется в `fact`. Далее проверяются одна непустая
+строка, bounded length, отсутствие control chars и служебных receipt/status
+prefixes. После durable `COMMITTED` executor возвращает typed receipt
+`{ operationId, receiptId, turnId, fact, committed: true }`. Durable terminal
+outbox атомарно связывает receipt с состоянием reply release, а renderer, не
+synthesis model, строит `Запомнил, что <fact>`. Точка добавляется только если её
+нет.
 
 До commit, при validation failure, `BLOCKED`, ambiguous effect или ошибке слово
 «Запомнил» не выводится. Старый вызов с допустимым `text` мигрируется как alias
 на один release cycle, но receipt всё равно содержит одну exact строку; затем
-alias удаляется отдельным compatibility решением.
+alias удаляется отдельным compatibility решением. Legacy retry использует
+прежний operationId и получает тот же receipt/reply-release state без второй
+mutation.
 
 ## Границы
 
@@ -46,11 +56,12 @@ mutation. Он меняет только форму входа remember и code-
 1. Exact `fact` записан и exact reply равен
    `Запомнил, что ты любишь получать деньги`.
 2. Безличный факт даёт естественное `Запомнил, что production cutover принят…`.
-3. Нельзя передать разные stored/ack strings: второго поля не существует.
-4. Invalid input не начинает mutation.
+3. Нельзя передать разные stored/ack strings: второго поля не существует;
+   missing и одновременные `fact + text` отклоняются.
+4. Invalid input не начинает mutation, legacy `text` даёт тот же typed receipt,
+   а legacy replay не создаёт второй effect.
 5. Blocked, failed и ambiguous write не выводят «Запомнил».
 6. Synthesis model не может переписать или скрыть committed acknowledgement.
 7. Retry/replay receipt не создаёт повторную запись или второй terminal reply.
 8. Existing scoped Project memory и Telegram integration corpus остаются
-   зелёными.
-
+   зелёными; retrieval сохраняет owner second-person факта.

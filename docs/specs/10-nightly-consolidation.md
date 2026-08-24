@@ -2,12 +2,13 @@
 
 **Status:** Accepted (wired live, ADR-0053)
 **Component:** 10 / 17
-**Related ADRs:** ADR-0016, ADR-0017, ADR-0023, ADR-0029, ADR-0030
+**Related ADRs:** ADR-0016, ADR-0017, ADR-0023, ADR-0029, ADR-0030, ADR-0108
 **Depends on:** Memory (03), Provider Routing (09), Safety (05), Observability & Verification (12)
 
 > The deterministic batch job that runs once a night to archive the day, distill memory,
-> prune skills, reclaim disk, and back up — proposing every agent-authored change into
-> staging behind a single human approval, and never letting a forgotten fact crawl back.
+> prune skills, reclaim disk, and back up — proposing every nightly/free-form
+> agent-authored change into staging behind a single human approval, and never
+> letting a forgotten fact crawl back.
 
 ## 1. Purpose
 
@@ -51,8 +52,10 @@ This component **owns**:
 - The **resurrection-guard invocation at consolidation commit time**, and the requirement
   that it re-run on every reindex/promotion (the guard *logic* is owned by Memory (03) per
   ADR-0030; this component enforces that no commit or reindex path bypasses it).
-- **Staging discipline**: stages 2 and 3 write only to `staging/`; nothing is promoted to
-  live memory tables or `skills/` except by the human tapping Approve.
+- **Staging discipline**: stages 2 and 3 write only to `staging/`; no nightly
+  memory or free-form skill draft is promoted except by the human tapping
+  Approve. ADR-0108's immediate typed-recipe path is outside this component and
+  cannot consume `draftSkills()` output.
 - The **morning approval card**: the single artifact carrying memory edits, blocked
   resurrections, skill changes, hygiene report, backup status, and cost; with each staged
   patch hashed at judge-accept and re-verified at promotion (ADR-0029).
@@ -79,6 +82,9 @@ This component **does not**:
   pending-action set.
 - Run the day's live agent loop or live within-session memory writes — those are **Core (01)**
   and **Memory (03)**; the night only applies deferred writes.
+- Generate, judge, queue or activate ADR-0108 typed auto-skills. That immediate
+  path owns distinct strict-schema ports and exact provider/model/revision
+  identities; the nightly memory-diff judge is not an acceptable substitute.
 
 ## 3. Interfaces
 
