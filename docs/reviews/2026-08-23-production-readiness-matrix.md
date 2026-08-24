@@ -6,6 +6,10 @@ audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
 **Current verified code head:** `df6e837289008e53c9e716669e415a88f0cb637c`
 
+**Кандидат исправления:** актуальный public `master` `1bc8a7613261dfd2b31cc4c6cb5d900546299b8f`
+плюс проверяемый diff этого release; итоговый commit и target cutover фиксируются
+после зелёного release gate.
+
 **Managed production current:** `df6e837289008e53c9e716669e415a88f0cb637c`
 **Managed production previous:** `7a73bc0fa9751c67d2d383b2a00daa02288f8c3b`
 
@@ -25,6 +29,23 @@ Target acceptance указывается отдельно: `LIVE в коде` н
 provider, Telegram flow или новый distribution channel уже принят на целевом
 host.
 
+## Метод независимого gap-аудита
+
+Локальный приватный эталон использован только как read-only источник категорий
+пользовательских возможностей. В эту матрицу не перенесены его тексты, имена,
+пути, схемы, код или артефакты. Каждая строка сформулирована независимо и
+получает статус только по Aisy: production importer, code-owned контракт,
+детерминированный тест и, где нужен внешний мир, target trace.
+
+Аудит охватил диалог и Telegram UX, voice/media, память и забывание,
+Projects/Sessions/files, tools/Skills/MCP, providers, делегирование, фоновые
+задачи и мониторинг, restart/rollback, доступ к серверу и дополнительные
+operator surfaces. Единственный новый разрыв, который нарушал уже принятое
+требование Aisy, — потеря typed mutation receipt в общем Plan protocol. Остальные
+не-LIVE строки ниже либо уже имеют явный target gate, либо являются dormant,
+отсутствующим новым продуктовым срезом или отложенной ADR-границей; их нельзя
+активировать попутным wiring без отдельного решения.
+
 ## Доказательная матрица
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
@@ -41,12 +62,16 @@ host.
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
 | Streamable HTTP MCP | **DORMANT** | Transport policy и wire foundation существуют, но live binding выключен | Отдельное security/authority решение и acceptance |
 | Native API providers | **LIVE под supervisor** | Семь fixed descriptors, root-owned broker, validator/worker sockets, host-encrypted A/B slots и rollback развёрнуты; arbitrary URL не принимается | TTY enrollment, bounded vendor call, switch, restart и revoke real slot |
-| Claude/Codex subscription brains | **LIVE на target; повторный acceptance ожидается** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы; `df6e837` переносит валидированный terminal result во внешний ActionContract через non-serializable exact-turn evidence, не доверяя progress/prose | Повторить составной Telegram tool-call после `df6e837` и подтвердить code-owned receipts |
+| Claude/Codex subscription brains | **LIVE на target; receipt fix ещё не развёрнут** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы; production trace `13:09:55Z–13:10:23Z` доказал успешную delegation evidence, но Plan protocol отбросил `verified:true` уже выполненного `remember`. Кандидат сохраняет только literal code-owned receipt и fail-closed отклоняет truthy/extra/accessor/Proxy/symbol terminal | Commit → managed update → повторный составной Telegram turn без recovery/unverified |
 | Voice provider registry / Deepgram proxy | **LIVE framework; text-only по умолчанию; structural target gate принят** | Telegram voice ingress, общий `Transcriber` для local/model-native/cloud adapter, one-use media capability, root-owned Deepgram broker/worker, consent/spend boundary и A/B rollback реализованы; target Doctor подтверждает artifact/backend/proxy/outbox, stale/unsafe choice изолирован с zero egress | Optional Deepgram acceptance отдельно: TTY enrollment, consent, Telegram voice, bounded vendor call и revoke; отсутствие подключения не блокирует harness cutover |
 | Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены; tool contract теперь прямо требует реальный `spawn_subagent` и запрещает role-play результата | Повторить ordinary delegation через Telegram после `df6e837`, затем отдельно ambiguity и `/stop` |
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
 | Telegram/YouTube/GitHub monitoring collectors и feedback learning | **DORMANT / ОТСУТСТВУЕТ по подтипу** | Core collector/ranking pieces существуют не для всех platform flows | Отдельные normalized collectors, UI и deterministic cursor/feedback corpus |
+| Onboarding, профиль и персонализация | **LIVE** | First-contact, resumable onboarding progress, operator profile projection и frozen-prefix brief создаются production composition | Завершить один target onboarding/перезапуск без потери прогресса |
+| Напоминания, расписания и цели | **LIVE** | Trigger store/engine, scheduler, goal store/orchestrator, approval и restart resume подключены в `bin/aisy.ts` | Target reminder + scheduled goal + restart trace |
+| Ограниченный доступ к серверу | **LIVE при explicit config + approval** | `makeServerAccess` импортирован production binary; argv выполняется без shell, restart требует held supervisor authority, временный доступ истекает scheduler-ом | Target open/expire/restart audit для operator-owned config |
+| Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
 | Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `df6e837→7a73bc0→df6e837` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
@@ -59,6 +84,12 @@ host.
 
 ## Проверки текущего среза
 
+- Кандидат на Node **22.23.2**: Core **2364 passed / 1 skipped**,
+  Telegram Gateway **255 passed**, App **2542 passed / 19 platform-or-optional
+  skipped**. Пять real-process timeouts общего параллельного App run повторены
+  тем же corpus по одному и прошли без увеличения timeout или новых skip;
+- кандидат прошёл workspace typecheck/build; Python **3.12.9** sidecars —
+  **215 passed / 39 platform-or-optional skipped**, Ruff green;
 - Node 22 full corpus для `df6e837`: Core **2364 passed / 1 skipped**, App
   **2557 passed / 2 skipped**, Telegram Gateway **255 passed** на том же
   неизменённом package;
@@ -76,10 +107,13 @@ host.
 - fr1 managed release `df6e837` прошёл staged Doctor, explicit restart и
   offline цикл `df6e837→7a73bc0→df6e837`; оба full Doctor дали `ok=true`
   (18 pass, 7 optional warn), финальный service active, `NRestarts=0`;
-- исходный составной Telegram ход до исправления доказал durable memory write,
-  но не создал delegation phase: модель дважды написала `323` без вызова
-  `spawn_subagent`, а общий verifier правильно вернул unverified. Повтор того же
-  operator E2E после `df6e837` остаётся открытым gate;
+- составной Telegram ход на `df6e837` создал настоящий terminal subagent result
+  и durable memory write. Обезличенный session log независимо зафиксировал
+  `delegate-required + requiresMutation`, затем только `missing:mutation` и
+  `actionStatus:unverified`: общий Plan protocol признал terminal
+  `{ok,output,verified:true}` невалидным уже после side effect. Regression на
+  public `master` воспроизвёл `PLAN_EXECUTOR_RESULT_INVALID`; кандидат сохраняет
+  literal receipt, а truthy/extra/accessor/Proxy/symbol варианты отклоняет;
 - current public history — одна ветка `master` без тегов/старых refs;
 - публичный one-line bootstrap на disposable Ubuntu: Node **22.23.2**, exact
   origin, frozen install/build, private managed layout и active generation
@@ -91,6 +125,23 @@ host.
   distribution/doctor **57 passed / 1 skipped**, workspace typecheck/build;
   цикл `a88919e → 343ae2f → a88919e → 343ae2f` — green, rollback trace
   содержит zero AF_INET socket/connect.
+
+## Несмерженные ветки и commits
+
+- актуальная public-линия начинается с clean snapshot и имеет один development
+  head `master`; кандидат основан на последнем успешно fetched public head, без
+  merge-base с локальной архивной линией, поэтому cherry-pick из архива запрещён;
+- локальные feature-ветки до переписывания public history проверены через
+  patch-equivalence и текущие production imports/tests: их содержательные
+  изменения уже присутствуют в public `master` в переписанном или усиленном
+  виде; отдельного отсутствующего feature commit не найдено;
+- локальная gap-audit ветка содержит только устаревший review-срез, а durable
+  delegation ветка — три старых commits с эквивалентами в текущей линии;
+  прямой merge/cherry-pick вернул бы закрытые промежуточные состояния;
+- legacy publication head относится к отменённому APT-каналу и намеренно не
+  мержится после ADR-0106. Последующая проверка remote heads временно недоступна
+  из-за DNS; release перед push обязан повторно fetch-нуть public `master` и
+  подтвердить fast-forward.
 
 ## Release gate
 

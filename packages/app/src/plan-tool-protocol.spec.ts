@@ -130,6 +130,52 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
     expect(seen[1]).toBe(large)
   })
 
+  it('preserves a code-owned mutation receipt outside plan mode', async () => {
+    const { protocol } = fixture({
+      mode: 'auto',
+      execute: async () => ({ ok: true, output: 'Запомнил.', verified: true }),
+    })
+
+    await expect(protocol.invoke(writeCall, context)).resolves.toEqual({
+      ok: true,
+      output: 'Запомнил.',
+      verified: true,
+    })
+  })
+
+  it('rejects non-literal or extended mutation receipts', async () => {
+    let accessorReads = 0
+    const accessor = { ok: true, output: 'Запомнил.' }
+    Object.defineProperty(accessor, 'verified', {
+      enumerable: true,
+      get() { accessorReads++; return true },
+    })
+    let proxyTraps = 0
+    const proxy = new Proxy({ ok: true, output: 'Запомнил.', verified: true }, {
+      getPrototypeOf(target) { proxyTraps++; return Reflect.getPrototypeOf(target) },
+    })
+    const symbol = { ok: true, output: 'Запомнил.', verified: true }
+    Object.defineProperty(symbol, Symbol('receipt'), { value: true })
+    for (const terminal of [
+      { ok: true, output: 'Запомнил.', verified: 'yes' },
+      { ok: true, output: 'Запомнил.', verified: true, injected: true },
+      accessor,
+      proxy,
+      symbol,
+    ]) {
+      const { protocol } = fixture({
+        mode: 'auto',
+        execute: async () => terminal as unknown as ToolResult,
+      })
+      await expect(protocol.invoke(writeCall, context)).resolves.toEqual({
+        ok: false,
+        output: 'PLAN_EXECUTOR_RESULT_INVALID',
+      })
+    }
+    expect(accessorReads).toBe(0)
+    expect(proxyTraps).toBe(0)
+  })
+
   it('allows research reads but refuses acting tools before a submitted plan', async () => {
     const { protocol, state, calls } = fixture()
 

@@ -93,6 +93,12 @@ host Bash или другого широкого инструмента это �
     Claude и Codex получают `submit_plan`; compaction, nightly и sub-agent
     providers не получают внутренний tool. Unplanned acting call отклоняется до
     approval, exact planned call повторно сверяется после approval.
+15. Provider-neutral protocol сохраняет code-owned terminal receipt
+    `verified:true` при нормализации результата как в `auto`/`confirm`, так и в
+    exact planned call. Принимается только literal `true` в точной структуре
+    `{ok, output, verified}`; другое значение или дополнительное поле дают
+    `PLAN_EXECUTOR_RESULT_INVALID`. Receipt остаётся in-process evidence и не
+    может быть изготовлен provider text, progress или MCP JSON.
 
 ## Последствия
 

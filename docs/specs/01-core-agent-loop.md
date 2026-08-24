@@ -339,6 +339,14 @@ HookGate.post/output filtering; withheld result не создаёт research evi
 Внутренний tool рекламируется только интерактивным main/goal provider, но не
 compaction, nightly или sub-agent loops.
 
+Нормализация terminal result не теряет code-owned mutation receipt:
+`verified:true` проходит через общий protocol в `auto`, `confirm` и после exact
+planned admission. Разрешены только точные структуры `{ok, output}` и
+`{ok, output, verified:true}`. Truthy-значение, `verified:false`, accessor,
+Proxy, symbol или дополнительное поле дают `PLAN_EXECUTOR_RESULT_INVALID` и не
+создают action evidence. Provider prose, progress и сериализованный MCP-ответ
+не являются receipt.
+
 ## 5. Behavior & control flow
 
 ```
@@ -696,6 +704,10 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     `mutate-required`, а tool получает typed `verified:true` только после
     durable `COMMITTED`; BLOCKED/error и невалидный MCP terminal receipt не
     удовлетворяют mutation contract.
+62. **AC-01-62** — Provider-neutral Plan protocol сохраняет literal
+    `verified:true` code-owned executor result через `auto`/`confirm` и exact
+    planned path; truthy/false receipt, accessor/Proxy/symbol и любое лишнее
+    поле дают `PLAN_EXECUTOR_RESULT_INVALID` и zero verified action evidence.
 
 ## 10. Open questions
 

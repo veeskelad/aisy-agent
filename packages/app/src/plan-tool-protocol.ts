@@ -257,9 +257,19 @@ function submitJson(call: ToolCall): string {
 
 function result(value: unknown): ToolResult | null {
   try {
-    const captured = exactRecord(value, ['ok', 'output'])
+    let captured: Record<string, unknown>
+    try {
+      captured = exactRecord(value, ['ok', 'output'])
+    } catch {
+      captured = exactRecord(value, ['ok', 'output', 'verified'])
+    }
     if (typeof captured['ok'] !== 'boolean' || typeof captured['output'] !== 'string') return null
-    return Object.freeze({ ok: captured['ok'], output: captured['output'] })
+    if (Object.hasOwn(captured, 'verified') && captured['verified'] !== true) return null
+    return Object.freeze({
+      ok: captured['ok'],
+      output: captured['output'],
+      ...(captured['verified'] === true ? { verified: true as const } : {}),
+    })
   } catch {
     return null
   }
