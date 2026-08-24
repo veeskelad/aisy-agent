@@ -1,8 +1,9 @@
 # Компонент 25: безопасное подключение credential облачной транскрипции
 
 **Статус:** LIVE под supervisor; root-owned broker/worker lifecycle и rollback
-приняты, operator TTY enrollment, consent и реальный Telegram voice/vendor call
-остаются target gate
+приняты. Operator TTY enrollment, consent и реальный Telegram voice/vendor call
+остаются gate только для capability Deepgram, но не для text-only harness или
+managed cutover
 **Компонент:** 25
 **Связанные ADR:** ADR-0058, ADR-0085, ADR-0087, ADR-0098
 **Зависит от:** 02 Gateway, 05 Safety, 13 Onboarding, 16 Brain Connections
@@ -486,8 +487,15 @@ audio identity, transcript и upstream detail запрещены.
 
 Workspace typecheck/build, Core/App/Telegram tests, Python ruff/pytest,
 `git diff --check`, secret scan и private-reference scan обязательны до merge.
-Production deploy сохраняет предыдущий binary/proxy rollback point; high/critical
-doctor finding или protocol mismatch включает rollback до ввода real key.
+Production deploy сохраняет предыдущий binary/proxy rollback point. Structural
+high/critical doctor finding, protocol mismatch или readiness-конфликт уже
+выбранного voice provider включает rollback. Отсутствующие key/consent и
+изолированный stale choice являются предупреждениями text-only режима и не
+требуют подключения внешнего provider перед cutover.
+
+AC-25-22 принимает именно capability Deepgram и выполняется отдельно после
+осознанного подключения. Он не является prerequisite для запуска, обновления,
+restart или rollback остальных функций Aisy.
 
 ### 9.1. Evidence AC-25-21
 

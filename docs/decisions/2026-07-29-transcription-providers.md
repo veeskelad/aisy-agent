@@ -87,6 +87,24 @@
     inbox. Arbitrary root, foreign record и stale/replay должны давать zero
     secret, reservation и HTTPS до регистрации provider в `aisy run`.
 
+11. **Готовность optional voice не равна готовности harness.** Отсутствующий
+    выбор, отсутствующий credential и stale/unsafe durable-выбор оставляют Aisy
+    в рабочем text-only режиме. Stale/unsafe запись изолируется тем же registry:
+    она не даёт selected external provider и создаёт zero external audio egress
+    до нового явного выбора; зарегистрированный safe local provider допустим как
+    локальный fallback. Doctor обозначает такой durable choice отдельным состоянием
+    `quarantined` и показывает заметное предупреждение, а не общий production
+    fail. `corrupt` registry/probe, повреждение root-owned runtime или
+    несовпадение readiness уже выбранного provider остаются high-severity fail.
+
+12. **Model-native audio — такой же provider, а не особый обход registry.**
+    Если фактически вызываемый API выбранной модели принимает аудио и возвращает
+    transcript, adapter реализует общий `Transcriber` и регистрируется на тех же
+    условиях. Voice UI в пользовательском приложении или название модели не
+    доказывают наличие audio-input capability у API. Если model-native adapter
+    отправляет запись за пределы хоста, для него обязательны тот же disclosure,
+    durable consent, media capability и fail-closed egress boundary.
+
 ## Последствия
 
 - Оператор может подключить любую модель, включая ту, что лучше на его языке.
@@ -98,6 +116,9 @@
   настройка — задача композиции.
 - Неоднозначный внешний запрос удерживает зарезервированный расход и требует
   явного следующего действия вместо автоматического повтора.
+- Text, memory, tools и остальные функции harness запускаются без voice key и
+  consent; подключение или замена local/cloud/model-native provider выполняется
+  позже без изменения голосового конвейера.
 
 ## Альтернативы
 

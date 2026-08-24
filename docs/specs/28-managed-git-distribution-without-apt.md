@@ -240,8 +240,11 @@ remote output, environment, credential state или vendor detail.
 13. **AC-28-13** — Disposable Linux rehearsal доказывает managed install,
     update, offline rollback, SSH provider/voice install, restart и rollback.
 14. **AC-28-14** — Controlled production cutover сохраняет старый ExecStart,
-    подтверждает doctor/Telegram/provider/voice/restart и допускает возврат без
-    изменения state или старых root releases.
+    подтверждает doctor/Telegram/provider, установленную structural voice
+    boundary и restart, затем допускает возврат без изменения state или старых
+    root releases. Неподключённый optional voice остаётся изолированным
+    warning/text-only и не требует key, consent или vendor call; его отдельный
+    E2E выполняется после явного подключения.
 15. **AC-28-15** — Targeted tests, package/workspace tests, typecheck/build,
     Python pytest/ruff, `git diff --check`, secret scan и private-reference scan
     зелёные либо baseline-отказы явно доказаны до diff.

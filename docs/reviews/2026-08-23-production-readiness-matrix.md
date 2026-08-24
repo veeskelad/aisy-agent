@@ -41,7 +41,7 @@ host.
 | Streamable HTTP MCP | **DORMANT** | Transport policy и wire foundation существуют, но live binding выключен | Отдельное security/authority решение и acceptance |
 | Native API providers | **LIVE под supervisor** | Семь fixed descriptors, root-owned broker, validator/worker sockets, host-encrypted A/B slots и rollback развёрнуты; arbitrary URL не принимается | TTY enrollment, bounded vendor call, switch, restart и revoke real slot |
 | Claude/Codex subscription brains | **LIVE в коде** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы | Установить/authenticate pinned CLI и пройти Telegram tool-call |
-| Voice / Deepgram proxy | **LIVE под supervisor** | Telegram voice ingress, one-use media capability, root-owned broker/worker, consent/spend boundary и A/B rollback реализованы | TTY enrollment, consent, Telegram voice, bounded vendor call и revoke |
+| Voice provider registry / Deepgram proxy | **LIVE framework; text-only по умолчанию** | Telegram voice ingress, общий `Transcriber` для local/model-native/cloud adapter, one-use media capability, root-owned Deepgram broker/worker, consent/spend boundary и A/B rollback реализованы; stale/unsafe choice изолируется с zero egress | Optional Deepgram acceptance отдельно: TTY enrollment, consent, Telegram voice, bounded vendor call и revoke; отсутствие подключения не блокирует harness cutover |
 | Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены | Ordinary delegation, ambiguity и `/stop` через Telegram после cutover |
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
@@ -88,6 +88,8 @@ Production-ready verdict требует все пункты одновремен
 3. target host сохраняет старый checkout и переходит на managed binary;
 4. Telegram text, Project/session, memory, Skill, stdio MCP и subagent E2E дают
    один terminal result без duplicate effect;
-5. provider/voice проверяются только после operator TTY enrollment и consent;
+5. provider slots проверяются после их operator TTY enrollment; optional voice
+   без key/consent остаётся text-only warning и не блокирует cutover, а его
+   внешний E2E выполняется отдельно после явного подключения;
 6. restart/rollback сохраняют runtime state и root-owned previous releases;
 7. final public refs/tree/history проходят secret и private-reference scans.

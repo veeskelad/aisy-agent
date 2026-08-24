@@ -71,7 +71,7 @@ export interface TranscriptionRegistry {
 }
 
 export interface TranscriptionRegistryInspection {
-  state: 'ready' | 'unconfigured' | 'corrupt'
+  state: 'ready' | 'unconfigured' | 'quarantined' | 'corrupt'
 }
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -259,11 +259,11 @@ function selectedProviderFromDisk(
     if (provider === undefined || (provider.audioLeavesHost &&
       (stored?.['privacyRevision'] !== provider.privacyRevision ||
         stored?.['privacyDisclosureHash'] !== disclosureHash(provider)))) {
-      return { state: 'corrupt', providerId: null }
+      return { state: 'quarantined', providerId: null }
     }
     return { state: 'ready', providerId: provider.id }
   } catch {
-    return { state: 'corrupt', providerId: null }
+    return { state: 'quarantined', providerId: null }
   }
 }
 
@@ -302,8 +302,8 @@ export function makeTranscriptionRegistry(deps: TranscriptionRegistryDeps): Tran
   const byId = new Map(providers.map((provider) => [provider.id, provider]))
 
   const selection = selectedProviderFromDisk(registryDeps.path, providers)
-  // A corrupt external choice still fails closed to the safe local provider;
-  // Doctor reports the corrupt durable record separately.
+  // A quarantined external choice still fails closed to the safe local provider;
+  // Doctor reports the unsafe durable record separately.
   let selectedId = selection.providerId ??
     providers.find(provider => !provider.audioLeavesHost)?.id ?? null
 

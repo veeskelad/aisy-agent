@@ -98,7 +98,7 @@ describe('production doctor runtime probes', () => {
     expect(existsSync(root)).toBe(false)
   })
 
-  it('reads the exact durable transcription choice and fails closed on corrupt bytes', () => {
+  it('reads the exact durable transcription choice and quarantines corrupt bytes', () => {
     const root = makeRoot('aisy-doctor-transcription-')
     const path = join(root, 'transcription.json')
     const metadata = deepgramProxyProviderMetadata
@@ -114,7 +114,7 @@ describe('production doctor runtime probes', () => {
 
     writeFileSync(path, '{broken', { encoding: 'utf8', mode: 0o600 })
     chmodSync(path, 0o600)
-    expect(makeTranscriptionDoctorProbe({ path }).inspect()).toEqual({ state: 'corrupt' })
+    expect(makeTranscriptionDoctorProbe({ path }).inspect()).toEqual({ state: 'quarantined' })
   })
 
   it('reports artifact, backend, key, proxy, outbox and consent without active I/O', () => {

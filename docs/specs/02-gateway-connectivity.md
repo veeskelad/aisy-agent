@@ -7,7 +7,7 @@
 
 > The Gateway is the only ingress/egress edge of the harness: it authenticates the
 > single operator on Telegram, ingests text, voice, files, and forwarded posts as
-> provenance-tagged spans, transcribes voice through a sandboxed Whisper sidecar,
+> provenance-tagged spans, transcribes voice through a pluggable local or external provider,
 > streams replies and approval cards back, and runs the deterministic approval handler
 > that is the sole confirmer of pending actions.
 
@@ -31,7 +31,7 @@ Concretely, the Gateway exists to do four deterministic jobs that must never be 
 the model: (1) enforce single-user authn/authz at the edge, (2) stamp provenance on
 every inbound span so capability narrowing ([ADR-0027](../decisions/2026-06-11-capability-narrowing-untrusted-context.md))
 and default-quarantine ([ADR-0028](../decisions/2026-06-11-default-quarantine-external-input.md))
-have a trustworthy input, (3) sandbox and resource-bound the Whisper sidecar so voice
+have a trustworthy input, (3) constrain the selected transcription provider so voice
 ingestion cannot become a host-level foothold, and (4) bind every approval-card tap to
 exactly one pending, hash-pinned action ([ADR-0029](../decisions/2026-06-11-human-confirmation-provenance-binding.md)).
 
@@ -46,9 +46,11 @@ What the Gateway **owns**:
 - **Provenance stamping at ingestion**: each inbound span is tagged `operator` or
   `untrusted` by Gateway code, per [ADR-0028](../decisions/2026-06-11-default-quarantine-external-input.md).
   The model never sets provenance.
-- **Voice ingestion**: hand audio to the sandboxed Whisper sidecar
-  ([ADR-0003](../decisions/2026-06-11-monorepo-pnpm-ts-core-py-sidecars.md)) and treat
-  the returned transcript as `untrusted` text.
+- **Voice ingestion**: hand audio to the selected `Transcriber` under
+  [ADR-0085](../decisions/2026-07-29-transcription-providers.md) and treat the
+  returned transcript as `untrusted` text. Локальный Whisper, специализированный
+  cloud STT и model-native audio adapter используют один контракт; внешний
+  adapter требует отдельного disclosure и durable consent.
 - **File / forwarded / edited message intake**: accept attachments and forwarded or
   edited posts as `untrusted` content, never as operator commands.
 - **Inbound rate-limiting** and inbound replay/flood defense at the edge.
@@ -733,23 +735,28 @@ Key invariants, all in code:
   (default-deny): the `nonceState` moves to `expired`, so a later tap returns `NonceStale`
   and confirms nothing ([ADR-0029](../decisions/2026-06-11-human-confirmation-provenance-binding.md)).
 
-### 5.4 Voice path and Whisper sidecar
+### 5.4 Voice path и registry провайдеров
 
-Audio is handed to the Whisper sidecar as a process-isolated, resource-bounded call
-([ADR-0003](../decisions/2026-06-11-monorepo-pnpm-ts-core-py-sidecars.md)). The sidecar
-runs with no network, bounded CPU/memory/time, and produces **untrusted text only** — its
-output is stamped `untrusted` in step 4 exactly like any other external content. When the
-sidecar is unavailable (§7, Eng-7), the Gateway degrades per a fixed, configured policy
-(reject / queue / text-only fallback) and tells the user; it never silently drops the
-voice note and never promotes a transcript to `operator`.
+Audio передаётся выбранному `Transcriber`. Локальный Whisper работает как
+process-isolated resource-bounded sidecar без сети
+([ADR-0003](../decisions/2026-06-11-monorepo-pnpm-ts-core-py-sidecars.md)); внешний
+STT или model-native audio adapter проходит через disclosure/consent и egress
+boundary ADR-0085. Adapter может называться model-native только когда фактически
+вызываемый API принимает audio input; наличие voice UI у пользовательского
+приложения этого не доказывает. Любой transcript получает `untrusted` в шаге 4.
+Когда provider отсутствует или изолирован, Gateway применяет фиксированную
+политику reject/queue/text-only и сообщает об этом, не выдумывает transcript и
+не повышает его до `operator`. Такая деградация не блокирует text, memory, tools
+или lifecycle основного harness.
 
-Live Telegram transport сейчас реализует безопасный `reject/text-only` fallback:
-при неактивном media inbox голос и прочие вложения получают явный русский ответ,
-никакого download/model turn не происходит. Optional inbox handler покрывает
-document/audio/photo/video/voice/animation и сохраняет каждый элемент album под
-одним captured work binding; acknowledgement объединяется в одну bounded
-summary-card, максимум десять элементов. Его live dependency остаётся отключён
-до activation.
+Live Telegram transport сейчас использует durable media inbox как общий LIVE
+capture boundary и реализует безопасный `reject/text-only` fallback: если inbox
+не открылся либо provider не выбран, голос и прочие вложения получают явный
+русский ответ, а отсутствующий provider не вызывает model/vendor turn. Inbox
+handler покрывает document/audio/photo/video/voice/animation и сохраняет каждый
+элемент album под одним captured work binding; acknowledgement объединяется в
+одну bounded summary-card, максимум десять элементов. Наличие LIVE inbox/ingress
+не активирует само по себе ни локальный Whisper, ни внешний provider.
 
 ### 5.5 Production-preview Whisper worker (2026-07-28)
 
@@ -810,9 +817,11 @@ composition tests, но без подключения к `aisy run`:
     `.writer-lock-recovery/recovery-<id>`, не удаляет owner evidence, fences
     прежний runtime и поддерживает exact restore без перезаписи нового writer.
 
-Этот срез доказывает worker/isolation boundary, но не означает live voice:
-image build/publish, singleton media inbox writer, выбор live degrade policy и
-composition в `aisy.ts` остаются отдельным activation этапом.
+Этот срез доказывает worker/isolation boundary, но не означает LIVE локальный
+Whisper: image build/publish и регистрация local provider в production registry
+остаются отдельным activation этапом. Provider-neutral singleton media inbox,
+выбор live degrade policy и voice ingress уже подключены в `aisy.ts`; они не
+дают локальному worker authority до явной регистрации provider.
 
 ### 5.5.1 LIVE Deepgram composition с переходным credential resolver
 

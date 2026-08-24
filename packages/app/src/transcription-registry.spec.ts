@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path'
 
 import {
   TranscriptionUnavailableError,
+  inspectTranscriptionRegistry,
   makeTranscriptionRegistry,
   type TranscriptionProvider,
 } from './transcription-registry.js'
@@ -104,6 +105,15 @@ describe('transcription provider registry (ADR-0085)', () => {
     expect(externalCall).not.toHaveBeenCalled()
     expect(onSelect).not.toHaveBeenCalled()
     expect(existsSync(path)).toBe(false)
+  })
+
+  it('keeps an invalid provider registry distinct from a quarantined durable choice', () => {
+    const provider = local({ id: 'duplicate' })
+
+    expect(inspectTranscriptionRegistry({
+      providers: [provider, local({ id: 'duplicate' })],
+      path: statePath(),
+    })).toEqual({ state: 'corrupt' })
   })
 
   it('uses a local provider without asking — nothing leaves the host', async () => {
@@ -239,15 +249,23 @@ describe('transcription provider registry (ADR-0085)', () => {
     expect(reopened.selected()?.id).toBe('cloud-stt')
   })
 
-  it('requires renewed consent when an external privacy revision changes', () => {
+  it('requires renewed consent when an external privacy revision changes', async () => {
     const path = statePath()
     makeTranscriptionRegistry({ providers: [cloud()], path }).select('cloud-stt')
+    const externalCall = vi.fn(async () => transcript('не должно выполниться'))
+    const changedProvider = cloud({ privacyRevision: 'cloud-stt-v2', transcribe: externalCall })
 
     const reopened = makeTranscriptionRegistry({
-      providers: [cloud({ privacyRevision: 'cloud-stt-v2' })], path,
+      providers: [changedProvider], path,
     })
 
+    expect(inspectTranscriptionRegistry({ providers: [changedProvider], path }))
+      .toEqual({ state: 'quarantined' })
     expect(reopened.selected()).toBeNull()
+    await expect(reopened.transcribe(request)).rejects.toEqual(
+      new TranscriptionUnavailableError('no-provider-selected'),
+    )
+    expect(externalCall).not.toHaveBeenCalled()
   })
 
   it('invalidates consent when disclosure text changes without a revision bump', () => {

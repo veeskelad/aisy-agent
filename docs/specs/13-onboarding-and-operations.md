@@ -132,7 +132,7 @@ Events emitted (to Observability 12): `init.started`, `init.step`, `init.complet
 | `sandbox` | если включён Docker-backed LIVE-путь — daemon/image/caps; для enabled restricted clone — Engine ≥29.5.2 и оба exact RepoDigest локально; если ни один путь не включён — `warn` без обращения к Docker | high |
 | `mcp` | allowlist parses; each pinned server's descriptor hash matches (MCP 07) | high |
 | `nightly` | валидное `HH:MM` встроенного scheduler и missed-slot catch-up; внешний cron не требуется | medium |
-| `sidecars` | durable-выбор provider транскрипции (`ready`/`unconfigured`/`corrupt`); kernel lease журнала absent/held, но не corrupt; media inbox writer lock absent/held и recovery archives structurally valid | high для corrupt state, medium для optional availability |
+| `sidecars` | durable-выбор provider транскрипции (`ready`/`unconfigured`/`quarantined`/`corrupt`); kernel lease журнала absent/held, но не corrupt; media inbox writer lock absent/held и recovery archives structurally valid | high для structural `corrupt`, medium для optional `unconfigured`/`quarantined` |
 | `disk` | free space for SQLite + backups above threshold | medium |
 | `clock` | system clock sane; timezone resolvable (never the literal `"Auto"`) | low |
 
@@ -341,8 +341,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
 
 34a. **AC-13-34a** — production Doctor проверяет durable-выбор текущего
     transcription provider тем же schema/disclosure revision/hash контрактом,
-    что live registry: ready=pass, отсутствующий выбор=warning/text-only,
-    corrupt/unsafe=high fail. Host `ffmpeg` не проверяется для cloud provider.
+    что live registry: ready=pass, отсутствующий выбор=warning/text-only, а
+    stale/unsafe durable choice=`quarantined` warning с явной изоляцией voice.
+    Он не даёт selected external provider и создаёт zero external audio egress
+    до нового выбора; зарегистрированный safe local provider может остаться
+    локальным fallback.
+    `corrupt` registry/probe, повреждение root-owned voice runtime или
+    readiness-конфликт уже выбранного provider остаются high fail. Host
+    `ffmpeg` не проверяется для cloud provider.
 
 34b. **AC-13-34b** — валидный held transcript SQLite kernel lease даёт pass,
     absent даёт pass, corrupt/unsafe даёт high fail; probe не раскрывает

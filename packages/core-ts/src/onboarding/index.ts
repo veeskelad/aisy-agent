@@ -1022,14 +1022,17 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
         try {
           const inspection = deps.transcription.inspect()
           const state = inspection.state
-          const valid = state === 'ready' || state === 'unconfigured' || state === 'corrupt'
+          const valid = state === 'ready' || state === 'unconfigured' ||
+            state === 'quarantined' || state === 'corrupt'
           add({
             id: 'sidecars.media',
             domain: 'sidecars',
-            status: valid && state === 'ready' ? 'pass' : state === 'unconfigured' ? 'warn' : 'fail',
-            severity: state === 'corrupt' || !valid ? 'high' : 'medium',
+            status: !valid || state === 'corrupt' ? 'fail' : state === 'ready' ? 'pass' : 'warn',
+            severity: !valid || state === 'corrupt' ? 'high' : 'medium',
             detail: !valid || state === 'corrupt'
-              ? 'Выбор провайдера транскрипции повреждён или не прошёл проверку'
+              ? 'Проверка провайдера транскрипции вернула некорректное состояние'
+              : state === 'quarantined'
+                ? 'Выбор провайдера транскрипции изолирован; voice выключен до явного повторного выбора'
               : state === 'unconfigured'
                 ? 'Провайдер транскрипции не выбран; голос работает в text-only режиме'
                 : 'Выбранный провайдер транскрипции готов',
@@ -1043,15 +1046,19 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
               typeof component.detail === 'string' && component.detail.length > 0 &&
               component.detail.length <= 240
             if (componentValid) seen.add(component.id)
+            const inactiveConsent = componentValid && component.id === 'consent' &&
+              (state === 'unconfigured' || state === 'quarantined')
+            const componentWarning = componentValid &&
+              (component.state === 'unconfigured' || inactiveConsent)
             add({
               id: `sidecars.voice.${component.id}`,
               domain: 'sidecars',
               status: componentValid && component.state === 'ready'
                 ? 'pass'
-                : componentValid && component.state === 'unconfigured'
+                : componentWarning
                   ? 'warn'
                   : 'fail',
-              severity: componentValid && component.state === 'unconfigured' ? 'medium' : 'high',
+              severity: componentWarning ? 'medium' : 'high',
               detail: componentValid ? component.detail : 'Некорректный read-only voice readiness result',
               fixable: false,
             })

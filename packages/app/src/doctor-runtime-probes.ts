@@ -262,7 +262,11 @@ export function makeTranscriptionDoctorProbe(input: {
               : consent.state === 'unconfigured' ? 'unconfigured' as const : 'corrupt' as const,
             detail: consent.state === 'ready'
               ? 'Согласие на cloud-транскрипцию выбрано'
-              : 'Согласие на cloud-транскрипцию не готово',
+              : consent.state === 'unconfigured'
+                ? 'Cloud-транскрипция не подключена; Aisy работает в text-only режиме'
+                : consent.state === 'quarantined'
+                  ? 'Старый выбор cloud-транскрипции изолирован; нужен явный повторный выбор'
+                  : 'Registry cloud-транскрипции повреждён или несовместим',
           }),
         ]),
       })

@@ -561,7 +561,7 @@ export interface ProviderBrokerReadinessProbe {
 /** Read-only view of the operator-selected transcription runtime. */
 export interface TranscriptionReadinessProbe {
   inspect(): {
-    state: 'ready' | 'unconfigured' | 'corrupt'
+    state: 'ready' | 'unconfigured' | 'quarantined' | 'corrupt'
     components?: ReadonlyArray<Readonly<{
       id: 'artifact' | 'backend' | 'key' | 'proxy' | 'outbox' | 'consent'
       state: 'ready' | 'unconfigured' | 'unavailable' | 'corrupt'

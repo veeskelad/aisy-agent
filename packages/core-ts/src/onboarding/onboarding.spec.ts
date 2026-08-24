@@ -2070,6 +2070,7 @@ describe('production-topology doctor semantics', () => {
   it.each([
     ['ready', 'pass', 'medium'],
     ['unconfigured', 'warn', 'medium'],
+    ['quarantined', 'warn', 'medium'],
     ['corrupt', 'fail', 'high'],
   ] as const)('maps transcription state %s to %s without checking host ffmpeg', async (
     state,
@@ -2088,6 +2089,50 @@ describe('production-topology doctor semantics', () => {
       fixable: false,
     })
     expect(prereqCalls).toBe(0)
+  })
+
+  it('quarantines an invalid optional voice choice without blocking text-only readiness', async () => {
+    const report = await makeOnboardingOps(healthyDeps({
+      transcription: {
+        inspect: () => ({
+          state: 'quarantined' as const,
+          components: [
+            { id: 'artifact' as const, state: 'ready' as const, detail: 'artifact ok' },
+            { id: 'backend' as const, state: 'ready' as const, detail: 'backend ok' },
+            { id: 'key' as const, state: 'unconfigured' as const, detail: 'key absent' },
+            { id: 'proxy' as const, state: 'ready' as const, detail: 'proxy ok' },
+            { id: 'outbox' as const, state: 'ready' as const, detail: 'outbox ok' },
+            { id: 'consent' as const, state: 'corrupt' as const, detail: 'consent stale' },
+          ],
+        }),
+      },
+    })).doctor({ only: ['sidecars'] })
+
+    expect(report.ok).toBe(true)
+    expect(report.checks.find(check => check.id === 'sidecars.media')).toMatchObject({
+      status: 'warn', severity: 'medium', fixable: false,
+    })
+    expect(report.checks.find(check => check.id === 'sidecars.voice.consent')).toMatchObject({
+      status: 'warn', severity: 'medium', detail: 'consent stale', fixable: false,
+    })
+  })
+
+  it('keeps a selected voice provider fail-closed when its consent readiness disagrees', async () => {
+    const report = await makeOnboardingOps(healthyDeps({
+      transcription: {
+        inspect: () => ({
+          state: 'ready' as const,
+          components: [
+            { id: 'consent' as const, state: 'unavailable' as const, detail: 'consent missing' },
+          ],
+        }),
+      },
+    })).doctor({ only: ['sidecars'] })
+
+    expect(report.ok).toBe(false)
+    expect(report.checks.find(check => check.id === 'sidecars.voice.consent')).toMatchObject({
+      status: 'fail', severity: 'high', detail: 'consent missing', fixable: false,
+    })
   })
 
   it('surfaces independent secure voice readiness components', async () => {

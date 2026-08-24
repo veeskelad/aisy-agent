@@ -63,7 +63,7 @@ The harness decomposes into seventeen components, each with its own spec in
 | # | Component | Responsibility |
 |---|---|---|
 | 1 | Core / Agent Loop | stateless turn loop, prompt assembly, frozen snapshot, Plan Mode |
-| 2 | Gateway / Connectivity | Telegram (grammY), voice (Whisper sidecar), streaming, cards |
+| 2 | Gateway / Connectivity | Telegram (grammY), voice provider registry, streaming, cards |
 | 3 | Memory | four-level file memory, FTS5/BM25, lazy loading, durable forgetting |
 | 4 | Tools & Hooks | narrow-waist tool set, Pre/PostToolUse, rtk compression |
 | 5 | Safety | HARD_DENY, injection classifier, sandbox, vault, broken trifecta |
@@ -85,7 +85,7 @@ The harness decomposes into seventeen components, each with its own spec in
 - **Core:** TypeScript / Node.js — the harness is ~90% I/O orchestration
   ([ADR-0004](docs/decisions/2026-06-11-typescript-for-core.md)). Own agent loop,
   not a turnkey SDK ([ADR-0005](docs/decisions/2026-06-11-own-agent-loop.md)).
-- **Sidecars:** Python — Whisper voice transcription, optional scoring
+- **Sidecars:** Python — optional local Whisper voice transcription, optional scoring
   ([ADR-0003](docs/decisions/2026-06-11-monorepo-pnpm-ts-core-py-sidecars.md)).
 - **Memory:** canonical markdown + protected scoped ledger; local FTS5/BM25 keyword, sqlite-vec semantic through OpenRouter, and deterministic hybrid RRF are first-class derived retrieval with keyword fallback ([ADR-0006](docs/decisions/2026-06-11-file-based-memory-fts5-bm25.md), [ADR-0065](docs/decisions/2026-07-26-hybrid-vector-keyword-retrieval.md)).
 - **Isolation:** Docker (network none, cap-drop) + optional gVisor
