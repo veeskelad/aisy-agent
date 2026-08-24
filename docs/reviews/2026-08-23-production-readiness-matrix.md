@@ -6,7 +6,8 @@ audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
 **Current verified code head:** `a74419ca917254e6468dd6f64b07f89d762c6199`
 
-**Public `master`:** `a74419ca917254e6468dd6f64b07f89d762c6199`
+**Production runtime release из public `master`:**
+`a74419ca917254e6468dd6f64b07f89d762c6199`
 
 **Managed production current:** `a74419ca917254e6468dd6f64b07f89d762c6199`
 **Managed production previous:** `df6e837289008e53c9e716669e415a88f0cb637c`
