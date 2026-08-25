@@ -108,9 +108,11 @@ scoped active/previous pointers, evidence/jobs, forget tombstones и delivery
 outbox. `AutoSkillScope` состоит из exact nullable botId, operatorId, profileId,
 Project, resource scope и capability revision без session id. Поля выводятся
 только из trusted runtime binding, кодируются fixed-order JSON с explicit null,
-сравниваются bytewise и образуют domain-separated SHA-256 CAS key. Predicate
-learning равен `trusted && !narrowed`. Все файлы `0600`, каталоги `0700`;
-unknown schema fail-closed.
+сравниваются bytewise и образуют domain-separated SHA-256 `scopeKey`. Отдельный
+pointer key связывает `scopeKey + codeDerivedSkillIdentity`, поэтому skills
+одного scope имеют независимые active/previous CAS. Predicate learning равен
+`trusted && !narrowed`. Все файлы `0600`, каталоги `0700`; unknown schema
+fail-closed.
 
 До terminal reply одна bounded local transaction фиксирует verified evidence,
 candidate job и reply-release state. Generator/judge worker идёт после reply.
@@ -121,9 +123,13 @@ Active pointer меняется только atomic CAS; durable previous не �
 
 Durable reverse edges `session/project → evidence → job → revision` участвуют
 в удалении source state. Session/Project purge начинается только после
-`claimBySource` receipt, который одной транзакцией tombstone-ит зависимые
-revisions и снимает overlays. Crash до claim не удаляет source; crash после
+`claimBySource` receipt, который одной транзакцией переводит зависимости в
+`forget_claimed`, пишет anti-resurrection markers и снимает overlays. После
+source purge отдельная idempotent фаза удаляет artifacts/evidence и переводит
+record в terminal `tombstoned`. Crash до claim не удаляет source; crash после
 claim не возвращает skill. Несвязанная session оставляет revision активной.
+Gate работает и при canary-off; v1 binary при наличии v2 reverse edges
+fail-closed отказывает source purge.
 
 Следующий turn исходной session получает versioned `learned-procedure` overlay
 без изменения frozen memory/history prefix. Новая session видит revision в
@@ -175,7 +181,8 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
    минимальный tombstone и не допускает resurrection; linked source сначала
    снимает revision, unrelated session её не меняет, crash ordering сохраняется.
 8. **AC-21-19:** canary-off делает zero auto-skill observation/overlay I/O;
-   schema rollback и Doctor fail-closed проверены.
+   reverse-edge forget gate при этом остаётся active, а schema rollback и
+   Doctor fail-closed проверены.
 
 ## 8. Трассировка тестов
 

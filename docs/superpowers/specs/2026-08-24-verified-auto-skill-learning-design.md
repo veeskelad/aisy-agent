@@ -45,7 +45,10 @@ untrusted context, `actionStatus: unverified`, ambiguous effect, отмена л
 projectId, resourceScope и capabilityRevision. Поля выводятся только из trusted
 TurnContextLease, bot ownership registry и resolved capability matrix. Predicate
 learning равен `trusted && !narrowed`. Fixed-order UTF-8 JSON с explicit null
-сравнивается bytewise; CAS key равен domain-separated SHA-256. `sessionId` в
+сравнивается bytewise; domain-separated SHA-256 образует `scopeKey`. Code-derived
+`skillIdentity` строится из ordered descriptor registry identity, а CAS pointer
+key связывает `scopeKey + skillIdentity`. Несколько skills одного scope имеют
+раздельные active/previous pointers. `sessionId` в
 scope не входит: он используется только как identity независимой демонстрации.
 Код строит fingerprint из
 упорядоченной последовательности
@@ -182,13 +185,16 @@ recovery повторяет только локально доказанно н�
 
 Store поддерживает durable reverse edges
 `session/project → evidence → job → revision`. Удаление source session/Project
-сначала вызывает `claimBySource`: одной транзакцией tombstone-ит все зависимые
-jobs/revisions и снимает их active pointers/overlays. Только receipt этого claim
-разрешает source store начать purge. После source purge recovery доводит
-`purging → tombstoned`. Crash до claim оставляет source на месте; crash после
-claim не может вернуть зависимый skill. Session без reverse edges ничего не
-демоутит. Удаление любой из двух evidence sessions снимает revision, потому что
-после forgetting её proof threshold больше не доказуем.
+сначала вызывает `claimBySource`: одной транзакцией переводит все зависимые
+jobs/revisions в `forget_claimed`, пишет anti-resurrection markers и снимает
+active pointers/overlays. Только receipt этого claim разрешает source store
+начать purge. После source purge отдельная idempotent фаза удаляет artifacts/
+evidence и одна переводит record в terminal `tombstoned`. Crash до claim
+оставляет source на месте; crash после claim не может вернуть зависимый skill.
+Session без reverse edges ничего не демоутит. Удаление любой из двух evidence
+sessions снимает revision, потому что после forgetting её proof threshold больше
+не доказуем. Gate остаётся активным при canary-off; v1 binary с неизвестными v2
+reverse edges отказывает source purge.
 
 ## 7. Scope и пользовательский контракт
 

@@ -93,7 +93,7 @@ interface PersonalFactProjection {
   profileId: string
   scopeId: string
   text: string
-  perspective: 'operator-second-person' | 'neutral'
+  perspective: 'operator-memory'
 }
 
 type MemoryOp =
@@ -762,10 +762,10 @@ callback и его restart-E2E готовы; ещё нужны approved binding/
     pass. После неоднозначного `ACK_TIMEOUT` новый pass перечитывает durable
     голову: она могла измениться, если поздний ack успел зафиксироваться.
 31. **AC-03-31** — Remembered second-person fact хранится и извлекается
-    byte-identical под exact owner/profile/scope, prompt projection явно задаёт
-    perspective `operator-second-person`, а другой owner/profile/Project не
-    получает этот fact. Никакое model-authored subject metadata не участвует в
-    owner routing.
+    byte-identical под exact owner/profile/scope, prompt projection всегда
+    code-owned `operator-memory` без языковой классификации, а другой
+    owner/profile/Project не получает этот fact. Никакое model-authored subject
+    metadata не участвует в owner routing.
 
 ## 10. Open questions
 

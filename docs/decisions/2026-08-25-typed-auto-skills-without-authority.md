@@ -41,7 +41,9 @@ Auto-skill может активироваться без human tap только
 `AutoSkillScope` включает exact nullable bot, operator, profile, project,
 resource scope и capability-catalog revision, но не session id. Все поля
 выводятся из trusted runtime binding, canonical JSON сравнивается bytewise и
-входит в domain-separated SHA-256 CAS key. Typed skill входит в prompt как
+образует `scopeKey`. Active/previous CAS pointer отдельно связывает scopeKey с
+code-derived skill identity, поэтому несколько skills одного scope независимы.
+Typed skill входит в prompt как
 `learned-procedure` ниже constitution/operator/project instructions. Каждый
 реальный tool call повторно проходит approvals, HARD_DENY, sandbox, budgets и
 egress. Auto-skill не создаёт autonomy grant; ADR-0061 остаётся неизменным.

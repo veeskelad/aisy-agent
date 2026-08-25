@@ -34,10 +34,12 @@ owner/profile/Project.
 mutation; legacy `text` нормализуется в `fact`. Далее проверяются одна непустая
 строка, bounded length, отсутствие control chars и служебных receipt/status
 prefixes. После durable `COMMITTED` executor возвращает typed receipt
-`{ ok:true, output, verified:true, mutationReceipt:{ kind, operationId,
+`{ ok:true, output, verified:true, mutationReceipt:{
+kind:'memory.remember/v1', operationId,
 receiptId, turnId, fact, committed:true } }`. Durable terminal outbox атомарно
 связывает receipt с состоянием reply release, а `output` рендерит код, не
-synthesis model: `Запомнил, что <fact>`. Точка добавляется только если её нет.
+synthesis model: byte-exact `Запомнил, что <fact>`. Renderer не добавляет и не
+удаляет пунктуацию внутри `fact`.
 
 До commit, при validation failure, `BLOCKED`, ambiguous effect или ошибке слово
 «Запомнил» не выводится. Старый вызов с допустимым `text` мигрируется как alias

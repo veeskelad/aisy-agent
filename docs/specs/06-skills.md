@@ -98,10 +98,13 @@ part of scope. `botId` is exact string or literal `null`, never omitted.
 
 Scope fields come only from trusted `TurnContextLease`, bot ownership registry
 and resolved capability matrix. Fixed-order UTF-8 JSON with explicit `null` is
-compared bytewise; CAS/store key is
-`SHA-256("aisy-auto-skill-scope/v1\n" + canonicalJson)`. Unknown/empty field,
-alternate encoding or collision with a different canonical payload fail closed.
-Learning predicate is exactly `trusted && !narrowed`.
+compared bytewise; `scopeKey` is
+`SHA-256("aisy-auto-skill-scope/v1\n" + canonicalJson)`. Code derives stable
+`skillIdentity` from the ordered descriptor registry identity. Active/previous
+pointer key is `SHA-256("aisy-auto-skill-pointer/v1\n" + scopeKey + "\n" +
+skillIdentity)`, so different skills in one scope do not share CAS. Unknown/
+empty field, alternate encoding or collision with a different canonical payload
+fail closed. Learning predicate is exactly `trusted && !narrowed`.
 
 The v1 placeholder source enum is `current_request | verified_scope_metadata`.
 Missing or ambiguous binding blocks planning before HookGate. The planner emits
@@ -119,10 +122,14 @@ artifacts and evidence live only in private runtime state, never source Git.
 
 Private state stores reverse edges `session/project → evidence → job →
 revision`. Source forgetting must first obtain an atomic `claimBySource`
-receipt that tombstones dependent jobs/revisions and removes active overlays;
-only then may Session/Project storage purge its source. Recovery never restores
-a claimed pointer. Removing one evidence session invalidates its derived
-revision; an unrelated session with no edge has no effect.
+receipt that moves dependent jobs/revisions to `forget_claimed`, writes durable
+anti-resurrection markers and removes active overlays; only then may
+Session/Project storage purge its source. Artifact/evidence purge follows and
+alone transitions to terminal `tombstoned`. Recovery never restores a claimed
+pointer. Removing one evidence session invalidates its derived revision; an
+unrelated session with no edge has no effect. This claim gate remains active
+when learning/overlays are canary-off; an older binary that cannot read v2 must
+refuse source purge rather than bypass it.
 
 ## 3. Interfaces
 
@@ -562,6 +569,13 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 32. **AC-06-32** — Scope canonicalization derives exact nullable bot/operator/
     profile/project/resource/capability fields from trusted runtime bindings;
     alternate encoding, collision or `narrowed=true` creates zero evidence.
+33. **AC-06-33** — Two code-derived skill identities in one scope have distinct
+    pointer CAS keys; concurrent revision of one cannot conflict with or replace
+    the other's active/previous pointer.
+34. **AC-06-34** — Linked Session/Project deletion while canary-off or after a
+    v2→v1 binary rollback still requires reverse-edge `forget_claimed`; an
+    incapable binary refuses source purge, while unrelated source deletion
+    leaves pointers unchanged.
 
 ## 10. Open questions
 
