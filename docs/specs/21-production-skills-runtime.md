@@ -128,8 +128,11 @@ Durable reverse edges `session/project → evidence → job → revision` уча
 source purge отдельная idempotent фаза удаляет artifacts/evidence и переводит
 record в terminal `tombstoned`. Crash до claim не удаляет source; crash после
 claim не возвращает skill. Несвязанная session оставляет revision активной.
-Gate работает и при canary-off; v1 binary при наличии v2 reverse edges
-fail-closed отказывает source purge.
+Gate работает и при canary-off. Перед v2→v1 переключением managed rollback
+coordinator удерживает общий auto-skill/source-mutation lock, завершает все
+reverse-edge phases, повторно проверяет пустой dependency set и выдаёт durable
+`rollback-safe` certificate, связанный с exact v2 state hash и target commit.
+Без certificate rollback отказывается; старый v1 binary не обязан понимать v2.
 
 Следующий turn исходной session получает versioned `learned-procedure` overlay
 без изменения frozen memory/history prefix. Новая session видит revision в
@@ -182,7 +185,9 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
    снимает revision, unrelated session её не меняет, crash ordering сохраняется.
 8. **AC-21-19:** canary-off делает zero auto-skill observation/overlay I/O;
    reverse-edge forget gate при этом остаётся active, а schema rollback и
-   Doctor fail-closed проверены.
+   Doctor fail-closed проверены. Process-level v2→v1 test требует exact
+   rollback-safe certificate до switch, затем удаляет source без оставшихся v2
+   edges; crash/drift/new edge между certificate и switch запрещают rollback.
 
 ## 8. Трассировка тестов
 

@@ -54,6 +54,9 @@ Agent-authored свободный `SKILL.md`, nightly draft, imported edit и л
 
 Первый LIVE rollout — explicit operator canary. Default-on требует отдельного
 release решения после race/restart/adversarial и rollback gates.
+Rollback на binary, не знающий private schema, разрешён только managed
+coordinator-ом после завершения reverse-edge phases и выдачи exact
+state-hash/target-commit-bound `rollback-safe` certificate.
 
 ## Последствия
 

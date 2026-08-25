@@ -46,9 +46,11 @@ projectId, resourceScope и capabilityRevision. Поля выводятся то
 TurnContextLease, bot ownership registry и resolved capability matrix. Predicate
 learning равен `trusted && !narrowed`. Fixed-order UTF-8 JSON с explicit null
 сравнивается bytewise; domain-separated SHA-256 образует `scopeKey`. Code-derived
-`skillIdentity` строится из ordered descriptor registry identity, а CAS pointer
-key связывает `scopeKey + skillIdentity`. Несколько skills одного scope имеют
-раздельные active/previous pointers. `sessionId` в
+`skillIdentity` строится из verified workflow fingerprint и ordered descriptor
+registry identity; изменения placeholder slots/postconditions являются
+revisions этого skill. CAS pointer key связывает `scopeKey + skillIdentity`.
+Несколько skills одного scope имеют раздельные active/previous pointers.
+`sessionId` в
 scope не входит: он используется только как identity независимой демонстрации.
 Код строит fingerprint из
 упорядоченной последовательности
@@ -193,8 +195,11 @@ evidence и одна переводит record в terminal `tombstoned`. Crash �
 оставляет source на месте; crash после claim не может вернуть зависимый skill.
 Session без reverse edges ничего не демоутит. Удаление любой из двух evidence
 sessions снимает revision, потому что после forgetting её proof threshold больше
-не доказуем. Gate остаётся активным при canary-off; v1 binary с неизвестными v2
-reverse edges отказывает source purge.
+не доказуем. Gate остаётся активным при canary-off. Перед v2→v1 switch managed
+rollback coordinator под общим state/source-mutation lock завершает reverse-edge
+phases, проверяет пустой dependency set и выдаёт durable certificate, связанный
+с exact state hash и target commit; drift/crash/new edge запрещают switch. Старый
+v1 binary не должен понимать v2 schema.
 
 ## 7. Scope и пользовательский контракт
 
@@ -268,6 +273,7 @@ state. Откат binary сохраняет state; неизвестная schema
 13. forget Project/session/skill не оставляет replayable/raw personal evidence
     и не допускает resurrection; crash до/после reverse-edge claim сохраняет
     порядок, а несвязанная session не демоутит skill;
+    process-level v2→v1 rollback требует rollback-safe certificate до switch;
 14. Telegram E2E accepted-send даёт одно короткое уведомление без внутренних
     receipt/status; ambiguous send не повторяется и виден Doctor;
 15. full package tests, workspace typecheck/build, Doctor, managed

@@ -100,7 +100,9 @@ Scope fields come only from trusted `TurnContextLease`, bot ownership registry
 and resolved capability matrix. Fixed-order UTF-8 JSON with explicit `null` is
 compared bytewise; `scopeKey` is
 `SHA-256("aisy-auto-skill-scope/v1\n" + canonicalJson)`. Code derives stable
-`skillIdentity` from the ordered descriptor registry identity. Active/previous
+`skillIdentity` from the verified workflow fingerprint and ordered descriptor
+registry identity. Placeholder-slot and postcondition changes are revisions of
+that same skill, not new identities. Active/previous
 pointer key is `SHA-256("aisy-auto-skill-pointer/v1\n" + scopeKey + "\n" +
 skillIdentity)`, so different skills in one scope do not share CAS. Unknown/
 empty field, alternate encoding or collision with a different canonical payload
@@ -128,8 +130,11 @@ Session/Project storage purge its source. Artifact/evidence purge follows and
 alone transitions to terminal `tombstoned`. Recovery never restores a claimed
 pointer. Removing one evidence session invalidates its derived revision; an
 unrelated session with no edge has no effect. This claim gate remains active
-when learning/overlays are canary-off; an older binary that cannot read v2 must
-refuse source purge rather than bypass it.
+when learning/overlays are canary-off. A managed rollback coordinator must
+resolve all reverse edges under the same state/source-mutation lock and issue a
+state-hash/target-commit-bound `rollback-safe` certificate before switching to
+an older binary; otherwise rollback is refused. The old binary is never asked
+to interpret an unknown future schema.
 
 ## 3. Interfaces
 
@@ -572,10 +577,12 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 33. **AC-06-33** — Two code-derived skill identities in one scope have distinct
     pointer CAS keys; concurrent revision of one cannot conflict with or replace
     the other's active/previous pointer.
-34. **AC-06-34** — Linked Session/Project deletion while canary-off or after a
-    v2→v1 binary rollback still requires reverse-edge `forget_claimed`; an
-    incapable binary refuses source purge, while unrelated source deletion
-    leaves pointers unchanged.
+34. **AC-06-34** — Linked Session/Project deletion while canary-off still
+    requires reverse-edge `forget_claimed`. Before v2→v1 switch the managed
+    coordinator under one lock either resolves every dependency and issues an
+    exact state-hash/target-commit `rollback-safe` certificate or refuses
+    rollback; process-level deletion after a certified rollback has no v2 edge
+    to bypass. Unrelated source deletion leaves pointers unchanged.
 
 ## 10. Open questions
 
