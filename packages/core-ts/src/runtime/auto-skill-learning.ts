@@ -172,6 +172,13 @@ function exactUnknownArray(value: unknown): readonly unknown[] | null {
   return Object.freeze(out)
 }
 
+function exactSafeTextArray(value: unknown): readonly string[] | null {
+  const raw = exactUnknownArray(value)
+  if (raw === null || raw.some(item => typeof item !== 'string' ||
+    !SAFE_TEXT.test(item) || item !== item.trim())) return null
+  return Object.freeze(raw as string[])
+}
+
 export function canonicalAutoSkillScope(scope: AutoSkillScope): string | null {
   if (!safeIdentity(scope.botId) || !safeIdentity(scope.operatorId) ||
     !safeIdentity(scope.profileId) || !safeIdentity(scope.projectId) ||
@@ -271,6 +278,92 @@ export function makeVerifiedWorkflowEvidence(input: Readonly<{
   })
 }
 
+export function parseVerifiedWorkflowEvidence(value: unknown): VerifiedWorkflowEvidenceV1 | null {
+  const root = exactDataObject(value, [
+    'schemaVersion', 'evidenceId', 'sessionId', 'turnId', 'scope', 'scopeKey',
+    'workflowFingerprint', 'skillIdentity', 'registryRevision', 'steps',
+    'trusted', 'narrowed',
+  ])
+  if (root === null || root['schemaVersion'] !== 1 || root['trusted'] !== true ||
+    root['narrowed'] !== false || typeof root['sessionId'] !== 'string' ||
+    typeof root['turnId'] !== 'string' || !safeIdentity(root['sessionId']) ||
+    !safeIdentity(root['turnId']) || root['sessionId'].length === 0 ||
+    root['turnId'].length === 0 || typeof root['registryRevision'] !== 'string' ||
+    !ID.test(root['registryRevision']) || typeof root['evidenceId'] !== 'string' ||
+    !HASH.test(root['evidenceId']) || typeof root['scopeKey'] !== 'string' ||
+    !HASH.test(root['scopeKey']) || typeof root['workflowFingerprint'] !== 'string' ||
+    !HASH.test(root['workflowFingerprint']) || typeof root['skillIdentity'] !== 'string' ||
+    !HASH.test(root['skillIdentity'])) return null
+  const rawScope = exactDataObject(root['scope'], [
+    'botId', 'operatorId', 'profileId', 'projectId', 'resourceScope', 'capabilityRevision',
+  ])
+  if (rawScope === null || (rawScope['botId'] !== null && typeof rawScope['botId'] !== 'string') ||
+    typeof rawScope['operatorId'] !== 'string' || typeof rawScope['profileId'] !== 'string' ||
+    typeof rawScope['projectId'] !== 'string' || typeof rawScope['resourceScope'] !== 'string' ||
+    typeof rawScope['capabilityRevision'] !== 'string') return null
+  const scope: AutoSkillScope = Object.freeze({
+    botId: rawScope['botId'] as string | null,
+    operatorId: rawScope['operatorId'],
+    profileId: rawScope['profileId'],
+    projectId: rawScope['projectId'],
+    resourceScope: rawScope['resourceScope'],
+    capabilityRevision: rawScope['capabilityRevision'],
+  })
+  if (autoSkillScopeKey(scope) !== root['scopeKey']) return null
+  const rawSteps = exactUnknownArray(root['steps'])
+  if (rawSteps === null) return null
+  const steps: VerifiedWorkflowStepV1[] = []
+  for (const rawStep of rawSteps) {
+    const step = exactDataObject(rawStep, [
+      'descriptorId', 'placeholderIds', 'postconditionIds', 'receiptId',
+    ])
+    if (step === null || typeof step['descriptorId'] !== 'string' ||
+      !ID.test(step['descriptorId']) || typeof step['receiptId'] !== 'string' ||
+      !HASH.test(step['receiptId'])) return null
+    const placeholderIds = exactStringArray(step['placeholderIds'])
+    const postconditionIds = exactStringArray(step['postconditionIds'])
+    if (placeholderIds === null || postconditionIds === null || postconditionIds.length === 0 ||
+      new Set(placeholderIds).size !== placeholderIds.length ||
+      new Set(postconditionIds).size !== postconditionIds.length) return null
+    steps.push(Object.freeze({
+      descriptorId: step['descriptorId'], placeholderIds, postconditionIds,
+      receiptId: step['receiptId'],
+    }))
+  }
+  const frozenSteps = Object.freeze(steps)
+  const canonical = canonicalSteps(frozenSteps)
+  const workflowFingerprint = hash(
+    'aisy-auto-skill-workflow/v1',
+    JSON.stringify([root['scopeKey'], root['registryRevision'], canonical]),
+  )
+  const skillIdentity = hash(
+    'aisy-auto-skill-identity/v1',
+    JSON.stringify([workflowFingerprint, root['registryRevision'],
+      frozenSteps.map(step => step.descriptorId)]),
+  )
+  const evidenceId = hash(
+    'aisy-auto-skill-evidence/v1',
+    JSON.stringify([root['sessionId'], root['turnId'], root['scopeKey'], workflowFingerprint,
+      frozenSteps.map(step => step.receiptId)]),
+  )
+  if (root['workflowFingerprint'] !== workflowFingerprint ||
+    root['skillIdentity'] !== skillIdentity || root['evidenceId'] !== evidenceId) return null
+  return Object.freeze({
+    schemaVersion: 1,
+    evidenceId,
+    sessionId: root['sessionId'],
+    turnId: root['turnId'],
+    scope,
+    scopeKey: root['scopeKey'],
+    workflowFingerprint,
+    skillIdentity,
+    registryRevision: root['registryRevision'],
+    steps: frozenSteps,
+    trusted: true,
+    narrowed: false,
+  })
+}
+
 export function parseSkillRecipeDraft(value: unknown): SkillRecipeDraftV1 | null {
   const root = exactDataObject(value, ['version', 'steps'])
   if (root === null || root['version'] !== 1) return null
@@ -362,6 +455,39 @@ export function buildAutoSkillManifest(input: Readonly<{
   }
   const revisionHash = hash('aisy-auto-skill-revision/v1', JSON.stringify(base))
   return Object.freeze({ ...base, revisionHash })
+}
+
+export function parseAutoSkillManifest(value: unknown): AutoSkillManifestV1 | null {
+  const root = exactDataObject(value, [
+    'schemaVersion', 'skillIdentity', 'scopeKey', 'registryRevision', 'revisionHash',
+    'name', 'title', 'description', 'triggers', 'steps',
+  ])
+  if (root === null || root['schemaVersion'] !== 1 ||
+    typeof root['skillIdentity'] !== 'string' || !HASH.test(root['skillIdentity']) ||
+    typeof root['scopeKey'] !== 'string' || !HASH.test(root['scopeKey']) ||
+    typeof root['registryRevision'] !== 'string' || !ID.test(root['registryRevision']) ||
+    typeof root['revisionHash'] !== 'string' || !HASH.test(root['revisionHash']) ||
+    typeof root['name'] !== 'string' || !ID.test(root['name']) ||
+    typeof root['title'] !== 'string' || !SAFE_TEXT.test(root['title']) ||
+    typeof root['description'] !== 'string' || !SAFE_TEXT.test(root['description'])) return null
+  const triggers = exactSafeTextArray(root['triggers'])
+  const parsedDraft = parseSkillRecipeDraft({ version: 1, steps: root['steps'] })
+  if (triggers === null || triggers.length === 0 || parsedDraft === null) return null
+  const base = {
+    schemaVersion: 1 as const,
+    skillIdentity: root['skillIdentity'],
+    scopeKey: root['scopeKey'],
+    registryRevision: root['registryRevision'],
+    name: root['name'],
+    title: root['title'],
+    description: root['description'],
+    triggers,
+    steps: parsedDraft.steps,
+  }
+  const revisionHash = hash('aisy-auto-skill-revision/v1', JSON.stringify(base))
+  return root['revisionHash'] === revisionHash
+    ? Object.freeze({ ...base, revisionHash })
+    : null
 }
 
 export function renderAutoSkillDocument(manifest: AutoSkillManifestV1): string {

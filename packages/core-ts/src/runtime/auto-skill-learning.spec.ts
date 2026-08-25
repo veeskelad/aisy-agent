@@ -5,7 +5,9 @@ import {
   buildAutoSkillManifest,
   canonicalAutoSkillScope,
   makeVerifiedWorkflowEvidence,
+  parseAutoSkillManifest,
   parseSkillRecipeDraft,
+  parseVerifiedWorkflowEvidence,
   renderAutoSkillDocument,
   sameAutoSkillModelIdentity,
   shadowVerifyAutoSkill,
@@ -119,6 +121,8 @@ describe('typed auto-skill domain', () => {
     expect(first.workflowFingerprint).toBe(second.workflowFingerprint)
     expect(first.skillIdentity).toBe(second.skillIdentity)
     expect(first.scopeKey).toBe(second.scopeKey)
+    expect(parseVerifiedWorkflowEvidence(structuredClone(first))).toEqual(first)
+    expect(parseVerifiedWorkflowEvidence({ ...first, evidenceId: 'f'.repeat(64) })).toBeNull()
   })
 
   it('does not create evidence from untrusted, narrowed or unverifiable effects', () => {
@@ -253,6 +257,8 @@ describe('typed auto-skill domain', () => {
     expect(rendered).toContain('`memory.committed`')
     expect(rendered).not.toContain('operator-a')
     expect(rendered).not.toContain('project-a')
+    expect(parseAutoSkillManifest(structuredClone(manifest))).toEqual(manifest)
+    expect(parseAutoSkillManifest({ ...manifest, title: 'Подменённый заголовок' })).toBeNull()
   })
 
   it('binds shadow replay to both evidence fixtures and exact artifact steps', () => {
