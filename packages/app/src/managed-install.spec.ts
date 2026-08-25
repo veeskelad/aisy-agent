@@ -560,6 +560,64 @@ describe('managed Git distribution', () => {
     expect(value.rollbackVerified).toEqual([A])
   })
 
+  it('rolls forward to a descendant previous without issuing a second downgrade certificate', () => {
+    const value = fixture()
+    bootstrap(value)
+    updateManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    value.autoSkillRollback = 'safe'
+    rollbackManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    value.rollbackPrepared = []
+    value.rollbackVerified = []
+    value.prepared = []
+    value.verified = []
+
+    const generation = updateManagedInstall(
+      { root: value.root, binDir: value.binDir }, value.ports,
+    )
+
+    expect(generation).toMatchObject({ current: B, previous: A })
+    expect(activeLinks(value)).toEqual({ current: B, previous: A })
+    expect(value.prepared).toEqual([])
+    expect(value.verified).toEqual([B])
+    expect(value.rollbackPrepared).toEqual([])
+    expect(value.rollbackVerified).toEqual([])
+  })
+
+  it('refuses descendant previous when retained ignored runtime output was changed', () => {
+    const value = fixture()
+    bootstrap(value)
+    updateManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    const retained = join(value.root, 'releases', B)
+    for (const relative of [
+      'node_modules/dependency',
+      'packages/app/dist',
+      'packages/app/node_modules',
+      'packages/core-ts/dist',
+      'packages/core-ts/node_modules',
+      'packages/telegram-gw/dist',
+      'packages/telegram-gw/node_modules',
+    ]) mkdirSync(join(retained, relative), { recursive: true, mode: 0o700 })
+    writeFileSync(join(retained, 'node_modules/dependency/index.js'), 'export const ok = true\n')
+    writeFileSync(join(retained, 'packages/app/dist/aisy.js'), 'export const clean = true\n')
+    writeFileSync(join(retained, 'packages/core-ts/dist/index.js'), 'export {}\n')
+    writeFileSync(join(retained, 'packages/telegram-gw/dist/index.js'), 'export {}\n')
+    recordManagedReleaseIntegrity(value.root, B)
+    value.autoSkillRollback = 'safe'
+    rollbackManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    writeFileSync(join(retained, 'packages/app/dist/injected.js'), 'ignored tamper\n')
+    const prepare = value.ports.prepareRelease
+    value.ports.prepareRelease = (root, commit) => {
+      prepare(root, commit)
+      recordManagedReleaseIntegrity(root, commit)
+    }
+    value.ports.verifyRelease = (root, commit) => verifyManagedReleaseIntegrity(root, commit)
+
+    expect(() => updateManagedInstall(
+      { root: value.root, binDir: value.binDir }, value.ports,
+    )).toThrowError(expect.objectContaining({ code: 'UPDATE_SOURCE_REFUSED' }))
+    expect(activeLinks(value)).toEqual({ current: A, previous: B })
+  })
+
   it('refuses rollback when v2 state drifts before the active switch', () => {
     const value = fixture()
     bootstrap(value)

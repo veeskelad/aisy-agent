@@ -72,6 +72,15 @@ switch и остаётся после него, поэтому старый уж
 блокируют `--rollback` и любой non-descendant `--allow-rewrite`. После
 roll-forward barrier снимает только explicit команда v2-aware active release;
 downgrade target этого сделать не может.
+Если retained `previous` является потомком текущего rollback release, возврат к
+нему считается roll-forward, а не второй rollback: updater заново проверяет
+release, сохраняет действующий barrier при atomic switch и не пытается выдать
+несовместимый downgrade-certificate. Уже активный новый binary затем снимает
+barrier explicit командой, привязанной к exact current commit. Non-descendant
+`previous` по-прежнему проходит полный rollback-certificate gate.
+Retained release перед roll-forward проверяется по существующему integrity
+record до любого rebuild: updater не может перехешировать и тем самым узаконить
+изменённый ignored runtime-файл.
 
 Store handle, который увидел barrier или ошибку durable persist, становится
 `poisoned`. Persistent epoch меняется при rollback и explicit resume, поэтому

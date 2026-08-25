@@ -719,6 +719,11 @@ export function updateManagedInstall(
       throw new ManagedUpdateFailure('UPDATE_HISTORY_REFUSED')
     }
     const journalPath = join(input.root, 'update-state.json')
+    // A retained previous can be either a downgrade target or the newer side
+    // of a pair produced by rollback. It must be verified against its existing
+    // integrity record before any build can overwrite that record and bless an
+    // ignored runtime-file mutation. A descendant is roll-forward and keeps
+    // the existing barrier; only a downgrade mints a new certificate.
     if (target === active.previous) {
       try {
         ports.verifyRelease(input.root, target, 'update')
@@ -731,13 +736,15 @@ export function updateManagedInstall(
         oldCommit: active.current, newCommit: target,
       })
       ports.fault('journal:after-verified')
-      const authorization = ports.prepareAutoSkillRollback(target)
+      const authorization = descendant ? null : ports.prepareAutoSkillRollback(target)
       const generation = publishGeneration(
         input.root,
         target,
         active.current,
         ports,
-        () => ports.verifyAutoSkillRollback(target, authorization),
+        authorization === null
+          ? undefined
+          : () => ports.verifyAutoSkillRollback(target, authorization),
       )
       writeJournal(journalPath, {
         schemaVersion: 1, operation: 'update', phase: 'SWITCHED',

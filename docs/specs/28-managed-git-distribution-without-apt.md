@@ -42,6 +42,16 @@ kernel `flock` на одном стабильном `update.lock` в течен�
 Lock path не удаляется при unlock, а PID, возраст файла и stale-unlink не дают
 authority и не участвуют в recovery.
 
+После offline rollback retained `previous` может быть более новым потомком
+`current`. Обычный update к такому exact remote head является roll-forward:
+retained release проходит проверку существующего integrity record и doctor до
+любого rebuild, поэтому ignored runtime mutation нельзя легитимизировать новым
+digest. Updater не выдаёт вторую rollback-сертификацию. Действующий auto-skill
+barrier сохраняется через atomic switch и снимается только explicit
+`--resume-auto-skills` уже из exact active roll-forward commit. Если retained
+`previous` не является потомком, остаются обязательными `--allow-rewrite` и
+downgrade-certificate gate.
+
 Каждый release создаётся до cutover и обязан пройти:
 
 1. detached checkout exact full commit;
@@ -248,6 +258,12 @@ remote output, environment, credential state или vendor detail.
 15. **AC-28-15** — Targeted tests, package/workspace tests, typecheck/build,
     Python pytest/ruff, `git diff --check`, secret scan и private-reference scan
     зелёные либо baseline-отказы явно доказаны до diff.
+16. **AC-28-16** — После B→A rollback обычный update к retained B, если B —
+    потомок A, публикует B/A без второй downgrade-сертификации; barrier остаётся
+    до exact B `--resume-auto-skills`. Изменённый integrity-covered ignored
+    runtime-файл B даёт отказ до switch и не перехешируется. Non-descendant
+    retained previous по-прежнему не проходит без rewrite authority и rollback
+    certificate.
 
 ## 8. Открытые вопросы
 
