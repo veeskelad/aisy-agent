@@ -2,7 +2,7 @@
 
 **Статус:** Принято
 **Дата:** 2026-07-29
-**Последнее уточнение:** 2026-08-09
+**Последнее уточнение:** 2026-08-25
 **Теги:** telegram, runtime, durability
 
 ## Контекст
@@ -83,7 +83,16 @@ checkpoint- и provider-работы.
    с просроченным permit или после replay считается аварийным.
 14. Restart loop имеет code-owned backoff и бюджет. Durable quarantine по
     исчерпанию бюджета, повреждённому state или недоказуемой authority сохраняет
-    ноль child и не снимается автоматически. Менеджер не интерпретирует
+    ноль child и не снимается автоматически. Только quarantine
+    `RESTART_BUDGET_EXHAUSTED` может снять явная локальная operator-команда с
+    точным acknowledgement причины. До чтения checksummed state команда обязана
+    эксклюзивно получить manager lease и runtime-liveness fence; она сохраняет
+    execution authority и release receipt, очищая только crash window, счётчик и
+    quarantine, а `manager.cleanShutdown=true` фиксирует доказанную quiescence.
+    Exact видимый post-rename результат при ошибке fsync повторно закрепляется
+    следующей ревизией внутри того же запуска и привязан к exact checksum и
+    revision. Уже очищенный state, missing/corrupt state, живой manager/runtime
+    и любой другой quarantine дают zero-mutation отказ. Менеджер не интерпретирует
     вывод модели и не исполняет инструменты; в child argv/env, IPC и manager
     state он не передаёт и не сохраняет Telegram token, тексты сообщений,
     session id, turn id, байты checkpoint и credentials.
@@ -147,6 +156,9 @@ checkpoint- и provider-работы.
 - timeout ACK захвата и освобождения, malformed и oversized кадр не раскрывают
   подробностей;
 - restart storm останавливается по backoff и бюджету;
+- снятие restart-budget quarantine требует exact acknowledgement и двух
+  kernel-owned lease; busy manager/runtime, corrupt/missing state и другой код
+  quarantine сохраняют state без изменения;
 - два manager-процесса не запускают два child: проигравший manager немедленно
   остаётся zero-child;
 - real-process `SIGKILL` manager автоматически освобождает только manager lease;

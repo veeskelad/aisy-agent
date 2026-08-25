@@ -70,6 +70,21 @@ runtime-liveness используют разные SQLite DB и удержива
 - restart budget и повреждённый durable state по-прежнему переводят service в
   zero-child quarantine.
 
+После устранения причины restart storm только budget-quarantine снимается
+явным локальным acknowledgement. Сначала остановите service, затем выполните:
+
+```bash
+aisy supervisor recover-restart-budget --ack=RESTART_BUDGET_EXHAUSTED
+```
+
+Команда сама доказывает отсутствие manager/runtime двумя lease и не изменяет
+missing/corrupt state либо quarantine с другим кодом. После успешного receipt
+service можно запустить снова и проверить `aisy doctor --json`. При
+`SUPERVISOR_RECOVERY_COMMIT_AMBIGUOUS` сначала устраните ошибку хранилища, затем
+запустите service и проверьте его состояние: видимая очищенная ревизия разрешит
+запуск, а откатившийся quarantine сохранит zero-child. Прямо редактировать state
+нельзя; повторять recovery-команду следует только если quarantine сохранился.
+
 При exact Docker opt-in parent после manager/runtime-liveness fences read-only
 загружает заранее enrolled v4 ledger, закрепляет canonical socket + daemon
 identity и завершает recovery до первого child spawn. Supervisor не создаёт

@@ -1430,6 +1430,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     разойтись. Устаревший экран и неподключённый раздел отвечают каждый одной
     фразой на весь бот. Список сервисов, сессий и MCP-серверов существует на
     экране один раз — клавиатурой, а не текстом и клавиатурой сразу.
+101. **AC-02-101** — явное снятие `RESTART_BUDGET_EXHAUSTED` требует exact
+    operator acknowledgement, эксклюзивных manager lease и runtime-liveness
+    fence до чтения checksummed state. Команда сохраняет authority/release
+    receipt, очищает crash window, счётчик и quarantine и фиксирует доказанную
+    quiescence через `manager.cleanShutdown=true`. Только внутри того же запуска
+    exact видимый post-rename результат, связанный checksum/revision, закрепляется
+    следующей ревизией. Уже очищенный state, missing/corrupt state, busy
+    manager/runtime и любой другой quarantine дают zero-mutation code-only отказ.
 
 ## 10. Open questions
 

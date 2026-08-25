@@ -336,6 +336,10 @@ import {
   resolveExecutionSupervisorStateRoot,
 } from '../supervisor-state.js'
 import {
+  recoverExecutionSupervisorRestartBudget,
+  runExecutionSupervisorRecoveryCli,
+} from '../execution-supervisor-recovery.js'
+import {
   EXECUTION_SUPERVISOR_LIVENESS_ENV,
   ExecutionSupervisorLeaseError,
   acquireExecutionRunLiveness,
@@ -394,6 +398,27 @@ const argv = process.argv.slice(2)
 
 if (argv[0] === 'update') {
   process.exit(await runManagedUpdateCli(argv.slice(1)))
+}
+
+if (argv[0] === 'supervisor') {
+  const stateRoot = resolveExecutionSupervisorStateRoot({
+    platform: process.platform,
+    home: homedir(),
+    ...(process.env['XDG_STATE_HOME'] === undefined
+      ? {}
+      : { xdgStateHome: process.env['XDG_STATE_HOME'] }),
+  })
+  process.exit(await runExecutionSupervisorRecoveryCli(argv.slice(1), {
+    recover: async () => {
+      const timeout = AbortSignal.timeout(2_000)
+      return await recoverExecutionSupervisorRestartBudget({
+        state: makeNodeExecutionSupervisorStateStore({ root: stateRoot }),
+        signal: timeout,
+      })
+    },
+    stdout: (value) => { process.stdout.write(value) },
+    stderr: (value) => { process.stderr.write(value) },
+  }))
 }
 
 const VOICE_CONTROL_SOCKET_PATH = '/run/aisy/voice-control.sock'
