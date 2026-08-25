@@ -2110,7 +2110,9 @@ describe('Tier-2 loop control seams', () => {
       expect(requests).toHaveLength(1)
       expect(requests[0]!.spans.some(span =>
         span.role === 'system' && span.text.includes('spawn_subagent') &&
-        span.text.includes('{"intent":"standalone task"}'))).toBe(true)
+        span.text.includes('{"intent":"standalone task"}') &&
+        span.text.includes('call remember') &&
+        span.text.includes('written naturally in second person'))).toBe(true)
     })
 
     it('AC-01-59: rejects mixed subscription work when only delegation is attested', async () => {
@@ -2127,6 +2129,41 @@ describe('Tier-2 loop control seams', () => {
 
       expect(result.actionContractKind).toBe('delegate-required')
       expect(result.actionStatus).toBe('unverified')
+    })
+
+    it('AC-01-63: recovers only delegation after an attested memory mutation', async () => {
+      const responses = [
+        attachProviderActionEvidence(
+          { reply: 'Запомнил.' },
+          [actionEvidence({ name: 'remember', args: {} }, { ok: true, verified: true })],
+        ),
+        attachProviderActionEvidence(
+          { reply: 'Субагент завершил расчёт: 667' },
+          [actionEvidence({ name: 'spawn_subagent', args: {} }, { ok: true })],
+        ),
+      ]
+      const requests: ModelRequest[] = []
+      const provider: ProviderAdapter = {
+        complete: async (request) => {
+          requests.push(request)
+          return responses.shift()!
+        },
+      }
+      const loop = makeAgentLoop(makeDeps({ provider }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        spans: [makeOperatorSpan(
+          'Запомни, что я предпочитаю тестовый формат отчёта, и поручи субагенту вычислить 23×29.',
+        )],
+      }))
+
+      expect(result.actionStatus).toBe('verified')
+      expect(requests).toHaveLength(2)
+      const recovery = requests[1]!.spans.find(span =>
+        span.role === 'system' && span.text.includes('Mutation evidence already exists'))
+      expect(recovery?.text).toContain('Call spawn_subagent now')
+      expect(recovery?.text).toContain('Do not repeat the mutation')
+      expect(recovery?.text).not.toContain('call remember')
     })
 
     it('AC-01-61: accepts the durable receipt of a committed subscription memory write', async () => {

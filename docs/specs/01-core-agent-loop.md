@@ -296,9 +296,16 @@ exact trimmed `fact` и literal `committed:true`. Code-owned `output` равен
 `Запомнил, что <факт>` и проходит terminal renderer без synthesis-round
 перефразирования. Durable reply-release outbox дедуплицирует retry/replay;
 повторный readback памяти в том же ходе не нужен.
-Составная команда с делегированием и мутацией сохраняет оба обязательства:
+Составная команда с делегированием и одной mutation-obligation сохраняет оба обязательства:
 делегирование не маскирует запись, а receipt записи не заменяет результат
-субагента.
+субагента. Initial code-owned instruction не ждёт частичного провала, а сразу
+перечисляет оба обязательных семейства: `spawn_subagent` и mutation-инструмент,
+явно потребованный оператором. Для `запомни` / `remember` она прямо требует
+вызвать `remember` и передать факт о текущем операторе во втором лице. Если
+первый provider round подтвердил только одно семейство, единственный recovery
+round называет оставшееся evidence и не просит повторять уже доказанный effect.
+Несколько разных mutation-effects в одном mixed-контракте не входят в этот
+acceptance slice и не считаются независимо проверенными.
 
 ### 4.8 Production Plan Mode submission state (ADR-0092)
 
@@ -718,6 +725,14 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     расширением структуры. Truthy/false receipt, accessor/Proxy/symbol, иной
     nested receipt и любое другое лишнее поле дают
     `PLAN_EXECUTOR_RESULT_INVALID` и zero verified action evidence.
+63. **AC-01-63** — Initial instruction для составного запроса «запомни и
+    делегируй» одновременно называет `spawn_subagent`, `remember`, требование
+    second-person fact и оба независимых evidence. После подтверждённой
+    делегации recovery требует только mutation/postcondition; terminal success
+    без любого из двух evidence остаётся `actionStatus:"unverified"`. Если
+    typed mutation receipt получен первым, code-owned verdict сохраняет этот
+    факт, а recovery требует только `spawn_subagent` и явно запрещает повторный
+    `remember`.
 
 ## 10. Open questions
 

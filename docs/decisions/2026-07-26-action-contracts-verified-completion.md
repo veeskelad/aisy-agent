@@ -32,6 +32,20 @@ available. Failure then becomes a structured blocked result, never fabricated
 success. Deterministic hooks, tiers, approvals, budgets, and Plan Mode retain
 precedence over the contract.
 
+Составной `delegate-required` контракт с одной mutation-obligation не сводится
+к первому отсутствующему evidence. Уже первая code-owned инструкция перечисляет
+оба обязательства: реальный `spawn_subagent` и явно запрошенный оператором
+mutation-вызов. Для императива `запомни` инструкция прямо называет `remember`
+и требует сохранить факт о текущем операторе во втором лице. Несколько разных
+mutation-effects в одном mixed-контракте этим решением не типизируются и не
+заявляются как проверенные. После частичного успеха единственный recovery-round
+называет только оставшееся обязательство;
+code-owned verdict сохраняет признак уже подтверждённой мутации независимо от
+порядка выполнения. Поэтому recovery не предлагает повторить уже подтверждённый
+effect ни после делегации, ни после мутации. Это меняет planning
+подсказку, но не evidence: terminal success по-прежнему выпускается только
+после независимого результата делегации и typed mutation receipt/readback.
+
 ## Consequences
 
 - **Positive:** dry action responses and false completion become measurable,

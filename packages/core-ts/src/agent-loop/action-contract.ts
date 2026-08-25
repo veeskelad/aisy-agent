@@ -26,6 +26,8 @@ export interface ActionEvidence {
 export interface ActionContractVerdict {
   satisfied: boolean
   missing: ActionMissingEvidence
+  /** Code-owned partial evidence for a mixed delegation + mutation contract. */
+  mutationSatisfied?: boolean
 }
 
 // A subscription adapter executes Aisy capabilities inside its supervised MCP
@@ -282,7 +284,15 @@ export function evaluateActionContract(
 
   if (contract.kind === 'delegate-required') {
     const delegated = evidence.some((item) => item.successful && item.family === 'delegate')
-    if (!delegated) return { satisfied: false, missing: 'delegation' }
+    if (!delegated) {
+      return contract.requiresMutation === true
+        ? {
+            satisfied: false,
+            missing: 'delegation',
+            mutationSatisfied: mutationVerdict(evidence).satisfied,
+          }
+        : { satisfied: false, missing: 'delegation' }
+    }
     return contract.requiresMutation === true
       ? mutationVerdict(evidence)
       : { satisfied: true, missing: 'none' }
@@ -295,9 +305,30 @@ export function actionRecoveryInstruction(
   contract: ActionContract,
   verdict: ActionContractVerdict,
 ): string {
+  const mixedMutation = contract.kind === 'delegate-required' && contract.requiresMutation === true
   const nextAction = verdict.missing === 'delegation'
-    ? 'Call spawn_subagent now with a JSON string such as {"intent":"standalone task"}. Do not calculate or role-play the subagent result yourself.'
-    : 'Call a relevant tool now; after a mutation, independently verify the postcondition.'
+    ? mixedMutation && verdict.mutationSatisfied === true
+      ? [
+          'Mutation evidence already exists and its postcondition is verified. Do not repeat the mutation.',
+          'Call spawn_subagent now with a JSON string such as {"intent":"standalone task"}.',
+          'Do not calculate or role-play the subagent result yourself.',
+        ].join(' ')
+      : [
+          'Call spawn_subagent now with a JSON string such as {"intent":"standalone task"}.',
+          'Do not calculate or role-play the subagent result yourself.',
+          ...(mixedMutation
+            ? [
+                'This mixed contract also requires its explicit mutation obligation; call the still-missing mutation tool in the same provider turn and do not stop after delegation.',
+                'For an explicit memory request, call remember with one exact durable fact about the current operator written naturally in second person, for example {"fact":"ты предпочитаешь краткие отчёты"}.',
+                'Do not repeat an effect that already has verified evidence; terminal success requires both delegation and mutation evidence.',
+              ]
+            : []),
+        ].join(' ')
+    : mixedMutation
+      ? verdict.missing === 'postcondition'
+        ? 'Delegation evidence already exists. Do not call spawn_subagent again or repeat the mutation; independently verify the mutation postcondition now.'
+        : 'Delegation evidence already exists. Do not call spawn_subagent again. Call the still-missing mutation tool explicitly requested by the operator now. For an explicit memory request, call remember with one exact durable fact about the current operator written naturally in second person, for example {"fact":"ты предпочитаешь краткие отчёты"}.'
+      : 'Call a relevant tool now; after a mutation, independently verify the postcondition.'
   return [
     `Action contract: ${contract.kind}.`,
     `Missing evidence: ${verdict.missing}.`,

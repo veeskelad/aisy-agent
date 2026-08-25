@@ -90,6 +90,7 @@ describe('Action Contract', () => {
     expect(evaluateActionContract(contract, [remembered])).toEqual({
       satisfied: false,
       missing: 'delegation',
+      mutationSatisfied: true,
     })
     expect(evaluateActionContract(contract, [remembered, delegated])).toEqual({
       satisfied: true,
@@ -113,6 +114,38 @@ describe('Action Contract', () => {
     expect(instruction).toContain('spawn_subagent')
     expect(instruction).toContain('{"intent":"standalone task"}')
     expect(instruction).toContain('Do not calculate or role-play the subagent result yourself')
+  })
+
+  it('AC-01-63: names both required effects before a mixed delegation and memory turn', () => {
+    const contract = classifyActionContract(operator(
+      'Делегируй расчёт субагенту и запомни, что я предпочитаю тестовый формат отчёта',
+    ))
+    const initial = actionRecoveryInstruction(contract, evaluateActionContract(contract, []))
+
+    expect(initial).toContain('Call spawn_subagent now')
+    expect(initial).toContain('call remember')
+    expect(initial).toContain('written naturally in second person')
+    expect(initial).toContain('requires both delegation and mutation evidence')
+
+    const delegated = actionEvidence(call('spawn_subagent'), { ok: true })
+    const mutationRecovery = actionRecoveryInstruction(
+      contract,
+      evaluateActionContract(contract, [delegated]),
+    )
+    expect(mutationRecovery).toContain('Delegation evidence already exists')
+    expect(mutationRecovery).not.toContain('Call spawn_subagent now')
+    expect(mutationRecovery).toContain('Call the still-missing mutation tool')
+    expect(mutationRecovery).toContain('call remember')
+
+    const remembered = actionEvidence(call('remember'), { ok: true, verified: true })
+    const delegationRecovery = actionRecoveryInstruction(
+      contract,
+      evaluateActionContract(contract, [remembered]),
+    )
+    expect(delegationRecovery).toContain('Mutation evidence already exists')
+    expect(delegationRecovery).toContain('Call spawn_subagent now')
+    expect(delegationRecovery).toContain('Do not repeat the mutation')
+    expect(delegationRecovery).not.toContain('call remember')
   })
 
   it('keeps provider evidence in-process and rejects inconsistent families', () => {
