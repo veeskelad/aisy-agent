@@ -43,12 +43,21 @@ export function makeFailoverProvider(
   fallback: ProviderAdapter,
 ): ProviderAdapter {
   return {
-    async complete(req, signal) {
+    async complete(req, signal, onProgress) {
+      let primaryToolAttempted = false
+      const primaryRequest = { ...req }
+      Object.defineProperty(primaryRequest, 'markToolAttempt', {
+        enumerable: false,
+        value: async (ordinal: number) => {
+          primaryToolAttempted = true
+          await req.markToolAttempt?.(ordinal)
+        },
+      })
       try {
-        return await primary.complete(req, signal)
+        return await primary.complete(primaryRequest, signal, onProgress)
       } catch (err) {
-        if (isTransient(err)) {
-          return fallback.complete(req, signal)
+        if (isTransient(err) && !primaryToolAttempted) {
+          return fallback.complete(req, signal, onProgress)
         }
         throw err
       }

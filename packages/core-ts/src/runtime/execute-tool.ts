@@ -54,7 +54,11 @@ export interface ExecuteToolDeps {
     // `topic` is what the model says the fact is about. It never changes where
     // the fact is stored — it exists so the app can tell whether the agent has
     // actually met the operator, instead of counting facts of any kind.
-    commit(op: MemoryOp, ctx: { withinSession: boolean; topic?: string }): Promise<CommitResult>
+    commit(op: MemoryOp, ctx: {
+      withinSession: boolean
+      topic?: string
+      operationId?: string
+    }): Promise<CommitResult>
   }
   /** Task tracker (ADR-0081). Absent ⇒ track_task reports unavailable. */
   trackTask?: (input: { action: string; text?: string; id?: string }) => Promise<string>
@@ -203,7 +207,11 @@ export function makeToolExecutor(
         try {
           const r = await deps.memory.commit(
             { op: 'ADD', text: input.fact },
-            { withinSession: true, ...(input.topic === undefined ? {} : { topic: input.topic }) },
+            {
+              withinSession: true,
+              operationId: receipt.operationId,
+              ...(input.topic === undefined ? {} : { topic: input.topic }),
+            },
           )
           if (r.status === 'COMMITTED') {
             const committed = Object.freeze<ToolResult>({

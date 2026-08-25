@@ -2159,6 +2159,37 @@ describe('production-topology doctor semantics', () => {
       status: 'fail', severity: 'high', detail: 'proxy absent', fixable: false,
     })
   })
+
+  it.each([
+    ['disabled', 'pass', 'medium'],
+    ['ready', 'pass', 'medium'],
+    ['degraded', 'warn', 'medium'],
+    ['corrupt', 'fail', 'high'],
+  ] as const)('maps typed auto-skill doctor state %s without repairing private state', async (
+    state,
+    status,
+    severity,
+  ) => {
+    const inspect = () => ({
+      state,
+      schemaVersion: 2 as const,
+      evidence: 2,
+      pendingReply: 0,
+      queued: 1,
+      active: 1,
+      quarantined: 0,
+      forgetClaimed: state === 'degraded' ? 1 : 0,
+      ambiguousNotifications: 0,
+    })
+    const report = await makeOnboardingOps(healthyDeps({
+      autoSkills: { inspect },
+    })).doctor({ only: ['skills'] })
+
+    expect(report.checks).toEqual([expect.objectContaining({
+      id: 'skills.typed-auto-skill-lifecycle', status, severity, fixable: false,
+    })])
+    expect(report.ok).toBe(state !== 'corrupt')
+  })
 })
 
 describe('templateFor — real persona/memory content', () => {

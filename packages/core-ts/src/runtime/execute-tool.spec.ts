@@ -338,7 +338,7 @@ describe('makeToolExecutor — remember tool', () => {
     expect(commitSpy).toHaveBeenCalledOnce()
     expect(commitSpy).toHaveBeenCalledWith(
       { op: 'ADD', text: 'ты предпочитаешь ответы на русском' },
-      { withinSession: true },
+      { withinSession: true, operationId: r.mutationReceipt?.operationId },
     )
   })
 
@@ -361,7 +361,7 @@ describe('makeToolExecutor — remember tool', () => {
   it('replays the same terminal receipt without a second mutation', async () => {
     const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
     const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
-    const toolCall = call('remember', { fact: 'ты любишь получать деньги' })
+    const toolCall = call('remember', { fact: 'ты предпочитаешь краткие отчёты' })
 
     const first = await e(toolCall, context)
     const replay = await e(toolCall, context)

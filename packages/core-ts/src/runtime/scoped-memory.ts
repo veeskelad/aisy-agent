@@ -64,12 +64,12 @@ export interface ScopedMemoryRouter {
   commitGlobal(
     lease: TurnContextLease,
     op: MemoryOp,
-    ctx: { withinSession: boolean },
+    ctx: { withinSession: boolean; operationId?: string },
   ): Promise<CommitResult>
   commitProject(
     lease: TurnContextLease,
     op: MemoryOp,
-    ctx: { withinSession: boolean },
+    ctx: { withinSession: boolean; operationId?: string },
   ): Promise<CommitResult>
   forgetGlobal(
     lease: TurnContextLease,

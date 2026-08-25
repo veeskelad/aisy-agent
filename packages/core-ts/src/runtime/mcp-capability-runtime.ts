@@ -219,7 +219,7 @@ export async function makeMcpCapabilityRuntime(deps: {
     prefixExtension: () => prefix.slice(),
     resolveSafetyCall(call, ctx) {
       if (call.name !== CALL_MCP_TOOL_NAME) {
-        return { tool: call.name, args: call.args, argsTainted: ctx.provenance === 'untrusted' }
+        return { tool: call.name, args: call.args, argsTainted: ctx.provenance !== 'operator' }
       }
       const parsed = parseWrapper(call)
       if (!visible.has(parsed.namespaced)) {
@@ -235,14 +235,14 @@ export async function makeMcpCapabilityRuntime(deps: {
         fingerprint: parsed.fingerprint,
         namespaced: parsed.namespaced,
         resolved,
-        provenance: ctx.provenance,
+        provenance: ctx.provenance === 'operator' ? 'operator' : 'untrusted',
       }))
       return {
         tool: `mcp:${resolved.outboundSink ? 'write' : 'read'}:${parsed.namespaced}`,
         args: resolved.args,
         policyTier: resolved.tier,
         outboundSink: resolved.outboundSink,
-        argsTainted: ctx.provenance === 'untrusted',
+        argsTainted: ctx.provenance !== 'operator',
       }
     },
     completeSafetyCall(call, safetyCall, allowed) {

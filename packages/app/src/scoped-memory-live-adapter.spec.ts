@@ -160,6 +160,41 @@ describe('fact deduplication on the live commit path (ADR-0078)', () => {
     expect(target.commitGlobal).not.toHaveBeenCalled()
   })
 
+  it('deduplicates a restarted logical remember with a new operation id', async () => {
+    const target = router()
+    target.searchAutomatic = vi.fn(async () =>
+      existing('Оператор работает в часовом поясе Europe/Moscow')) as never
+    const view = makeScopedMemoryLiveView({ router: target, ledger: ledger() })
+
+    await expect(view.commit(
+      lease(),
+      { op: 'ADD', text: 'оператор работает в часовом поясе Europe/Moscow' },
+      { withinSession: true, operationId: 'a'.repeat(64) },
+    )).resolves.toEqual({ status: 'DUPLICATE', factId: 'fact-7' })
+    expect(target.commitGlobal).not.toHaveBeenCalled()
+  })
+
+  it('routes an exact operation replay to the protected publication ledger', async () => {
+    const operationId = 'a'.repeat(64)
+    const target = router()
+    target.searchAutomatic = vi.fn(async () => ({
+      hits: [{
+        id: operationId, hitId: operationId, factKey: 'b'.repeat(64),
+        text: 'Оператор любит чай', score: 1, scope: 'global',
+      }],
+    })) as never
+    const view = makeScopedMemoryLiveView({ router: target, ledger: ledger() })
+
+    await expect(view.commit(
+      lease(),
+      { op: 'ADD', text: 'оператор любит чай' },
+      { withinSession: true, operationId },
+    )).resolves.toEqual({ status: 'COMMITTED' })
+    expect(target.commitGlobal).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), { withinSession: true, operationId },
+    )
+  })
+
   it('commits a genuinely new fact even when search returns neighbours', async () => {
     const target = router()
     target.searchAutomatic = vi.fn(async () =>

@@ -29,6 +29,7 @@ const SOURCE_HASH = 'a'.repeat(64)
 function setup(options: {
   failNonceConsume?: boolean
   failRestoreRoot?: boolean
+  failBeforeArchive?: boolean
 } = {}) {
   let id = 0
   let failSave = false
@@ -87,6 +88,7 @@ function setup(options: {
     },
   })
   const events: ProjectServiceEvent[] = []
+  const beforeArchiveEvents: ProjectServiceEvent[] = []
   const lifecycleReceipts = new Map<string, ProjectLifecycleAuthorityBinding>()
   const rootChecks: string[] = []
   let lifecycleId = 0
@@ -112,6 +114,10 @@ function setup(options: {
         rootChecks.push(project.root)
         if (options.failRestoreRoot) throw new Error('private root detail')
       },
+    },
+    beforeArchive: (event) => {
+      beforeArchiveEvents.push(event)
+      if (options.failBeforeArchive) throw new Error('source claim unavailable')
     },
     emit: (event) => events.push(event),
   })
@@ -148,6 +154,7 @@ function setup(options: {
   }
   return {
     authority,
+    beforeArchiveEvents,
     durable: () => durable,
     events,
     failNextSave: () => { failSave = true },
@@ -531,6 +538,7 @@ describe('ProjectService switch barrier', () => {
 
   it('archives the active Project only after draining its lease and returns an exact Workspace lease', async () => {
     const {
+      beforeArchiveEvents,
       events,
       issueLifecycle,
       leases,
@@ -559,6 +567,7 @@ describe('ProjectService switch barrier', () => {
     await Promise.resolve()
     expect(completed).toBe(false)
     expect(leases.status(switched.lease)).toBe('cancelling')
+    expect(beforeArchiveEvents).toEqual([])
     expect(() => service.acquireTurnContext(OWNER)).toThrowError(
       expect.objectContaining({ code: 'CONTEXT_TRANSITION_IN_PROGRESS' }),
     )
@@ -567,6 +576,10 @@ describe('ProjectService switch barrier', () => {
     )
     operation.complete()
     const result = await archiving
+
+    expect(beforeArchiveEvents).toEqual([expect.objectContaining({
+      kind: 'project.archived', projectId: target.id,
+    })])
 
     expect(result.record.archivedAt).toBeDefined()
     expect(result.authorityAudit).toBe('consumed')
@@ -589,6 +602,29 @@ describe('ProjectService switch barrier', () => {
       projectId: target.id,
       generation: result.selection.generation,
     })
+  })
+
+  it('blocks Project archive when the pre-mutation source-forgetting claim fails', async () => {
+    const {
+      beforeArchiveEvents,
+      issueLifecycle,
+      registry,
+      service,
+      target,
+    } = setup({ failBeforeArchive: true })
+
+    await expect(service.archiveProject({
+      ...OWNER,
+      projectId: target.id,
+      receipt: issueLifecycle('project.archive', target.id),
+      sourceMessageHash: SOURCE_HASH,
+    })).rejects.toThrow('source claim unavailable')
+
+    expect(registry.listContexts(OWNER, true).find(item => item.id === target.id)?.archivedAt)
+      .toBeUndefined()
+    expect(beforeArchiveEvents).toEqual([expect.objectContaining({
+      kind: 'project.archived', projectId: target.id,
+    })])
   })
 
   it('rejects missing, replayed or wrong-purpose lifecycle authority before lease effects', async () => {

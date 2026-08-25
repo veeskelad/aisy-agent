@@ -13,6 +13,7 @@ import { PassThrough } from 'node:stream'
 
 import {
   readProviderActionEvidence,
+  readProviderToolExecutions,
   type CodexAppServerSpawnPort,
   type CodexAuthProcessPort,
   type ModelProgressEvent,
@@ -190,7 +191,7 @@ describe('live Codex subscription runtime', () => {
     const invoked = vi.fn(async (
       _call: { name: string; args: Record<string, unknown> },
       _signal: AbortSignal,
-      _context: { sessionId: string; turnId?: string },
+      _context: { sessionId: string; turnId?: string; ordinal?: number },
     ) => ({ text: 'project read', isError: false }))
     const progress: ModelProgressEvent[] = []
     const tools = [{
@@ -207,22 +208,28 @@ describe('live Codex subscription runtime', () => {
     providerConfig.invokeTool = vi.fn(async (
       _call: { name: string; args: Record<string, unknown> },
       _signal: AbortSignal,
-      _context: { sessionId: string; turnId?: string },
+      _context: { sessionId: string; turnId?: string; ordinal?: number },
     ) => ({ text: 'wrong executor', isError: true }))
 
     const response = await provider.complete({
       sessionId: 'session-a', turnId: 'operator-turn-a', prefixBytes: new Uint8Array(),
+      toolOrdinalBase: 4,
       spans: [{ role: 'user', provenance: 'operator', text: 'Прочитай README' }],
     }, undefined, event => { progress.push(event) })
     expect(response).toMatchObject({ reply: 'Готово' })
     expect(readProviderActionEvidence(response)).toEqual([{
       tool: 'read_file', family: 'inspect', successful: true, receipt: false,
     }])
+    expect(readProviderToolExecutions(response)).toEqual([{
+      call: { name: 'read_file', args: { path: 'README.md' } },
+      context: { sessionId: 'session-a', turnId: 'operator-turn-a', ordinal: 5 },
+      result: { ok: true, output: 'project read' },
+    }])
 
     expect(invoked).toHaveBeenCalledWith(
       { name: 'read_file', args: { path: 'README.md' } },
       expect.any(AbortSignal),
-      { sessionId: 'session-a', turnId: 'operator-turn-a' },
+      { sessionId: 'session-a', turnId: 'operator-turn-a', ordinal: 5 },
     )
     expect(Object.isFrozen(invoked.mock.calls[0]?.[2])).toBe(true)
     expect(progress).toContainEqual({
@@ -245,6 +252,33 @@ describe('live Codex subscription runtime', () => {
     expect(h.spawns[0]?.options.env['CODEX_HOME']).toBe(h.codexHome)
     expect(h.spawns[0]?.options.cwd).toBe(join(h.codexHome, 'empty-workspace'))
     expect(JSON.stringify(h.spawns)).not.toContain('must-not-leak')
+    h.runtime.close()
+  })
+
+  it('attaches a failed execution when a Codex-side tool handler throws', async () => {
+    const h = fixture()
+    const provider = h.runtime.provider({
+      projectId: 'project-a',
+      tools: [{
+        name: 'read_file', description: 'Read a project file',
+        input_schema: { type: 'object', properties: { path: { type: 'string' } } },
+      }],
+      invokeTool: async () => { throw new Error('ambiguous tool failure') },
+    })
+
+    const response = await provider.complete({
+      sessionId: 'session-a', turnId: 'operator-turn-a', prefixBytes: new Uint8Array(),
+      spans: [{ role: 'user', provenance: 'operator', text: 'Прочитай README' }],
+    })
+
+    expect(readProviderToolExecutions(response)).toEqual([{
+      call: { name: 'read_file', args: { path: 'README.md' } },
+      context: { sessionId: 'session-a', turnId: 'operator-turn-a', ordinal: 1 },
+      result: { ok: false, output: 'TOOL_EXECUTION_FAILED' },
+    }])
+    expect(readProviderActionEvidence(response)).toEqual([{
+      tool: 'read_file', family: 'inspect', successful: false, receipt: false,
+    }])
     h.runtime.close()
   })
 

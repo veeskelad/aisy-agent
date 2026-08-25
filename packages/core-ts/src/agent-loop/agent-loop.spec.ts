@@ -1,8 +1,13 @@
 import { createHash } from 'node:crypto'
 import { isGenuineToolExecutionContextFor, makeAgentLoop } from './index.js'
-import { actionEvidence, attachProviderActionEvidence } from './action-contract.js'
+import {
+  actionEvidence,
+  attachProviderActionEvidence,
+  attachProviderToolExecutions,
+} from './action-contract.js'
 import { fakeClock } from '../testing/index.js'
 import { makeMemoryRememberReceipt, renderMemoryAcknowledgement } from '../runtime/memory-receipt.js'
+import { makeJsonlSessionLog } from '../runtime/session-log.js'
 import type {
   AgentLoopDeps,
   ContextSpan,
@@ -391,20 +396,31 @@ describe('AgentLoop', () => {
   })
 
   it('AC-01-9: after all-providers-down halt, SessionLog.resume returns TurnState with next un-verified step; no completed step re-executes', async () => {
-    const sessionLog = makeSessionLogFake({ status: 'in-progress', nextStepIndex: 1 })
-    const exec = makeExecSpy()
+    const sessionLog = makeSessionLogFake({
+      status: 'in-progress', nextStepIndex: 1, toolOrdinalHighWater: 1,
+    })
+    const contexts: ToolExecutionContext[] = []
     const plan: Plan = { steps: [stepWith('t0'), stepWith('t1')] }
     const provider = makeScriptedProvider([{ plan }])
-    const loop = makeAgentLoop(makeDeps({ sessionLog, provider, executeTool: exec.fn }))
+    const loop = makeAgentLoop(makeDeps({
+      sessionLog,
+      provider,
+      executeTool: (call, context) => {
+        contexts.push(context)
+        return { ok: true, output: call.name }
+      },
+    }))
     const result = await loop.runTurn(makeTurnInput())
     expect(result.state).toBe('ok')
     // Resumed at step 1: step 0's tool never re-executed.
-    expect(exec.calls.map(c => c.name)).toEqual(['t1'])
+    expect(contexts).toEqual([{ sessionId: 'test-session', ordinal: 2 }])
   })
 
   it('AC-01-10: crash between intent-append and result-append leaves intent entry on disk; resume re-dispatches that step', async () => {
     // Simulated crash: resume() reports step 0 as un-verified (intent without result).
-    const sessionLog = makeSessionLogFake({ status: 'in-progress', nextStepIndex: 0 })
+    const sessionLog = makeSessionLogFake({
+      status: 'in-progress', nextStepIndex: 0, toolOrdinalHighWater: 0,
+    })
     const exec = makeExecSpy()
     const plan: Plan = { steps: [stepWith('t0')] }
     const provider = makeScriptedProvider([{ plan }])
@@ -413,6 +429,38 @@ describe('AgentLoop', () => {
     expect(result.state).toBe('ok')
     // Step 0 was re-dispatched.
     expect(exec.calls.map(c => c.name)).toEqual(['t0'])
+  })
+
+  it('restores the exact-turn provider ordinal high-water after a pre-result crash', async () => {
+    const lines: string[] = []
+    const sessionLog = makeJsonlSessionLog({
+      appendLine: line => lines.push(line),
+      readLines: () => [...lines],
+    })
+    const turn = makeTurnInput({ turnId: 'turn-provider-restart' })
+    const crashing = makeAgentLoop(makeDeps({
+      sessionLog,
+      provider: {
+        complete: async request => {
+          expect(request.toolOrdinalBase).toBe(0)
+          await request.markToolAttempt?.(1)
+          throw new Error('simulated provider crash after effect attempt')
+        },
+      },
+    }))
+
+    await expect(crashing.runTurn(turn)).rejects.toThrow(/simulated provider crash/)
+
+    const restarted = makeAgentLoop(makeDeps({
+      sessionLog,
+      provider: {
+        complete: async request => {
+          expect(request.toolOrdinalBase).toBe(1)
+          return { reply: 'recovered' }
+        },
+      },
+    }))
+    await expect(restarted.runTurn(turn)).resolves.toMatchObject({ reply: 'recovered' })
   })
 
   it('AC-01-11: session log entry for a side-effecting dispatch is fsync\'d BEFORE the dispatch call is made', async () => {
@@ -887,6 +935,90 @@ describe('Tier-2 loop control seams', () => {
     expect(events).toEqual(['lock:false', 'turn-started', 'started', 'text-delta'])
   })
 
+  it('withholds model text deltas for an action until the verified terminal reply', async () => {
+    const events: TurnProgressEvent[] = []
+    const provider: ProviderAdapter = {
+      async complete(_req, _signal, progress) {
+        await progress?.({ type: 'text-delta', text: 'Запомнил до выполнения' })
+        return { reply: 'Запомнил до выполнения', toolCalls: [] }
+      },
+    }
+    const loop = makeAgentLoop(makeDeps({ provider }))
+    const result = await loop.runTurn(makeTurnInput({
+      spans: [makeOperatorSpan('Запомни синтетический факт')],
+      onProgress: event => { events.push(event) },
+    }))
+
+    expect(events.some(event => event.type === 'text-delta')).toBe(false)
+    expect(result.actionStatus).toBe('unverified')
+    expect(result.reply).not.toContain('Запомнил до выполнения')
+  })
+
+  it('withholds answer-only deltas when the provider unexpectedly executed an effect', async () => {
+    const fact = 'ты предпочитаешь краткие отчёты'
+    const events: TurnProgressEvent[] = []
+    const provider: ProviderAdapter = {
+      async complete(request, _signal, progress) {
+        const context = {
+          sessionId: request.sessionId,
+          ...(request.turnId === undefined ? {} : { turnId: request.turnId }),
+          ordinal: (request.toolOrdinalBase ?? 0) + 1,
+        }
+        const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)!
+        await progress?.({ type: 'text-delta', text: 'преждевременное подтверждение' })
+        await request.markToolAttempt?.(context.ordinal)
+        return attachProviderToolExecutions({ reply: 'служебный ответ' }, [{
+          call: { name: 'remember', args: { fact } },
+          context,
+          result: {
+            ok: true,
+            output: renderMemoryAcknowledgement(fact),
+            verified: true,
+            mutationReceipt,
+          },
+        }])
+      },
+    }
+    const loop = makeAgentLoop(makeDeps({ provider }))
+
+    const result = await loop.runTurn(makeTurnInput({
+      turnId: 'turn-unexpected-effect',
+      spans: [makeOperatorSpan('Привет')],
+      onProgress: event => { events.push(event) },
+    }))
+
+    expect(events.some(event => event.type === 'text-delta')).toBe(false)
+    expect(result.reply).toContain(renderMemoryAcknowledgement(fact))
+    expect(result.reply).not.toContain('преждевременное подтверждение')
+  })
+
+  it('keeps deltas withheld across synthesis after any earlier tool attempt', async () => {
+    const events: TurnProgressEvent[] = []
+    let round = 0
+    const provider: ProviderAdapter = {
+      async complete(_request, _signal, progress) {
+        round += 1
+        await progress?.({ type: 'text-delta', text: round === 1 ? 'до вызова' : 'после вызова' })
+        return round === 1
+          ? { reply: 'до вызова', toolCalls: [{ name: 'read_file', args: { path: 'x' } }] }
+          : { reply: 'итог', toolCalls: [] }
+      },
+    }
+    const loop = makeAgentLoop(makeDeps({
+      provider,
+      executeTool: async () => ({ ok: false, output: 'read failed' }),
+    }))
+
+    const result = await loop.runTurn(makeTurnInput({
+      turnId: 'turn-synthesis-effect-latch',
+      spans: [makeOperatorSpan('Привет')],
+      onProgress: event => { events.push(event) },
+    }))
+
+    expect(result.reply).toBe('итог')
+    expect(events.some(event => event.type === 'text-delta')).toBe(false)
+  })
+
   it('reports an untrusted turn as locked before any provider delta', async () => {
     const events: string[] = []
     const provider: ProviderAdapter = {
@@ -1035,6 +1167,7 @@ describe('Tier-2 loop control seams', () => {
     expect(provider.requests.map(request => request.turnId)).toEqual([
       'telegram-update-7', 'telegram-update-7',
     ])
+    expect(provider.requests.map(request => request.toolOrdinalBase)).toEqual([0, 2])
     expect(Object.isFrozen(contexts[0])).toBe(true)
     expect(Object.isFrozen(contexts[1])).toBe(true)
     expect(isGenuineToolExecutionContextFor(contexts[0], 'read_file')).toBe(true)
@@ -1301,14 +1434,14 @@ describe('Tier-2 loop control seams', () => {
     })
 
     it('keeps exactly one code-owned memory acknowledgement in a composite reply', async () => {
-      const fact = 'ты любишь получать деньги'
+      const fact = 'ты предпочитаешь краткие отчёты'
       const provider = makeScriptedProvider([
         {
           reply: '',
           toolCalls: [{ name: 'remember', args: { fact } }],
         },
         {
-          reply: 'Привет!\n\nФакт сохранён: «внутренний production receipt».\n\n' +
+          reply: 'Привет! Факт сохранён: «внутренний production receipt».\n\n' +
             'Субагент вычислил 23 × 29 = 667.\n\nAISY-TEXT-OK\n\n' +
             renderMemoryAcknowledgement(fact),
         },
@@ -1336,6 +1469,260 @@ describe('Tier-2 loop control seams', () => {
       expect(result.reply).not.toContain('Факт сохранён')
       expect(result.reply.split(renderMemoryAcknowledgement(fact))).toHaveLength(2)
       expect(result.reply.endsWith(renderMemoryAcknowledgement(fact))).toBe(true)
+    })
+
+    it('commits a fully verified typed workflow before releasing terminal success', async () => {
+      const fact = 'ты предпочитаешь краткие отчёты'
+      const committed: unknown[] = []
+      const provider = makeScriptedProvider([
+        { toolCalls: [{ name: 'remember', args: { fact } }] },
+        { reply: 'Готово' },
+      ])
+      const loop = makeAgentLoop(makeDeps({
+        provider,
+        executeTool: async (_call, context) => {
+          const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)
+          return {
+            ok: true,
+            output: renderMemoryAcknowledgement(fact),
+            verified: true,
+            mutationReceipt,
+          }
+        },
+        verifiedWorkflow: {
+          capture: (_call, _context, result) => {
+            const receipt = typeof result === 'object' && result !== null
+              ? (result as { mutationReceipt?: { receiptId?: string } }).mutationReceipt
+              : undefined
+            return typeof receipt?.receiptId === 'string'
+              ? {
+                  descriptorId: 'memory.remember',
+                  placeholderIds: ['fact'],
+                  postconditionIds: ['memory.committed'],
+                  receiptId: receipt.receiptId,
+                }
+              : null
+          },
+          commit: input => { committed.push(input) },
+        },
+      }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        turnId: 'turn-workflow-1',
+        spans: [makeOperatorSpan('Запомни, что ты предпочитаешь краткие отчёты')],
+      }))
+
+      expect(result.actionStatus).toBe('verified')
+      expect(committed).toEqual([expect.objectContaining({
+        sessionId: 'test-session', turnId: 'turn-workflow-1',
+        steps: [expect.objectContaining({ descriptorId: 'memory.remember' })],
+      })])
+    })
+
+    it('does not learn a partial workflow when another executed effect has no typed receipt', async () => {
+      const committed = vi.fn()
+      const provider = makeScriptedProvider([
+        { toolCalls: [
+          { name: 'remember', args: { fact: 'факт' } },
+          { name: 'spawn_subagent', args: { task: 'посчитать' } },
+        ] },
+        { reply: 'Готово' },
+      ])
+      const loop = makeAgentLoop(makeDeps({
+        provider,
+        executeTool: async (call, context) => {
+          if (call.name !== 'remember') return { ok: true }
+          const mutationReceipt = makeMemoryRememberReceipt({ fact: 'факт' }, context)
+          return {
+            ok: true, output: renderMemoryAcknowledgement('факт'), verified: true, mutationReceipt,
+          }
+        },
+        verifiedWorkflow: {
+          capture: (call, _context, result) => call.name === 'remember' &&
+            typeof result === 'object' && result !== null
+            ? {
+                descriptorId: 'memory.remember', placeholderIds: ['fact'],
+                postconditionIds: ['memory.committed'],
+                receiptId: ((result as { mutationReceipt: { receiptId: string } })
+                  .mutationReceipt.receiptId),
+              }
+            : null,
+          commit: committed,
+        },
+      }))
+
+      await loop.runTurn(makeTurnInput({
+        turnId: 'turn-workflow-mixed',
+        spans: [makeOperatorSpan('Запомни факт и делегируй расчёт субагенту')],
+      }))
+      expect(committed).not.toHaveBeenCalled()
+    })
+
+    it('uses an in-process subscription receipt for canonical acknowledgement and evidence', async () => {
+      const fact = 'ты предпочитаешь краткие отчёты'
+      const context = { sessionId: 'test-session', turnId: 'turn-subscription-memory', ordinal: 1 }
+      const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)
+      const execution = {
+        call: { name: 'remember', args: { fact } },
+        context,
+        result: {
+          ok: true, output: renderMemoryAcknowledgement(fact), verified: true, mutationReceipt,
+        },
+      }
+      const response = attachProviderToolExecutions(
+        attachProviderActionEvidence(
+          { reply: 'Факт сохранён: служебный статус' },
+          [actionEvidence(execution.call, execution.result)],
+        ),
+        [execution],
+      )
+      const committed = vi.fn()
+      const loop = makeAgentLoop(makeDeps({
+        provider: {
+          complete: async request => {
+            await request.markToolAttempt?.(context.ordinal)
+            return response
+          },
+        },
+        verifiedWorkflow: {
+          capture: (_call, _context, result) => ({
+            descriptorId: 'memory.remember', placeholderIds: ['fact'],
+            postconditionIds: ['memory.committed'],
+            receiptId: (result as typeof execution.result).mutationReceipt!.receiptId,
+          }),
+          commit: committed,
+        },
+      }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        turnId: 'turn-subscription-memory',
+        spans: [makeOperatorSpan('Запомни, что ты предпочитаешь краткие отчёты')],
+      }))
+
+      expect(result.reply).toBe(renderMemoryAcknowledgement(fact))
+      expect(result.actionStatus).toBe('verified')
+      expect(committed).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not learn after any failed provider-side tool attempt in the turn', async () => {
+      const fact = 'ты предпочитаешь краткие отчёты'
+      const failedContext = {
+        sessionId: 'test-session', turnId: 'turn-provider-failure', ordinal: 1,
+      }
+      const rememberContext = { ...failedContext, ordinal: 2 }
+      const mutationReceipt = makeMemoryRememberReceipt({ fact }, rememberContext)
+      const remember = {
+        call: { name: 'remember', args: { fact } },
+        context: rememberContext,
+        result: {
+          ok: true, output: renderMemoryAcknowledgement(fact), verified: true, mutationReceipt,
+        },
+      }
+      const response = attachProviderToolExecutions(
+        attachProviderActionEvidence(
+          { reply: 'готово' },
+          [actionEvidence(remember.call, remember.result)],
+        ),
+        [{
+          call: { name: 'read_file', args: { path: 'x' } },
+          context: failedContext,
+          result: { ok: false, output: 'TOOL_EXECUTION_FAILED' },
+        }, remember],
+      )
+      const committed = vi.fn()
+      const loop = makeAgentLoop(makeDeps({
+        provider: {
+          complete: async request => {
+            await request.markToolAttempt?.(failedContext.ordinal)
+            await request.markToolAttempt?.(rememberContext.ordinal)
+            return response
+          },
+        },
+        verifiedWorkflow: {
+          capture: (call, _context, result) => call.name === 'remember'
+            ? {
+                descriptorId: 'memory.remember', placeholderIds: ['fact'],
+                postconditionIds: ['memory.committed'],
+                receiptId: (result as typeof remember.result).mutationReceipt!.receiptId,
+              }
+            : null,
+          commit: committed,
+        },
+      }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        turnId: 'turn-provider-failure',
+        spans: [makeOperatorSpan('Запомни, что ты предпочитаешь краткие отчёты')],
+      }))
+
+      expect(result.actionStatus).toBe('verified')
+      expect(committed).not.toHaveBeenCalled()
+    })
+
+    it('rejects a provider-attached memory receipt bound to another turn', async () => {
+      const fact = 'синтетический факт'
+      const context = { sessionId: 'test-session', turnId: 'foreign-turn', ordinal: 1 }
+      const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)
+      const response = attachProviderToolExecutions({ reply: 'Факт сохранён: служебный статус' }, [{
+        call: { name: 'remember', args: { fact } },
+        context,
+        result: {
+          ok: true, output: renderMemoryAcknowledgement(fact), verified: true, mutationReceipt,
+        },
+      }])
+      let attempted = false
+      const loop = makeAgentLoop(makeDeps({ provider: {
+        complete: async request => {
+          if (!attempted) {
+            attempted = true
+            await request.markToolAttempt?.(context.ordinal)
+          }
+          return response
+        },
+      } }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        turnId: 'current-turn',
+        spans: [makeOperatorSpan('Запомни синтетический факт')],
+      }))
+
+      expect(result.reply).not.toContain(renderMemoryAcknowledgement(fact))
+      expect(result.actionStatus).toBe('unverified')
+    })
+
+    it('rejects a current-turn receipt whose fact is not the executed call argument', async () => {
+      const receiptFact = 'ты предпочитаешь краткие отчёты'
+      const callFact = 'ты предпочитаешь подробные отчёты'
+      const context = { sessionId: 'test-session', turnId: 'current-turn', ordinal: 1 }
+      const mutationReceipt = makeMemoryRememberReceipt({ fact: receiptFact }, context)
+      const response = attachProviderToolExecutions({ reply: 'Факт сохранён: служебный статус' }, [{
+        call: { name: 'remember', args: { fact: callFact } },
+        context,
+        result: {
+          ok: true,
+          output: renderMemoryAcknowledgement(receiptFact),
+          verified: true,
+          mutationReceipt,
+        },
+      }])
+      let attempted = false
+      const loop = makeAgentLoop(makeDeps({ provider: {
+        complete: async request => {
+          if (!attempted) {
+            attempted = true
+            await request.markToolAttempt?.(context.ordinal)
+          }
+          return response
+        },
+      } }))
+
+      const result = await loop.runTurn(makeTurnInput({
+        turnId: 'current-turn',
+        spans: [makeOperatorSpan('Запомни, что ты предпочитаешь подробные отчёты')],
+      }))
+
+      expect(result.reply).not.toContain(renderMemoryAcknowledgement(receiptFact))
+      expect(result.actionStatus).toBe('unverified')
     })
 
     it('dispatches every tool emitted together, then a single synthesis round', async () => {

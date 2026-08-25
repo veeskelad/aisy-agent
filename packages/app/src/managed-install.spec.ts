@@ -28,6 +28,7 @@ import {
   ManagedUpdateFailure,
   nodeManagedUpdatePorts,
   rollbackManagedInstall,
+  resumeManagedAutoSkillsAfterRollForward,
   recordManagedReleaseIntegrity,
   refuseGitLfsPointers,
   runManagedUpdateCli,
@@ -35,6 +36,10 @@ import {
   verifyManagedReleaseIntegrity,
   type ManagedUpdatePorts,
 } from './managed-install.js'
+import {
+  makeNodeAutoSkillStoreV2,
+  prepareNodeAutoSkillRollback,
+} from './auto-skill-store.js'
 
 const A = 'a'.repeat(40)
 const B = 'b'.repeat(40)
@@ -53,6 +58,9 @@ interface Fixture {
   fetched: number
   faultAt: Set<string>
   failVerify: Set<string>
+  autoSkillRollback: 'absent' | 'safe' | 'drifted'
+  rollbackPrepared: string[]
+  rollbackVerified: string[]
   generation: number
   ports: ManagedUpdatePorts
 }
@@ -101,6 +109,9 @@ function fixture(initial = A): Fixture {
     fetched: 0,
     faultAt: new Set(),
     failVerify: new Set(),
+    autoSkillRollback: 'absent',
+    rollbackPrepared: [],
+    rollbackVerified: [],
     generation: 0,
     ports: undefined as unknown as ManagedUpdatePorts,
   }
@@ -116,6 +127,21 @@ function fixture(initial = A): Fixture {
     verifyRelease: (_root, commit) => {
       value.verified.push(commit)
       if (value.failVerify.has(commit)) throw new Error('doctor')
+    },
+    prepareAutoSkillRollback: (targetCommit) => {
+      value.rollbackPrepared.push(targetCommit)
+      if (value.autoSkillRollback === 'drifted') {
+        throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+      }
+      return value.autoSkillRollback === 'absent'
+        ? { kind: 'state-absent' }
+        : { kind: 'rollback-safe', certificateId: 'c'.repeat(64) }
+    },
+    verifyAutoSkillRollback: (targetCommit) => {
+      value.rollbackVerified.push(targetCommit)
+      if (value.autoSkillRollback === 'drifted') {
+        throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+      }
     },
     removeRelease: (_root, commit) => {
       value.removed.push(commit)
@@ -152,6 +178,52 @@ afterEach(() => {
 })
 
 describe('managed Git distribution', () => {
+  it('publishes a durable auto-skill write barrier bound to the certified state hash', () => {
+    const home = directory('aisy-managed-state-')
+    const previousHome = process.env['AISY_HOME']
+    process.env['AISY_HOME'] = home
+    try {
+      const ports = nodeManagedUpdatePorts()
+      const certified = ports.prepareAutoSkillRollback(A)
+      expect(certified.kind).toBe('rollback-safe')
+      expect(existsSync(join(home, 'auto-skills-v2', 'rollback-barrier-v1.json'))).toBe(true)
+      expect(() => makeNodeAutoSkillStoreV2({ root: join(home, 'auto-skills-v2') }))
+        .toThrowError('AUTO_SKILL_ROLLBACK_BARRIER')
+      expect(() => ports.verifyAutoSkillRollback(A, certified)).not.toThrow()
+      writeFileSync(join(home, 'auto-skills-v2', 'state-v2.json'), '{}\n', { mode: 0o600 })
+      expect(() => ports.verifyAutoSkillRollback(A, certified))
+        .toThrowError(expect.objectContaining({ code: 'UPDATE_STATE_REFUSED' }))
+    } finally {
+      if (previousHome === undefined) delete process.env['AISY_HOME']
+      else process.env['AISY_HOME'] = previousHome
+    }
+  })
+
+  it('lets only the active v2-aware managed release resume writes after roll-forward', () => {
+    const value = fixture()
+    bootstrap(value)
+    const autoSkillRoot = directory('aisy-managed-auto-skill-')
+    makeNodeAutoSkillStoreV2({ root: autoSkillRoot })
+    prepareNodeAutoSkillRollback({ root: autoSkillRoot, targetCommit: B })
+
+    expect(() => resumeManagedAutoSkillsAfterRollForward({
+      root: value.root,
+      binDir: value.binDir,
+      autoSkillRoot,
+      currentCommit: B,
+    }, value.ports)).toThrowError(expect.objectContaining({ code: 'UPDATE_STATE_REFUSED' }))
+    expect(() => makeNodeAutoSkillStoreV2({ root: autoSkillRoot }))
+      .toThrowError('AUTO_SKILL_ROLLBACK_BARRIER')
+
+    expect(resumeManagedAutoSkillsAfterRollForward({
+      root: value.root,
+      binDir: value.binDir,
+      autoSkillRoot,
+      currentCommit: A,
+    }, value.ports)).toMatchObject({ current: A })
+    expect(makeNodeAutoSkillStoreV2({ root: autoSkillRoot }).doctor().active).toBe(0)
+  })
+
   it.runIf(existsSync('/usr/bin/flock'))(
     'forces a private umask for the complete kernel-locked operation',
     () => {
@@ -283,7 +355,7 @@ describe('managed Git distribution', () => {
       err: value => errors.push(value),
     })).resolves.toBe(2)
     expect(errors).toEqual([
-      'usage: aisy update [--rollback | --cleanup | --allow-rewrite=<full-sha>]',
+      'usage: aisy update [--rollback | --cleanup | --resume-auto-skills | --allow-rewrite=<full-sha>]',
     ])
 
     errors.length = 0
@@ -484,6 +556,54 @@ describe('managed Git distribution', () => {
     expect(generation).toMatchObject({ current: A, previous: B })
     expect(activeLinks(value)).toEqual({ current: A, previous: B })
     expect(value.fetched).toBe(0)
+    expect(value.rollbackPrepared).toEqual([A])
+    expect(value.rollbackVerified).toEqual([A])
+  })
+
+  it('refuses rollback when v2 state drifts before the active switch', () => {
+    const value = fixture()
+    bootstrap(value)
+    updateManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    value.autoSkillRollback = 'safe'
+    const originalVerify = value.ports.verifyAutoSkillRollback
+    value.ports.verifyAutoSkillRollback = (targetCommit, authorization) => {
+      value.autoSkillRollback = 'drifted'
+      originalVerify(targetCommit, authorization)
+    }
+
+    expect(() => rollbackManagedInstall(
+      { root: value.root, binDir: value.binDir }, value.ports,
+    )).toThrowError(expect.objectContaining({ code: 'UPDATE_STATE_REFUSED' }))
+    expect(activeLinks(value)).toEqual({ current: B, previous: A })
+  })
+
+  it('applies the same v2 gate to allow-rewrite back to previous', () => {
+    const value = fixture()
+    bootstrap(value)
+    updateManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    value.target = A
+    value.ancestor = false
+    value.autoSkillRollback = 'drifted'
+
+    expect(() => updateManagedInstall(
+      { root: value.root, binDir: value.binDir, allowRewrite: A }, value.ports,
+    )).toThrowError(expect.objectContaining({ code: 'UPDATE_STATE_REFUSED' }))
+    expect(activeLinks(value)).toEqual({ current: B, previous: A })
+  })
+
+  it('applies the v2 gate to every non-descendant allow-rewrite target', () => {
+    const value = fixture()
+    bootstrap(value)
+    updateManagedInstall({ root: value.root, binDir: value.binDir }, value.ports)
+    value.target = C
+    value.ancestor = false
+    value.autoSkillRollback = 'drifted'
+
+    expect(() => updateManagedInstall(
+      { root: value.root, binDir: value.binDir, allowRewrite: C }, value.ports,
+    )).toThrowError(expect.objectContaining({ code: 'UPDATE_STATE_REFUSED' }))
+    expect(activeLinks(value)).toEqual({ current: B, previous: A })
+    expect(value.rollbackPrepared).toEqual([C])
   })
 
   it('refuses rollback without previous or when previous doctor fails', () => {

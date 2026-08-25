@@ -57,7 +57,11 @@ export type LiveCommitResult = CommitResult | DuplicateCommitResult
 export interface LiveMemoryView {
   search(lease: TurnContextLease, query: string, opts?: { limit?: number }): Promise<ScopedMemoryHit[]>
   /** Commits to the scope of the lease: Workspace leases write global, project leases write project. */
-  commit(lease: TurnContextLease, op: MemoryOp, ctx: { withinSession: boolean }): Promise<LiveCommitResult>
+  commit(
+    lease: TurnContextLease,
+    op: MemoryOp,
+    ctx: { withinSession: boolean; operationId?: string },
+  ): Promise<LiveCommitResult>
   forget(lease: TurnContextLease, factId: string, reason: string, humanConfirmed: boolean): Promise<void>
   listLive(lease: TurnContextLease): Promise<MemoryFact[]>
   integrityCheck(lease: TurnContextLease): { ok: boolean; detail?: string }
@@ -127,7 +131,9 @@ export function makeScopedMemoryLiveView(input: {
       if (op.op === 'ADD') {
         const nearby = await target.searchAutomatic(lease, op.text, { limit: 10 })
         const repeat = findDuplicateFact(op.text, nearby.hits)
-        if (repeat !== null) return { status: 'DUPLICATE', factId: repeat.id }
+        if (repeat !== null && repeat.id !== ctx.operationId) {
+          return { status: 'DUPLICATE', factId: repeat.id }
+        }
       }
 
       return lease.projectKind === 'project'

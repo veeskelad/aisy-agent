@@ -23,6 +23,10 @@ import type { PendingAction } from '../gateway/index.js'
 import type { ApprovalProof } from '../gateway/index.js'
 import { sanitizeControlSequences } from '../tools/index.js'
 import type { ToolResult } from './execute-tool.js'
+import {
+  parseMemoryRememberReceipt,
+  renderMemoryAcknowledgement,
+} from './memory-receipt.js'
 
 export type ApprovalDecision =
   | { decision: 'confirmed'; scope?: GrantScope; proof?: ApprovalProof }
@@ -100,6 +104,15 @@ function resultParts(result: unknown): ToolResult {
 export function makePostToolUseProcessor(deps: PostToolUseDeps) {
   return async (_call: LoopToolCall, result: unknown): Promise<ToolResult> => {
     const raw = resultParts(result)
+    const memoryReceipt = (() => {
+      if (typeof result !== 'object' || result === null) return null
+      const value = result as Record<string, unknown>
+      const receipt = parseMemoryRememberReceipt(value['mutationReceipt'])
+      return receipt !== null && value['ok'] === true && value['verified'] === true &&
+        value['output'] === renderMemoryAcknowledgement(receipt.fact)
+        ? receipt
+        : null
+    })()
     let text = raw.ok ? raw.output : `Tool error: ${raw.output}`
     let values: readonly string[]
     try {
@@ -126,7 +139,13 @@ export function makePostToolUseProcessor(deps: PostToolUseDeps) {
           : safeText
       } catch { /* compression is fail-open */ }
     }
-    return { ok: raw.ok, output: text }
+    // A receipt may cross PostToolUse only when the exact verified output
+    // survived every safety transform byte-for-byte. If redaction/filtering
+    // changed it, dropping the receipt prevents a later acknowledgement from
+    // reconstructing and re-exposing the pre-filter value.
+    return memoryReceipt !== null && text === raw.output
+      ? { ok: true, output: text, verified: true, mutationReceipt: memoryReceipt }
+      : { ok: raw.ok, output: text }
   }
 }
 
@@ -134,7 +153,7 @@ function toSafetyCall(call: LoopToolCall, ctx: HookCtx): SafetyToolCall {
   return {
     tool: call.name,
     args: call.args,
-    argsTainted: ctx.provenance === 'untrusted',
+    argsTainted: ctx.provenance !== 'operator',
   }
 }
 
@@ -177,7 +196,7 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
         safetyCall = Object.freeze({
           ...resolved,
           args: snapshotSafetyArgs(resolved.args),
-          argsTainted: ctx.provenance === 'untrusted',
+          argsTainted: ctx.provenance !== 'operator',
         })
       } catch {
         return 'deny'
@@ -215,7 +234,7 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
       // never a narrowed turn, never tainted args. Everything outside those
       // bounds goes to the human as before. A throwing port is not a yes.
       if (deps.learnedAutonomy !== undefined && verdict.tier === 2 &&
-        !ctx.narrowed && ctx.provenance !== 'untrusted') {
+        !ctx.narrowed && ctx.provenance === 'operator') {
         let covered = false
         try { covered = deps.learnedAutonomy(call, ctx) === true } catch { covered = false }
         if (covered) return complete(true) ? 'allow' : 'deny'

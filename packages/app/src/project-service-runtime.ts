@@ -142,6 +142,7 @@ export function makeNodeProjectServiceRuntime(input: {
   newReceiptId: () => string
   newLeaseId: () => string
   lifecycle?: ProjectServiceLifecycleDeps
+  beforeArchive?: (event: ProjectServiceEvent) => void | Promise<void>
   emit?: (event: ProjectServiceEvent) => void
 }): NodeProjectServiceRuntime {
   const nowMs = input.nowMs ?? Date.now
@@ -157,6 +158,7 @@ export function makeNodeProjectServiceRuntime(input: {
     leases,
     authority,
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
+    ...(input.beforeArchive === undefined ? {} : { beforeArchive: input.beforeArchive }),
     ...(input.emit === undefined ? {} : { emit: input.emit }),
   })
   return { registry: input.registry, authority, leases, service }
@@ -173,6 +175,7 @@ export function makeNodeProjectServiceRuntimeFromRegistry(input: {
   newReceiptId: () => string
   newLeaseId: () => string
   lifecycle?: ProjectServiceLifecycleDeps
+  beforeArchive?: (event: ProjectServiceEvent) => void | Promise<void>
   emit?: (event: ProjectServiceEvent) => void
 }): NodeProjectServiceRuntime {
   const store = makeNodeProjectRegistryV2Store({
@@ -194,6 +197,7 @@ export function makeNodeProjectServiceRuntimeFromRegistry(input: {
     newReceiptId: input.newReceiptId,
     newLeaseId: input.newLeaseId,
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
+    ...(input.beforeArchive === undefined ? {} : { beforeArchive: input.beforeArchive }),
     ...(input.emit === undefined ? {} : { emit: input.emit }),
   })
 }

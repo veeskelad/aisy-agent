@@ -162,12 +162,12 @@ async function makeLeaseTurnRuntime(input: {
             ? deps.scopedMemory.commitProject(
                 lease,
                 { op: 'ADD', text: remembered.fact },
-                { withinSession: true },
+                { withinSession: true, operationId: receipt.operationId },
               )
             : deps.scopedMemory.commitGlobal(
                 lease,
                 { op: 'ADD', text: remembered.fact },
-                { withinSession: true },
+                { withinSession: true, operationId: receipt.operationId },
               )
           const result = await commit
           if (result.status === 'COMMITTED') {

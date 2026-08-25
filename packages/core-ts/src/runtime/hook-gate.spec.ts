@@ -4,6 +4,7 @@ import { makeSafetyPolicy, makeGrantStore } from '../safety/index.js'
 import type { GrantStore } from '../safety/index.js'
 import type { HookCtx, ToolCall } from '../agent-loop/types.js'
 import type { PendingAction } from '../gateway/index.js'
+import { makeMemoryRememberReceipt } from './memory-receipt.js'
 
 const OPERATOR: HookCtx = { provenance: 'operator', narrowed: false }
 const GRANT_BINDING = {
@@ -307,6 +308,45 @@ describe('выученная автономия в гейте (AC-24-6, AC-24-7)
 })
 
 describe('deterministic PostToolUse', () => {
+  it('preserves an exact verified memory receipt for the production acknowledgement', async () => {
+    const receipt = makeMemoryRememberReceipt(
+      { fact: 'ты предпочитаешь краткие отчёты' },
+      { sessionId: 'session-1', turnId: 'turn-1', ordinal: 1 },
+    )
+    expect(receipt).not.toBeNull()
+    const post = makePostToolUseProcessor({ secretValues: () => [] })
+
+    await expect(post(call('remember'), {
+      ok: true,
+      output: 'Запомнил, что ты предпочитаешь краткие отчёты',
+      verified: true,
+      mutationReceipt: receipt,
+    })).resolves.toEqual({
+      ok: true,
+      output: 'Запомнил, что ты предпочитаешь краткие отчёты',
+      verified: true,
+      mutationReceipt: receipt,
+    })
+  })
+
+  it('drops the receipt when redaction changes the acknowledgement', async () => {
+    const receipt = makeMemoryRememberReceipt(
+      { fact: 'мой секрет secret-value' },
+      { sessionId: 'session-1', turnId: 'turn-2', ordinal: 1 },
+    )
+    const post = makePostToolUseProcessor({ secretValues: () => ['secret-value'] })
+
+    await expect(post(call('remember'), {
+      ok: true,
+      output: 'Запомнил, что мой секрет secret-value',
+      verified: true,
+      mutationReceipt: receipt,
+    })).resolves.toEqual({
+      ok: true,
+      output: 'Запомнил, что мой секрет «redacted»',
+    })
+  })
+
   it('withholds output when the live PostToolUse dependency was omitted', async () => {
     const grants = makeGrantStore()
     const hg = makeHookGate({

@@ -4,6 +4,7 @@ import type {
   ContextSpan,
   ModelResponse,
   ToolCall,
+  ToolExecutionContext,
 } from './types.js'
 
 export interface ActionContract {
@@ -32,9 +33,58 @@ export interface ActionContractVerdict {
 // evidence on an in-process, non-serializable channel: vendor JSON, transcript
 // text, cached responses and provider progress cannot manufacture this symbol.
 const providerActionEvidence = Symbol('aisy.provider-action-evidence')
+const providerToolExecutions = Symbol('aisy.provider-tool-executions')
 
 type AttestedModelResponse = ModelResponse & {
   readonly [providerActionEvidence]?: readonly ActionEvidence[]
+  readonly [providerToolExecutions]?: readonly ProviderToolExecution[]
+}
+
+/**
+ * In-process attestation emitted by a supervised provider-owned tool loop.
+ * It is never serialized or accepted from model output. AgentLoop consumes it
+ * only for code-owned receipts such as memory.remember/v1.
+ */
+export interface ProviderToolExecution {
+  readonly call: ToolCall
+  readonly context: ToolExecutionContext
+  readonly result: unknown
+}
+
+function frozenClone<T>(value: T): T {
+  const cloned = structuredClone(value) as T
+  let nodes = 0
+  const freeze = (item: unknown, depth: number): void => {
+    if (typeof item !== 'object' || item === null) return
+    nodes += 1
+    if (nodes > 4096 || depth > 32 ||
+      (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype)) {
+      throw new Error('INVALID_PROVIDER_TOOL_EXECUTION')
+    }
+    for (const child of Object.values(item)) freeze(child, depth + 1)
+    Object.freeze(item)
+  }
+  freeze(cloned, 0)
+  return cloned
+}
+
+function attachAttestations(
+  response: ModelResponse,
+  evidence: readonly ActionEvidence[] | undefined,
+  executions: readonly ProviderToolExecution[] | undefined,
+): ModelResponse {
+  const attached: AttestedModelResponse = { ...response }
+  if (evidence !== undefined) {
+    Object.defineProperty(attached, providerActionEvidence, {
+      configurable: false, enumerable: false, writable: false, value: evidence,
+    })
+  }
+  if (executions !== undefined) {
+    Object.defineProperty(attached, providerToolExecutions, {
+      configurable: false, enumerable: false, writable: false, value: executions,
+    })
+  }
+  return attached
 }
 
 function snapshotProviderEvidence(item: ActionEvidence): Readonly<ActionEvidence> {
@@ -60,20 +110,58 @@ export function attachProviderActionEvidence(
 ): ModelResponse {
   if (evidence.length > 128) throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
   const snapshot = Object.freeze(evidence.map(snapshotProviderEvidence))
-  const attached: AttestedModelResponse = { ...response }
-  Object.defineProperty(attached, providerActionEvidence, {
-    configurable: false,
-    enumerable: false,
-    writable: false,
-    value: snapshot,
-  })
-  return attached
+  return attachAttestations(
+    response,
+    snapshot,
+    (response as AttestedModelResponse)[providerToolExecutions],
+  )
 }
 
 export function readProviderActionEvidence(
   response: ModelResponse,
 ): readonly ActionEvidence[] {
   return (response as AttestedModelResponse)[providerActionEvidence] ?? []
+}
+
+export function attachProviderToolExecutions(
+  response: ModelResponse,
+  executions: readonly ProviderToolExecution[],
+): ModelResponse {
+  if (executions.length > 128) throw new Error('INVALID_PROVIDER_TOOL_EXECUTION')
+  const snapshot = executions.map(item => {
+    if (typeof item.call?.name !== 'string' ||
+      !/^[A-Za-z0-9_.:-]{1,128}$/u.test(item.call.name) ||
+      typeof item.context?.sessionId !== 'string' || item.context.sessionId.length === 0 ||
+      (item.context.turnId !== undefined &&
+        (typeof item.context.turnId !== 'string' || item.context.turnId.length === 0)) ||
+      !Number.isSafeInteger(item.context.ordinal) || item.context.ordinal < 1) {
+      throw new Error('INVALID_PROVIDER_TOOL_EXECUTION')
+    }
+    return Object.freeze<ProviderToolExecution>({
+      call: frozenClone(item.call),
+      context: Object.freeze({
+        sessionId: item.context.sessionId,
+        ...(item.context.turnId === undefined ? {} : { turnId: item.context.turnId }),
+        ordinal: item.context.ordinal,
+      }),
+      result: frozenClone(item.result),
+    })
+  }).sort((left, right) => left.context.ordinal! - right.context.ordinal!)
+  if (new Set(snapshot.map(item => item.context.ordinal)).size !== snapshot.length) {
+    throw new Error('INVALID_PROVIDER_TOOL_EXECUTION')
+  }
+  Object.freeze(snapshot)
+  return attachAttestations(
+    response,
+    (response as AttestedModelResponse)[providerActionEvidence],
+    snapshot,
+  )
+}
+
+export function readProviderToolExecutions(
+  response: ModelResponse,
+): readonly ProviderToolExecution[] {
+  return (response as AttestedModelResponse)[providerToolExecutions] ?? []
 }
 
 const INFORMATIONAL_PREFIX = /^(?:объясни|расскажи|почему|что такое|можно ли|как (?:мне |нам )?(?:сделать|создать|настроить|установить)|explain|describe|why|what is|how (?:do|can|should|to)\b)/i

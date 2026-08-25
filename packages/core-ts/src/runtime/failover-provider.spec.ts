@@ -101,6 +101,39 @@ describe('makeFailoverProvider', () => {
     expect(fallback.calls).toBe(1)
   })
 
+  it('never fails over after the primary marked an effect attempt without progress', async () => {
+    const primary: ProviderAdapter = {
+      async complete(request) {
+        await request.markToolAttempt?.((request.toolOrdinalBase ?? 0) + 1)
+        throw new FakeProviderError('server-error', 'late provider failure', 503)
+      },
+    }
+    const fallback = okAdapter('fallback-must-not-run')
+    const provider = makeFailoverProvider(primary, fallback)
+
+    await expect(provider.complete(makeRequest())).rejects.toThrow('late provider failure')
+    expect(fallback.calls).toBe(0)
+  })
+
+  it('treats progress as observational and still forwards it before a pre-effect failure', async () => {
+    const primary: ProviderAdapter = {
+      async complete(_request, _signal, progress) {
+        await progress?.({
+          type: 'tool-requested', toolCallId: 'proposal-1', name: 'remember', args: {},
+        })
+        throw new FakeProviderError('server-error', 'failed before invoke', 503)
+      },
+    }
+    const fallback = okAdapter('fallback-ok')
+    const progress: string[] = []
+    const result = await makeFailoverProvider(primary, fallback).complete(
+      makeRequest(), undefined, event => { progress.push(event.type) },
+    )
+
+    expect(result.reply).toBe('fallback-ok')
+    expect(progress).toEqual(['tool-requested'])
+  })
+
   it('primary server-error WITHOUT an http status (network throw) — fallback is used', async () => {
     const primary = failingAdapter('server-error') // no httpStatus → treat as network-level
     const fallback = okAdapter('fallback-ok')

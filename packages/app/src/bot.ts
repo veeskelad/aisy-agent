@@ -455,6 +455,12 @@ export interface TelegramBotDeps {
   gateway: Gateway
   /** Build the legacy static runner given the bot-owned approval port. */
   buildRunner?: (approve: (action: PendingAction) => Promise<ApprovalDecision>) => AgentRunner
+  /** Runs only after Telegram confirms terminal delivery; durability is transport-specific. */
+  afterReplyDelivered?: (input: Readonly<{
+    sessionId: string
+    turnId?: string
+    result: TurnResult
+  }>) => void | Promise<void>
   /**
    * Supervised per-turn path. When present, fallback to the legacy runner is
    * forbidden: the runner is built only after checkpoint bind from a genuine
@@ -1908,6 +1914,7 @@ let pendingFormUntilMs = 0
       // The narrowing verdict follows the turn so the subscription-brain
       // executor sees the same state a native turn does.
       deps.setUntrustedContext?.(result.narrowed === true)
+      let terminalReplyDelivered = false
       if (result.state === 'halted' && result.haltReason === 'stopped') {
         // Operator /stop already acked ("⏹ Остановлено."); stay silent.
         await replyStream.stop()
@@ -1965,6 +1972,7 @@ let pendingFormUntilMs = 0
           try {
             deps.durableTurnControl?.retireTurn(releaseReceipt.receiptHash)
             await deps.durableReply.consumeReleaseReceipt(releaseReceipt)
+            terminalReplyDelivered = true
           } catch {
             executionAuthorityFatal = true
             throw new Error('EXECUTION_RELEASE_RECEIPT_UNCONSUMED')
@@ -1974,7 +1982,25 @@ let pendingFormUntilMs = 0
           // not emitted when the ordinary release itself failed.
           await releaseLegacyAuthority()
           const finalized = await replyStream.finalizeWithReceipt(result.reply)
-          if (finalized.kind === 'fallback-safe') await sendReply(result.reply)
+          if (finalized.kind === 'delivered') terminalReplyDelivered = true
+          if (finalized.kind === 'fallback-safe') {
+            await sendReply(result.reply)
+            terminalReplyDelivered = true
+          }
+        }
+      }
+      if (result.state === 'ok' && terminalReplyDelivered &&
+        deps.afterReplyDelivered !== undefined) {
+        try {
+          await deps.afterReplyDelivered({
+            sessionId: turn.sessionId,
+            ...(authority === undefined ? {} : { turnId: authority.turnId }),
+            result,
+          })
+        } catch {
+          // The user already has the verified answer. Background learning and
+          // notification failures remain observable through their own Doctor
+          // state and cannot turn delivery into a false task failure.
         }
       }
       if (result.usage) {

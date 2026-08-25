@@ -6,10 +6,13 @@ import {
   classifyActionContract,
   evaluateActionContract,
   readProviderActionEvidence,
+  readProviderToolExecutions,
 } from './action-contract.js'
 import type { ActionEvidence } from './action-contract.js'
 import {
+  makeMemoryRememberReceipt,
   parseMemoryRememberReceipt,
+  parseRememberFactArgs,
   renderMemoryAcknowledgement,
 } from '../runtime/memory-receipt.js'
 import type {
@@ -18,6 +21,7 @@ import type {
   AgentLoopDeps,
   ContextSpan,
   FrozenSnapshot,
+  ModelRequest,
   ModelResponse,
   TurnProgressEvent,
   Plan,
@@ -28,6 +32,7 @@ import type {
   TurnInput,
   TurnResult,
   VerificationTrace,
+  VerifiedWorkflowStepObservation,
 } from './types.js'
 
 export type {
@@ -80,7 +85,11 @@ type HaltReason = NonNullable<TurnResult['haltReason']>
 
 const toolExecutionContextAuthorities = new WeakMap<object, string>()
 
-function memoryAcknowledgement(call: ToolCall, result: unknown):
+function memoryAcknowledgement(
+  call: ToolCall,
+  context: ToolExecutionContext,
+  result: unknown,
+):
 { receiptId: string; output: string } | null {
   if (call.name !== 'remember' || typeof result !== 'object' || result === null ||
     utilTypes.isProxy(result) || Object.getPrototypeOf(result) !== Object.prototype ||
@@ -98,7 +107,12 @@ function memoryAcknowledgement(call: ToolCall, result: unknown):
   }
   if (descriptors['ok']!.value !== true || descriptors['verified']!.value !== true) return null
   const receipt = parseMemoryRememberReceipt(descriptors['mutationReceipt']!.value)
-  if (receipt === null) return null
+  const fact = parseRememberFactArgs(call.args)
+  const expectedReceipt = fact === null ? null : makeMemoryRememberReceipt(fact, context)
+  if (receipt === null || fact === null || expectedReceipt === null ||
+    receipt.operationId !== expectedReceipt.operationId ||
+    receipt.receiptId !== expectedReceipt.receiptId ||
+    receipt.turnId !== expectedReceipt.turnId || receipt.fact !== fact.fact) return null
   const output = renderMemoryAcknowledgement(receipt.fact)
   return descriptors['output']!.value === output ? { receiptId: receipt.receiptId, output } : null
 }
@@ -112,6 +126,10 @@ function terminalReplyWithMemoryAcknowledgements(
   for (const acknowledgement of acknowledgements) {
     body = body.split(acknowledgement).join('')
   }
+  body = body.replace(
+    /\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)[^\r\n]*/gimu,
+    '',
+  )
   body = body.split(/\r?\n/u)
     .filter(line => !/^\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)/iu.test(line))
     .join('\n')
@@ -345,8 +363,34 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       }
 
       // Resume: replay the durable log to find the next un-verified step.
-      const resumed = deps.sessionLog.resume(input.sessionId)
+      const resumed = deps.sessionLog.resume(input.sessionId, turnId)
       const startStep = resumed?.status === 'in-progress' ? resumed.nextStepIndex : 0
+      toolInvocationOrdinal = resumed?.status === 'in-progress'
+        ? resumed.toolOrdinalHighWater
+        : 0
+      if (!Number.isSafeInteger(toolInvocationOrdinal) || toolInvocationOrdinal < 0) {
+        throw new Error('session log tool ordinal high-water invalid')
+      }
+      let durableNextStepIndex = startStep
+      let durableToolOrdinalHighWater = toolInvocationOrdinal
+      const checkpoint = (status: 'in-progress' | 'complete'): void => {
+        if (turnId === undefined) return
+        log('turn.checkpoint', {
+          sessionId: input.sessionId,
+          turnId,
+          status,
+          nextStepIndex: durableNextStepIndex,
+          toolOrdinalHighWater: durableToolOrdinalHighWater,
+        })
+      }
+      const checkpointAttempt = (ordinal: number): void => {
+        if (!Number.isSafeInteger(ordinal) || ordinal <= durableToolOrdinalHighWater) {
+          throw new Error('provider tool ordinal checkpoint invalid')
+        }
+        durableToolOrdinalHighWater = ordinal
+        checkpoint('in-progress')
+      }
+      checkpoint('in-progress')
 
       log('turn.start', { sessionId: input.sessionId })
 
@@ -463,7 +507,36 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       const actionContract = classifyActionContract(input.spans)
       const actionRequired = actionContract.kind !== 'answer-only'
       const actionEvidenceLog: ActionEvidence[] = []
+      let turnEffectObserved = false
       const memoryAcknowledgements = new Map<string, string>()
+      const verifiedWorkflowSteps: VerifiedWorkflowStepObservation[] = []
+      let verifiedWorkflowDelivery: { evidenceId: string } | undefined
+      let verifiedWorkflowEligible = true
+      const executionBelongsToTurn = (context: ToolExecutionContext): boolean =>
+        context.sessionId === input.sessionId && context.turnId === turnId &&
+        Number.isSafeInteger(context.ordinal) && (context.ordinal ?? 0) > 0
+      const observeVerifiedExecution = (
+        call: ToolCall,
+        context: ToolExecutionContext,
+        result: unknown,
+      ): void => {
+        if (deps.verifiedWorkflow === undefined || !verifiedWorkflowEligible) return
+        if (!toolResultSucceeded(result) || !executionBelongsToTurn(context) ||
+          (call.sourceSpanProvenance ?? 'operator') !== 'operator') {
+          verifiedWorkflowEligible = false
+          return
+        }
+        try {
+          const step = deps.verifiedWorkflow.capture(call, context, result)
+          if (step === null) {
+            verifiedWorkflowEligible = false
+            return
+          }
+          verifiedWorkflowSteps.push(step)
+        } catch {
+          verifiedWorkflowEligible = false
+        }
+      }
       log('action.contract', actionContract)
       if (actionContract.kind !== 'answer-only') {
         await emitProgress({ type: 'action-contract', kind: actionContract.kind })
@@ -489,25 +562,67 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         const lateSpans = deps.lateContext === undefined
           ? []
           : await deps.lateContext({ at: 'pre-provider', spans: [...input.spans, ...extraSpans] })
+        const bufferedTextDeltas: Extract<TurnProgressEvent, { type: 'text-delta' }>[] = []
         try {
+          const modelRequest: ModelRequest = {
+            sessionId: input.sessionId,
+            ...(turnId === undefined ? {} : { turnId }),
+            toolOrdinalBase: toolInvocationOrdinal,
+            prefixBytes: snapshot.prefixBytes,
+            // ADR-0102: a synthesis round appends the assistant preamble + tool
+            // results after the turn's spans so the model can answer from them.
+            spans: [...historySpans, ...input.spans, ...actionContractSpan, ...extraSpans, ...lateSpans],
+          }
+          // The in-process authority must not enter serializable provider payloads.
+          // Non-enumerability keeps structuredClone/JSON adapters compatible while
+          // supervised provider loops can still await it immediately pre-effect.
+          Object.defineProperty(modelRequest, 'markToolAttempt', {
+            value: checkpointAttempt,
+            enumerable: false,
+          })
           const r = await deps.provider.complete(
-            {
-              sessionId: input.sessionId,
-              ...(turnId === undefined ? {} : { turnId }),
-              prefixBytes: snapshot.prefixBytes,
-              // ADR-0102: a synthesis round appends the assistant preamble + tool
-              // results after the turn's spans so the model can answer from them.
-              spans: [...historySpans, ...input.spans, ...actionContractSpan, ...extraSpans, ...lateSpans],
-            },
+            modelRequest,
             input.signal,
-            (event) => emitProgress(event),
+            (event) => {
+              if (event.type === 'tool-requested') turnEffectObserved = true
+              if (event.type !== 'text-delta') return emitProgress(event)
+              bufferedTextDeltas.push(event)
+              return Promise.resolve()
+            },
           )
           await recordSpan({
             role: 'assistant',
             provenance: 'untrusted',
             text: r.reply,
           })
-          actionEvidenceLog.push(...readProviderActionEvidence(r))
+          const providerEvidence = readProviderActionEvidence(r)
+          const providerExecutions = readProviderToolExecutions(r)
+          if (r.plan !== undefined || (r.toolCalls?.length ?? 0) > 0 ||
+            providerExecutions.length > 0 || providerEvidence.length > 0) {
+            turnEffectObserved = true
+          }
+          actionEvidenceLog.push(...providerEvidence)
+          for (const execution of providerExecutions) {
+            if (!executionBelongsToTurn(execution.context) ||
+              execution.context.ordinal <= toolInvocationOrdinal ||
+              execution.context.ordinal > durableToolOrdinalHighWater) {
+              verifiedWorkflowEligible = false
+              continue
+            }
+            toolInvocationOrdinal = execution.context.ordinal
+            const acknowledgement = memoryAcknowledgement(
+              execution.call,
+              execution.context,
+              execution.result,
+            )
+            if (acknowledgement !== null) {
+              memoryAcknowledgements.set(acknowledgement.receiptId, acknowledgement.output)
+            }
+            observeVerifiedExecution(execution.call, execution.context, execution.result)
+          }
+          if (!actionRequired && !turnEffectObserved) {
+            for (const event of bufferedTextDeltas) await emitProgress(event)
+          }
           if (r.usage) {
             usageIn += r.usage.inputTokens
             usageOut += r.usage.outputTokens
@@ -557,12 +672,14 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       const dispatch = async (
         call: ToolCall,
       ): Promise<{ executed: boolean; result?: unknown; span?: ContextSpan }> => {
+        turnEffectObserved = true
         // ADR-0051: /stop interrupts between tool calls too, not only at model calls.
         if (input.signal?.aborted) throw new Halt('stopped')
         // Count every model-requested position, including a call later denied by
         // policy. This keeps the next allowed call's identity stable if policy
         // state changes between an interrupted attempt and its replay.
         toolInvocationOrdinal += 1
+        checkpointAttempt(toolInvocationOrdinal)
         const executionContext: ToolExecutionContext = Object.freeze({
           sessionId: input.sessionId,
           ...(turnId === undefined ? {} : { turnId }),
@@ -604,6 +721,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
               ...requestedProgress,
             })
             actionEvidenceLog.push(actionEvidence(call, intercepted))
+            observeVerifiedExecution(call, executionContext, intercepted)
             const span: ContextSpan = {
               role: 'tool',
               provenance: 'untrusted',
@@ -654,7 +772,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             }
           }
         }
-        log('step.intent', { tool: effective.name })
+        log('step.intent', { tool: effective.name, ordinal: toolInvocationOrdinal })
         await emitProgress({ type: 'tool-started', ...effectiveProgress })
         let result: unknown
         try {
@@ -693,7 +811,8 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           ...effectiveProgress,
         })
         actionEvidenceLog.push(actionEvidence(effective, result))
-        const acknowledgement = memoryAcknowledgement(effective, result)
+        observeVerifiedExecution(effective, executionContext, result)
+        const acknowledgement = memoryAcknowledgement(effective, executionContext, result)
         if (acknowledgement !== null) {
           memoryAcknowledgements.set(acknowledgement.receiptId, acknowledgement.output)
         }
@@ -711,6 +830,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
 
       const clarification = (response: ModelResponse): TurnResult => {
         log('clarification.raised', { interpretations: response.interpretationCount })
+        checkpoint('complete')
         return { reply: response.reply, state: 'awaiting-clarification' }
       }
 
@@ -742,6 +862,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           const planHash = payloadHash(plan)
           if (input.approvalToken !== planHash) {
             log('plan.gate', { tier: 3 })
+            checkpoint('complete')
             return { reply: response.reply, state: 'awaiting-approval', planHash }
           }
         }
@@ -753,6 +874,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           // the Tools layer (04) — here the dispatch gate is what matters.
           let i = startStep
           while (plan && i < plan.steps.length) {
+            durableNextStepIndex = i
             const step: PlanStep = plan.steps[i]!
             for (const tool of step.tools) {
               await dispatch({ name: tool, args: {} })
@@ -760,6 +882,8 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             if (await runProbe(step.trace)) {
               log('step.verified', { stepIndex: i })
               i++
+              durableNextStepIndex = i
+              checkpoint('in-progress')
             } else {
               log('step.failed', { stepIndex: i })
               enterReplan('cap-exceeded')
@@ -774,6 +898,8 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
                 // shorter new plan is never silently skipped (the resume cursor only applies
                 // to the initial plan load).
                 i = 0
+                durableNextStepIndex = 0
+                checkpoint('in-progress')
               } else {
                 // Re-plan carried no plan: exit plan mode rather than retrying
                 // the already-failed plan; the new response continues free-form.
@@ -844,6 +970,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           if (!actionVerdict.satisfied) {
             log('action.unverified', { kind: actionContract.kind, missing: actionVerdict.missing })
             log('turn.end', { state: 'ok', actionStatus: 'unverified' })
+            checkpoint('complete')
             const failureReply = 'Не удалось подтвердить выполнение: отсутствует проверяемое доказательство результата.'
             await recordSpan({ role: 'assistant', provenance: 'operator', text: failureReply })
             return {
@@ -860,12 +987,37 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         }
 
         const actionVerdict = evaluateActionContract(actionContract, actionEvidenceLog, planVerified)
+        if (deps.verifiedWorkflow !== undefined && actionRequired && actionVerdict.satisfied &&
+          verifiedWorkflowEligible && verifiedWorkflowSteps.length > 0 && !s.narrowed &&
+          turnId !== undefined) {
+          try {
+            const delivery = await deps.verifiedWorkflow.commit({
+              sessionId: input.sessionId,
+              turnId,
+              steps: Object.freeze([...verifiedWorkflowSteps]),
+            })
+            if (typeof delivery === 'object' && delivery !== null &&
+              Object.getPrototypeOf(delivery) === Object.prototype &&
+              Object.keys(delivery).length === 1 &&
+              typeof delivery.evidenceId === 'string' &&
+              /^[a-f0-9]{64}$/u.test(delivery.evidenceId)) {
+              verifiedWorkflowDelivery = Object.freeze({ evidenceId: delivery.evidenceId })
+            }
+            log('verified-workflow.committed', { steps: verifiedWorkflowSteps.length })
+          } catch {
+            // Learning is observational. A failed private-state transaction may
+            // suppress a candidate, but never turns verified user work into a
+            // false failure or retries its effects.
+            log('verified-workflow.failed', { steps: verifiedWorkflowSteps.length })
+          }
+        }
         log('turn.end', {
           state: 'ok',
           ...(actionRequired
             ? { actionStatus: actionVerdict.satisfied ? 'verified' : 'unverified' }
             : {}),
         })
+        checkpoint('complete')
         return {
           reply: terminalReplyWithMemoryAcknowledgements(
             response.reply,
@@ -882,10 +1034,12 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           ...(usageIn > 0 || usageOut > 0
             ? { usage: { inputTokens: usageIn, outputTokens: usageOut, dollars: usageDollars } }
             : {}),
+          ...(verifiedWorkflowDelivery === undefined ? {} : { verifiedWorkflowDelivery }),
         }
       } catch (err) {
         if (err instanceof Halt) {
           log('turn.end', { state: 'halted', haltReason: err.reason })
+          checkpoint('complete')
           return {
             reply: '',
             state: 'halted',

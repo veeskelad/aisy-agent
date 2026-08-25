@@ -186,6 +186,7 @@ export function makeProjectService(deps: {
   leases: ContextLeaseCoordinator
   authority: SwitchAuthority
   lifecycle?: ProjectServiceLifecycleDeps
+  beforeArchive?: (event: ProjectServiceEvent) => void | Promise<void>
   emit?: (event: ProjectServiceEvent) => void
 }): ProjectService {
   type LeaseRole = 'interactive' | 'background' | 'maintenance'
@@ -618,6 +619,16 @@ export function makeProjectService(deps: {
         })
 
         await closeLeases(owner, ({ lease }) => lease.projectId === target.id)
+        try {
+          await deps.beforeArchive?.({
+            kind: 'project.archived',
+            projectId: target.id,
+            generation: current.generation,
+          })
+        } catch (error) {
+          if (deps.registry.getActive(owner).projectId === target.id) acquire(owner)
+          throw error
+        }
         let record: ProjectRecordV2
         try {
           record = deps.registry.archiveProject({
@@ -752,11 +763,26 @@ export function makeProjectService(deps: {
           sourceMessageHash: input.sourceMessageHash,
         })
 
+
         await closeLeases(
           owner,
           ({ lease }) => lease.projectId === input.projectId &&
             lease.sessionId === input.sessionId,
         )
+        try {
+          await deps.beforeArchive?.({
+            kind: 'session.archived',
+            projectId: input.projectId,
+            sessionId: input.sessionId,
+            generation: current.generation,
+          })
+        } catch (error) {
+          const selected = deps.registry.getActive(owner)
+          if (selected.projectId === input.projectId && selected.sessionId === input.sessionId) {
+            acquire(owner)
+          }
+          throw error
+        }
         let record: ProjectSessionRecord
         try {
           record = deps.registry.archiveSession({

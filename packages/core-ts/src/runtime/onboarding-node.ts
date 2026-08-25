@@ -54,6 +54,7 @@ import type {
   OwnedDockerRecoveryReadinessProbe,
   ProviderBrokerReadinessProbe,
   TranscriptionReadinessProbe,
+  AutoSkillReadinessProbe,
   MemoryPort,
   MigrationReadinessProbe,
   TelegramExecutionCheckpointProbe,
@@ -314,6 +315,7 @@ export function makeNodeOnboardingOps(input: {
   ownedDockerRecovery?: OwnedDockerRecoveryReadinessProbe
   providerBroker?: ProviderBrokerReadinessProbe
   transcription?: TranscriptionReadinessProbe
+  autoSkills?: AutoSkillReadinessProbe
   memory?: MemoryPort
   migration?: MigrationReadinessProbe
 } = {}): OnboardingOps {
@@ -619,6 +621,7 @@ export function makeNodeOnboardingOps(input: {
       : { ownedDockerRecovery: input.ownedDockerRecovery }),
     ...(input.providerBroker === undefined ? {} : { providerBroker: input.providerBroker }),
     ...(input.transcription === undefined ? {} : { transcription: input.transcription }),
+    ...(input.autoSkills === undefined ? {} : { autoSkills: input.autoSkills }),
     ...(input.migration === undefined ? {} : { migration: input.migration }),
     ...(input.telegramExecution === undefined
       ? {}

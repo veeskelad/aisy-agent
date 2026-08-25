@@ -4,9 +4,11 @@ import {
   actionEvidence,
   actionRecoveryInstruction,
   attachProviderActionEvidence,
+  attachProviderToolExecutions,
   classifyActionContract,
   evaluateActionContract,
   readProviderActionEvidence,
+  readProviderToolExecutions,
 } from './action-contract.js'
 
 function operator(text: string): ContextSpan[] {
@@ -129,5 +131,21 @@ describe('Action Contract', () => {
     expect(() => attachProviderActionEvidence({ reply: 'bad' }, [{
       tool: 'spawn_subagent', family: 'inspect', successful: true, receipt: false,
     }])).toThrow('INVALID_PROVIDER_ACTION_EVIDENCE')
+  })
+
+  it('orders provider tool attestations by durable ordinal and rejects duplicates', () => {
+    const execution = (ordinal: number) => ({
+      call: call('remember', { fact: `факт-${ordinal}` }),
+      context: { sessionId: 'session-a', turnId: 'turn-a', ordinal },
+      result: { ok: true, output: `ok-${ordinal}` },
+    })
+    const attached = attachProviderToolExecutions(
+      { reply: 'done' }, [execution(2), execution(1)],
+    )
+
+    expect(readProviderToolExecutions(attached).map(item => item.context.ordinal)).toEqual([1, 2])
+    expect(() => attachProviderToolExecutions(
+      { reply: 'bad' }, [execution(1), execution(1)],
+    )).toThrow('INVALID_PROVIDER_TOOL_EXECUTION')
   })
 })

@@ -1,5 +1,6 @@
 import {
   readProviderActionEvidence,
+  readProviderToolExecutions,
   type ModelProgressEvent,
   type ModelRequest,
   type RuntimeToolDefinition,
@@ -112,7 +113,7 @@ describe('claude stream parser', () => {
 describe('claude subscription provider', () => {
   it('executes model tool calls through Aisy and reports them as progress', async () => {
     const executed: Array<{ name: string; args: Record<string, unknown> }> = []
-    const contexts: Array<{ sessionId: string; turnId?: string }> = []
+    const contexts: Array<{ sessionId: string; turnId?: string; ordinal?: number }> = []
     const events: ModelProgressEvent[] = []
 
     const provider = makeClaudeSubscriptionProvider({
@@ -152,15 +153,61 @@ describe('claude subscription provider', () => {
     const answer = await provider.complete(request, undefined, (event) => { events.push(event) })
 
     expect(executed).toEqual([{ name: 'read_file', args: { path: 'notes.md' } }])
-    expect(contexts).toEqual([{ sessionId: 'session-1', turnId: 'turn-1' }])
+    expect(contexts).toEqual([{ sessionId: 'session-1', turnId: 'turn-1', ordinal: 1 }])
     expect(Object.isFrozen(contexts[0])).toBe(true)
     expect(answer.reply).toBe('готово')
     expect(answer.usage).toEqual({ inputTokens: 12, outputTokens: 3, dollars: 0 })
     expect(readProviderActionEvidence(answer)).toEqual([{
       tool: 'read_file', family: 'inspect', successful: true, receipt: false,
     }])
+    expect(readProviderToolExecutions(answer)).toEqual([{
+      call: { name: 'read_file', args: { path: 'notes.md' } },
+      context: { sessionId: 'session-1', turnId: 'turn-1', ordinal: 1 },
+      result: { ok: true, output: 'содержимое' },
+    }])
     expect(events.map((event) => event.type)).toContain('tool-requested')
     expect(events.map((event) => event.type)).toContain('tool-result')
+
+    const second = await provider.complete({ ...request, toolOrdinalBase: 7 })
+    expect(contexts.at(-1)).toEqual({ sessionId: 'session-1', turnId: 'turn-1', ordinal: 8 })
+    expect(readProviderToolExecutions(second)[0]?.context.ordinal).toBe(8)
+  })
+
+  it('attaches a failed execution when the provider-side tool handler throws', async () => {
+    const provider = makeClaudeSubscriptionProvider({
+      tools: TOOLS,
+      invokeTool: async () => { throw new Error('ambiguous tool failure') },
+      run: async (argv) => {
+        const raw = argv[argv.indexOf('--mcp-config') + 1] ?? '{}'
+        const config = JSON.parse(raw) as {
+          mcpServers: { aisy: { url: string; headers: { authorization: string } } }
+        }
+        const response = await fetch(config.mcpServers.aisy.url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: config.mcpServers.aisy.headers.authorization,
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'tools/call',
+            params: { name: 'read_file', arguments: { path: 'notes.md' } },
+          }),
+        })
+        expect(response.status).toBe(200)
+        return { stdout: streamOf([initConnected, resultOk]), stderr: '', exitCode: 0 }
+      },
+    })
+
+    const answer = await provider.complete(request)
+
+    expect(readProviderToolExecutions(answer)).toEqual([{
+      call: { name: 'read_file', args: { path: 'notes.md' } },
+      context: { sessionId: 'session-1', turnId: 'turn-1', ordinal: 1 },
+      result: { ok: false, output: 'TOOL_EXECUTION_FAILED' },
+    }])
+    expect(readProviderActionEvidence(answer)).toEqual([{
+      tool: 'read_file', family: 'inspect', successful: false, receipt: false,
+    }])
   })
 
   it('fails closed when the bridge silently failed to load', async () => {

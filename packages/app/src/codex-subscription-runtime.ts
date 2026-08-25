@@ -13,6 +13,7 @@ import { isAbsolute, join, normalize } from 'node:path'
 import {
   actionEvidence,
   attachProviderActionEvidence,
+  attachProviderToolExecutions,
   makeAisyCapabilityBrainProviderAdapter,
   makeCodexAppServerCapabilityDriver,
   makeCodexSubscriptionAuth,
@@ -24,6 +25,7 @@ import {
   type CodexAuthProcessPort,
   type ModelToolRuntimeContext,
   type ProviderAdapter,
+  type ProviderToolExecution,
 } from '@aisy/core'
 
 import {
@@ -227,9 +229,27 @@ export function makeNodeCodexSubscriptionRuntime(input: {
       const tools = snapshotTools(providerInput.tools)
       const names = tools.map(tool => tool.name)
       const invokeTool = providerInput.invokeTool
-      const evidenceByTurn = new Map<string, ActionEvidence[]>()
+      const evidenceByTurn = new Map<string, {
+        evidence: ActionEvidence[]
+        executions: ProviderToolExecution[]
+      }>()
       const evidenceKey = (request: { sessionId: string; turnId?: string }): string =>
         `${request.sessionId}\0${request.turnId ?? ''}`
+      const ordinalByTurn = new Map<string, number>()
+      const nextOrdinal = (request: {
+        sessionId: string
+        turnId?: string
+        toolOrdinalBase?: number
+      }): number => {
+        const key = evidenceKey(request)
+        const next = Math.max(ordinalByTurn.get(key) ?? 0, request.toolOrdinalBase ?? 0) + 1
+        if (!Number.isSafeInteger(next)) throw new Error('PROVIDER_TOOL_ORDINAL_EXHAUSTED')
+        if (!ordinalByTurn.has(key) && ordinalByTurn.size >= 10_000) {
+          ordinalByTurn.delete(ordinalByTurn.keys().next().value as string)
+        }
+        ordinalByTurn.set(key, next)
+        return next
+      }
       const driver = makeCodexAppServerCapabilityDriver({
         auth,
         sessions,
@@ -244,18 +264,47 @@ export function makeNodeCodexSubscriptionRuntime(input: {
         capabilityBridges: {
           async open(turn, signal) {
             if (signal.aborted) throw new Error('CODEX_TURN_INTERRUPTED')
-            const evidence = evidenceByTurn.get(evidenceKey(turn.request))
-            if (evidence === undefined) throw new Error('CODEX_TURN_EVIDENCE_UNAVAILABLE')
+            const attestations = evidenceByTurn.get(evidenceKey(turn.request))
+            if (attestations === undefined) throw new Error('CODEX_TURN_EVIDENCE_UNAVAILABLE')
             const bridge = await startAisyMcpBridge({
               serverName: 'aisy',
               tools,
               requireCodexTurnBinding: true,
-              invoke: call => invokeTool(call, signal, Object.freeze({
-                sessionId: turn.request.sessionId,
-                ...(turn.request.turnId === undefined ? {} : { turnId: turn.request.turnId }),
-              })),
+              invoke: async call => {
+                const ordinal = nextOrdinal(turn.request)
+                await turn.request.markToolAttempt?.(ordinal)
+                const context = Object.freeze({
+                  sessionId: turn.request.sessionId,
+                  ...(turn.request.turnId === undefined ? {} : { turnId: turn.request.turnId }),
+                  ordinal,
+                })
+                let result
+                try {
+                  result = await invokeTool(call, signal, context)
+                } catch (error) {
+                  attestations.executions.push({
+                    call,
+                    context,
+                    result: { ok: false, output: 'TOOL_EXECUTION_FAILED' },
+                  })
+                  throw error
+                }
+                attestations.executions.push({
+                  call,
+                  context,
+                  result: {
+                    ok: !result.isError,
+                    output: result.text,
+                    ...(result.receipt === true ? { verified: true } : {}),
+                    ...(result.mutationReceipt === undefined
+                      ? {}
+                      : { mutationReceipt: result.mutationReceipt }),
+                  },
+                })
+                return result
+              },
               onResult: (call, result) => {
-                evidence.push(actionEvidence(
+                attestations.evidence.push(actionEvidence(
                   { name: call.name, args: call.args },
                   { ok: !result.isError, ...(result.receipt === true ? { verified: true } : {}) },
                 ))
@@ -282,11 +331,17 @@ export function makeNodeCodexSubscriptionRuntime(input: {
         async complete(request, signal, onProgress) {
           const key = evidenceKey(request)
           if (evidenceByTurn.has(key)) throw new Error('CODEX_TURN_ALREADY_ACTIVE')
-          const evidence: ActionEvidence[] = []
-          evidenceByTurn.set(key, evidence)
+          const attestations = {
+            evidence: [] as ActionEvidence[],
+            executions: [] as ProviderToolExecution[],
+          }
+          evidenceByTurn.set(key, attestations)
           try {
             const response = await adapter.complete(request, signal, onProgress)
-            return attachProviderActionEvidence(response, evidence)
+            return attachProviderToolExecutions(
+              attachProviderActionEvidence(response, attestations.evidence),
+              attestations.executions,
+            )
           } finally {
             evidenceByTurn.delete(key)
           }

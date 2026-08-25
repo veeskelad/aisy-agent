@@ -79,6 +79,7 @@ export type {
   OwnedDockerRecoveryReadinessProbe,
   ProviderBrokerReadinessProbe,
   TranscriptionReadinessProbe,
+  AutoSkillReadinessProbe,
   NightlyPort,
   CostTelemetryPort,
   ContextInventoryPort,
@@ -772,6 +773,44 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
           status: 'fail',
           severity: 'high',
           detail: 'Проверка готовности Workspace v2 завершилась ошибкой',
+          fixable: false,
+        })
+      }
+    }
+
+    // skills (high only on corrupt state) — the canary being disabled is a
+    // supported rollback state. Doctor reads counts and artifact integrity but
+    // never creates/recoveries the private v2 store.
+    if (deps.autoSkills !== undefined && includesDomain('skills')) {
+      try {
+        const finding = deps.autoSkills.inspect()
+        const status = finding.state === 'corrupt'
+          ? 'fail' as const
+          : finding.state === 'degraded'
+            ? 'warn' as const
+            : 'pass' as const
+        add({
+          id: 'skills.typed-auto-skill-lifecycle',
+          domain: 'skills',
+          status,
+          severity: finding.state === 'corrupt' ? 'high' : 'medium',
+          detail: finding.state === 'disabled'
+            ? 'Typed auto-skill canary выключен; private state не загружается'
+            : finding.state === 'corrupt'
+              ? 'Private typed auto-skill v2 state или active artifact повреждён'
+              : `Typed auto-skills: active=${finding.active}, queued=${finding.queued}, ` +
+                `pending_reply=${finding.pendingReply}, quarantined=${finding.quarantined}, ` +
+                `forgetting=${finding.forgetClaimed}, ` +
+                `ambiguous_notifications=${finding.ambiguousNotifications}`,
+          fixable: false,
+        })
+      } catch {
+        add({
+          id: 'skills.typed-auto-skill-lifecycle',
+          domain: 'skills',
+          status: 'fail',
+          severity: 'high',
+          detail: 'Проверка private typed auto-skill v2 завершилась ошибкой',
           fixable: false,
         })
       }

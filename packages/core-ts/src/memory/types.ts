@@ -145,7 +145,10 @@ export interface Memory {
   // WRITE PATH — the single choke point.
   // Applies read filter + resurrection-guard + contradiction resolution, then reindexes.
   // Returns BLOCK/REVIEW without storing a searchable fact on guard hit.
-  commit(op: MemoryOp, ctx: { withinSession: boolean }): Promise<CommitResult>
+  commit(
+    op: MemoryOp,
+    ctx: { withinSession: boolean; operationId?: string },
+  ): Promise<CommitResult>
 
   // FORGET-LIST — append-only, integrity-protected; no raw-write path exists.
   forget(factId: string, reason: string, humanConfirmed: boolean): Promise<void>

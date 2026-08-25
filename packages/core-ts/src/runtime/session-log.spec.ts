@@ -13,9 +13,47 @@ describe('makeJsonlSessionLog', () => {
     expect(JSON.parse(lines[1]!).kind).toBe('turn.end')
   })
 
-  it('resume returns null (crash-resume deferred)', () => {
-    const log = makeJsonlSessionLog({ appendLine: () => {} })
-    expect(log.resume('any-session')).toBeNull()
+  it('restores only the exact incomplete turn checkpoint and honors completion', () => {
+    const lines: string[] = []
+    const log = makeJsonlSessionLog({
+      appendLine: line => { lines.push(line) },
+      readLines: () => lines,
+    })
+    const appendCheckpoint = (
+      turnId: string,
+      status: 'in-progress' | 'complete',
+      nextStepIndex: number,
+      toolOrdinalHighWater: number,
+    ) => log.append({
+      seq: lines.length + 1,
+      ts: 't',
+      kind: 'turn.checkpoint',
+      payloadHash: 'h',
+      payload: {
+        sessionId: 'session-a', turnId, status, nextStepIndex, toolOrdinalHighWater,
+      },
+    })
+    appendCheckpoint('turn-a', 'in-progress', 1, 3)
+    appendCheckpoint('turn-b', 'in-progress', 0, 1)
+
+    expect(log.resume('session-a', 'turn-a')).toEqual({
+      status: 'in-progress', nextStepIndex: 1, toolOrdinalHighWater: 3,
+    })
+    expect(log.resume('session-a', 'turn-b')).toEqual({
+      status: 'in-progress', nextStepIndex: 0, toolOrdinalHighWater: 1,
+    })
+    expect(log.resume('session-a', 'other')).toBeNull()
+
+    appendCheckpoint('turn-a', 'complete', 2, 4)
+    expect(log.resume('session-a', 'turn-a')).toBeNull()
+  })
+
+  it('fails closed when a durable checkpoint is malformed', () => {
+    const log = makeJsonlSessionLog({
+      appendLine: () => undefined,
+      readLines: () => ['{"kind":"turn.checkpoint","payload":{"sessionId":"s"}}'],
+    })
+    expect(() => log.resume('s', 't')).toThrowError('SESSION_LOG_CORRUPT')
   })
 
   describe('recent', () => {
@@ -28,9 +66,10 @@ describe('makeJsonlSessionLog', () => {
 
       // Session A: 2 turns
       log.append({ seq: 1, ts: '2024-01-01T10:00:00.000Z', kind: 'turn.start', payloadHash: 'h1', payload: { sessionId: 'sA' } })
-      log.append({ seq: 2, ts: '2024-01-01T10:01:00.000Z', kind: 'turn.end', payloadHash: 'h2', payload: { sessionId: 'sA' } })
+      log.append({ seq: 2, ts: '2024-01-01T10:00:30.000Z', kind: 'turn.checkpoint', payloadHash: 'hc', payload: { sessionId: 'sA' } })
+      log.append({ seq: 3, ts: '2024-01-01T10:01:00.000Z', kind: 'turn.start', payloadHash: 'h2', payload: { sessionId: 'sA' } })
       // Session B: 1 turn (later)
-      log.append({ seq: 3, ts: '2024-01-02T09:00:00.000Z', kind: 'turn.start', payloadHash: 'h3', payload: { sessionId: 'sB' } })
+      log.append({ seq: 4, ts: '2024-01-02T09:00:00.000Z', kind: 'turn.start', payloadHash: 'h3', payload: { sessionId: 'sB' } })
 
       const result = log.recent!(5)
       expect(result).toHaveLength(2)
@@ -51,7 +90,7 @@ describe('makeJsonlSessionLog', () => {
         readLines: () => stored,
       })
       for (let i = 0; i < 5; i++) {
-        log.append({ seq: i, ts: `2024-01-0${i + 1}T00:00:00.000Z`, kind: 'turn', payloadHash: 'h', payload: { sessionId: `s${i}` } })
+        log.append({ seq: i, ts: `2024-01-0${i + 1}T00:00:00.000Z`, kind: 'turn.start', payloadHash: 'h', payload: { sessionId: `s${i}` } })
       }
       expect(log.recent!(3)).toHaveLength(3)
     })

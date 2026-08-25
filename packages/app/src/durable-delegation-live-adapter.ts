@@ -468,10 +468,22 @@ function frozenJson<T>(value: T, maximumBytes = MAX_PAYLOAD_BYTES): Readonly<T> 
 function requestSnapshot(request: ModelRequest): {
   readonly request: ModelRequest
   readonly hashInput: unknown
+  readonly markToolAttempt?: NonNullable<ModelRequest['markToolAttempt']>
 } {
-  const raw = exactObject(request, ['sessionId', 'prefixBytes', 'spans'], ['turnId'])
+  const raw = exactObject(request, ['sessionId', 'prefixBytes', 'spans'], [
+    'turnId', 'toolOrdinalBase', 'markToolAttempt',
+  ])
   if (typeof raw['sessionId'] !== 'string' || raw['sessionId'].length === 0 ||
-    (raw['turnId'] !== undefined && (typeof raw['turnId'] !== 'string' || raw['turnId'].length === 0))) {
+    (raw['turnId'] !== undefined && (typeof raw['turnId'] !== 'string' || raw['turnId'].length === 0)) ||
+    (raw['toolOrdinalBase'] !== undefined && (!Number.isSafeInteger(raw['toolOrdinalBase']) ||
+      (raw['toolOrdinalBase'] as number) < 0))) {
+    fail('DURABLE_DELEGATION_LIVE_CONFIG_INVALID')
+  }
+  const attemptDescriptor = Object.getOwnPropertyDescriptor(request, 'markToolAttempt')
+  if (raw['markToolAttempt'] !== undefined &&
+    (typeof raw['markToolAttempt'] !== 'function' || utilTypes.isProxy(raw['markToolAttempt']) ||
+      attemptDescriptor === undefined || attemptDescriptor.enumerable ||
+      !Object.hasOwn(attemptDescriptor, 'value'))) {
     fail('DURABLE_DELEGATION_LIVE_CONFIG_INVALID')
   }
   const prefix = raw['prefixBytes']
@@ -492,18 +504,38 @@ function requestSnapshot(request: ModelRequest): {
   const snapshot = Object.freeze({
     sessionId: raw['sessionId'],
     ...(raw['turnId'] === undefined ? {} : { turnId: raw['turnId'] }),
+    ...(raw['toolOrdinalBase'] === undefined ? {} : { toolOrdinalBase: raw['toolOrdinalBase'] }),
     prefixBytes: prefixCopy,
     spans,
   }) as ModelRequest
   return Object.freeze({
     request: snapshot,
+    ...(raw['markToolAttempt'] === undefined
+      ? {}
+      : { markToolAttempt: raw['markToolAttempt'] as NonNullable<ModelRequest['markToolAttempt']> }),
     hashInput: Object.freeze({
       sessionId: snapshot.sessionId,
       ...(snapshot.turnId === undefined ? {} : { turnId: snapshot.turnId }),
+      ...(snapshot.toolOrdinalBase === undefined
+        ? {}
+        : { toolOrdinalBase: snapshot.toolOrdinalBase }),
       prefixSha256: sha256(PREFIX_DOMAIN, Buffer.from(prefixCopy).toString('base64')),
       spans,
     }),
   })
+}
+
+function providerRequestWithAttempt(
+  captured: ReturnType<typeof requestSnapshot>,
+): ModelRequest {
+  const clean = requestSnapshot(captured.request).request
+  if (captured.markToolAttempt === undefined) return clean
+  const request: ModelRequest = { ...clean }
+  Object.defineProperty(request, 'markToolAttempt', {
+    value: captured.markToolAttempt,
+    enumerable: false,
+  })
+  return Object.freeze(request)
 }
 
 function toolSnapshot(call: ToolCall): ToolCall {
@@ -1005,7 +1037,7 @@ export function makeDurableDelegationLiveAdapterV1(
         // The exact signal/progress functions cross this boundary unchanged.
         operation = captureOwnedOperation(providerStart.call(
           providerOwner,
-          captured.request,
+          providerRequestWithAttempt(captured),
           signal,
           onProgress,
         ))
@@ -2022,7 +2054,7 @@ export function makeDurableDelegationLiveAdapterV2(
           quote,
           start: () => captureOwnedOperation(providerStart.call(
             providerOwner,
-            captured.request,
+            providerRequestWithAttempt(captured),
             signal,
             onProgress,
           )),

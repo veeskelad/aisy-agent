@@ -65,7 +65,8 @@ export class ProtectedScopedMemoryError extends Error {
     | 'PROJECT_MEMORY_UNAVAILABLE'
     | 'GLOBAL_MEMORY_UNAVAILABLE'
     | 'READ_VERIFICATION_FAILED'
-    | 'HUMAN_CONFIRMATION_REQUIRED',
+    | 'HUMAN_CONFIRMATION_REQUIRED'
+    | 'IDEMPOTENCY_CONFLICT',
   ) {
     super(code)
     this.name = 'ProtectedScopedMemoryError'
@@ -88,6 +89,8 @@ function validIso(value: unknown): value is string {
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
 }
+
+const OPERATION_ID = /^[a-f0-9]{64}$/
 
 export function makeProtectedScopedMemoryRouter(deps: {
   leases: Pick<ContextLeaseCoordinator, 'reserveOperation'>
@@ -315,14 +318,24 @@ export function makeProtectedScopedMemoryRouter(deps: {
     lease: TurnContextLease,
     scope: ProtectedMemoryScope,
     op: MemoryOp,
+    ctx: { withinSession: boolean; operationId?: string },
   ): Promise<CommitResult> => {
     const runtime = exactRuntime(lease, scope)
     await runtime.recovery.assertScopeRecovered(lease, scope)
     if (op.op === 'NOOP') return { status: 'COMMITTED', factId: op.targetId }
     if (op.op === 'ADD') {
+      if (ctx.operationId !== undefined && !OPERATION_ID.test(ctx.operationId)) {
+        throw new ProtectedScopedMemoryError('IDEMPOTENCY_CONFLICT')
+      }
+      if (ctx.operationId !== undefined) {
+        const existing = await runtime.store.loadLiveFactById(ctx.operationId)
+        if (existing !== null && existing.text !== op.text) {
+          throw new ProtectedScopedMemoryError('IDEMPOTENCY_CONFLICT')
+        }
+      }
       const provenance = deps.provenanceFor({ lease, op, scope })
       const fact = await runtime.publication.publishFact(lease, {
-        factId: deps.newFactId(), text: op.text, provenance, scope,
+        factId: ctx.operationId ?? deps.newFactId(), text: op.text, provenance, scope,
       })
       return { status: 'COMMITTED', factId: fact.id }
     }
@@ -456,15 +469,15 @@ export function makeProtectedScopedMemoryRouter(deps: {
       })
     },
 
-    commitGlobal: (lease, op) => withLeaseIo(
+    commitGlobal: (lease, op, ctx) => withLeaseIo(
       lease,
-      () => commitOne(lease, { kind: 'global', scopeId: 'global' }, op),
+      () => commitOne(lease, { kind: 'global', scopeId: 'global' }, op, ctx),
     ),
-    commitProject(lease, op) {
+    commitProject(lease, op, ctx) {
       if (lease.projectKind !== 'project') {
         return Promise.reject(new ProtectedScopedMemoryError('PROJECT_SCOPE_REQUIRED'))
       }
-      return withLeaseIo(lease, () => commitOne(lease, projectScope(lease.projectId), op))
+      return withLeaseIo(lease, () => commitOne(lease, projectScope(lease.projectId), op, ctx))
     },
     forgetGlobal: (lease, factId, reason, humanConfirmed) => withLeaseIo(
       lease,

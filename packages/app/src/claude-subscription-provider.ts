@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process'
 import {
   actionEvidence,
   attachProviderActionEvidence,
+  attachProviderToolExecutions,
   promptFromSpans,
   type ActionEvidence,
   type ModelProgressSink,
@@ -20,6 +21,7 @@ import {
   type ModelToolRuntimeContext,
   type ProviderAdapter,
   type ProviderError,
+  type ProviderToolExecution,
 } from '@aisy/core'
 
 import {
@@ -228,6 +230,22 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const run = deps.run ?? defaultRun(executable, timeoutMs, deps.environment)
   const allowedTools = deps.tools.map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`)
+  const ordinalByTurn = new Map<string, number>()
+  const turnKey = (request: Pick<ModelRequest, 'sessionId' | 'turnId'>): string =>
+    `${request.sessionId}\0${request.turnId ?? ''}`
+  const nextOrdinal = (
+    request: Pick<ModelRequest, 'sessionId' | 'turnId' | 'toolOrdinalBase'>,
+  ): number => {
+    const key = turnKey(request)
+    const base = request.toolOrdinalBase ?? 0
+    const next = Math.max(ordinalByTurn.get(key) ?? 0, base) + 1
+    if (!Number.isSafeInteger(next)) throw new Error('PROVIDER_TOOL_ORDINAL_EXHAUSTED')
+    if (!ordinalByTurn.has(key) && ordinalByTurn.size >= 10_000) {
+      ordinalByTurn.delete(ordinalByTurn.keys().next().value as string)
+    }
+    ordinalByTurn.set(key, next)
+    return next
+  }
 
   return {
     async complete(
@@ -236,20 +254,46 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
       onProgress?: ModelProgressSink,
     ): Promise<ModelResponse> {
       const abort = signal ?? new AbortController().signal
-      let sequence = 0
       const actionEvidenceLog: ActionEvidence[] = []
+      const toolExecutions: ProviderToolExecution[] = []
       const bridge = await startAisyMcpBridge({
         serverName: MCP_SERVER_NAME,
         tools: deps.tools,
         invoke: async (call) => {
-          const toolCallId = `mcp-${++sequence}`
+          const ordinal = nextOrdinal(req)
+          await req.markToolAttempt?.(ordinal)
+          const toolCallId = `mcp-${ordinal}`
           void onProgress?.({
             type: 'tool-requested', toolCallId, name: call.name, args: call.args,
           })
-          const result = await deps.invokeTool(call, abort, Object.freeze({
+          const context = Object.freeze({
             sessionId: req.sessionId,
             ...(req.turnId === undefined ? {} : { turnId: req.turnId }),
-          }))
+            ordinal,
+          })
+          let result
+          try {
+            result = await deps.invokeTool(call, abort, context)
+          } catch (error) {
+            toolExecutions.push({
+              call,
+              context,
+              result: { ok: false, output: 'TOOL_EXECUTION_FAILED' },
+            })
+            throw error
+          }
+          toolExecutions.push({
+            call,
+            context,
+            result: {
+              ok: !result.isError,
+              output: result.text,
+              ...(result.receipt === true ? { verified: true } : {}),
+              ...(result.mutationReceipt === undefined
+                ? {}
+                : { mutationReceipt: result.mutationReceipt }),
+            },
+          })
           void onProgress?.({ type: 'tool-result', toolCallId, result: result.text })
           return result
         },
@@ -297,10 +341,13 @@ export function makeClaudeSubscriptionProvider(deps: ClaudeSubscriptionDeps): Pr
           throw new ClaudeSubscriptionError('server-error', 'NATIVE_TOOLS_EXPOSED')
         }
         if (parsed.usage !== undefined) void onProgress?.({ type: 'usage', ...parsed.usage })
-        return attachProviderActionEvidence({
-          reply: parsed.reply,
-          ...(parsed.usage === undefined ? {} : { usage: parsed.usage }),
-        }, actionEvidenceLog)
+        return attachProviderToolExecutions(
+          attachProviderActionEvidence({
+            reply: parsed.reply,
+            ...(parsed.usage === undefined ? {} : { usage: parsed.usage }),
+          }, actionEvidenceLog),
+          toolExecutions,
+        )
       } finally {
         await bridge.close()
       }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Update, UserFromGetMe } from 'grammy/types'
 
 import { makeGateway, type AgentRunner } from '@aisy/core'
@@ -85,6 +85,8 @@ function harness(
   checkpointStoreOverride?: TelegramExecutionCheckpointStore,
   buildExecutionRunner?: TelegramBotDeps['buildExecutionRunner'],
   durableTurnControl?: TelegramBotDeps['durableTurnControl'],
+  afterReplyDelivered?: TelegramBotDeps['afterReplyDelivered'],
+  failFinalEdit = false,
 ) {
   let untrustedContext = false
   let messageId = 100
@@ -112,6 +114,7 @@ function harness(
     acquireTurnRuntime: async () => ({ sessionId: 'session-a', runner }),
     ...(buildExecutionRunner === undefined ? {} : { buildExecutionRunner }),
     ...(durableTurnControl === undefined ? {} : { durableTurnControl }),
+    ...(afterReplyDelivered === undefined ? {} : { afterReplyDelivered }),
     setUntrustedContext: (untrusted: boolean) => { untrustedContext = untrusted },
     model: 'test-model',
     debounceMs: 1,
@@ -132,6 +135,7 @@ function harness(
   bot.botInfo = BOT_INFO
   bot.api.config.use(async (_previous, method, payload) => {
     calls.push({ method, payload: payload as Record<string, unknown> })
+    if (failFinalEdit && method === 'editMessageText') throw new Error('ambiguous edit')
     if (method === 'sendMessage') {
       return {
         ok: true,
@@ -490,6 +494,41 @@ describe('Telegram structured reply streaming', () => {
     expect(h.calls.some(call => call.method === 'editMessageText' &&
       call.payload['text'] === 'Привет мир')).toBe(true)
     expect(h.checkpointContent()).toBeUndefined()
+  })
+
+  it('starts background learning only after the terminal reply was delivered', async () => {
+    let h!: ReturnType<typeof harness>
+    const observed: string[] = []
+    h = harness({
+      async handle() {
+        return { state: 'ok', reply: 'Основной ответ', narrowed: false }
+      },
+    }, false, undefined, undefined, undefined, undefined, ({ result }) => {
+      const delivered = h.calls.some(call => call.method === 'sendMessage' &&
+        call.payload['text'] === 'Основной ответ')
+      observed.push(`${delivered}:${result.reply}`)
+    })
+
+    await h.bot.handleUpdate(textUpdate(1, 'Ответь'))
+    await waitFor(() => observed.length === 1)
+
+    expect(observed).toEqual(['true:Основной ответ'])
+  })
+
+  it('does not confirm learning when the final Telegram edit is delivery-uncertain', async () => {
+    const afterReplyDelivered = vi.fn()
+    const h = harness({
+      async handle(input) {
+        await input.onProgress?.({ type: 'outbound-lockout', locked: false })
+        await input.onProgress?.({ type: 'text-delta', text: 'черновик' })
+        return { state: 'ok', reply: 'точный финал', narrowed: false }
+      },
+    }, false, undefined, undefined, undefined, undefined, afterReplyDelivered, true)
+
+    await h.bot.handleUpdate(textUpdate(1, 'Ответь'))
+    await waitFor(() => h.calls.some(call => call.method === 'editMessageText'))
+
+    expect(afterReplyDelivered).not.toHaveBeenCalled()
   })
 
   it('delivers the answer of a narrowed turn instead of holding it for a tap', async () => {

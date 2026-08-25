@@ -1032,6 +1032,38 @@ describe('dormant durable delegation provider/tool adapter', () => {
 })
 
 describe('dormant durable delegation provider/tool adapter V2', () => {
+  it('keeps AgentLoop ordinal state hashable while reattaching pre-effect authority only to dispatch', async () => {
+    const root = runRoot()
+    const attempts: number[] = []
+    const modelRequest: ModelRequest = { ...request(), toolOrdinalBase: 7 }
+    Object.defineProperty(modelRequest, 'markToolAttempt', {
+      value: async (ordinal: number) => { attempts.push(ordinal) },
+      enumerable: false,
+    })
+    const adapter = makeDurableDelegationLiveAdapterV2(v2Deps({
+      root,
+      providerQuote: quoted => {
+        expect(quoted.toolOrdinalBase).toBe(7)
+        expect(Object.hasOwn(quoted, 'markToolAttempt')).toBe(false)
+        return { iterations: 1, spendUsdNanos: 100 }
+      },
+      providerStart: dispatched => {
+        expect(dispatched.toolOrdinalBase).toBe(7)
+        expect(Object.getOwnPropertyDescriptor(dispatched, 'markToolAttempt'))
+          .toMatchObject({ enumerable: false })
+        return operation((async () => {
+          await dispatched.markToolAttempt?.(8)
+          return providerFinalized({ reply: 'provider-owned tool completed' })
+        })())
+      },
+    }))
+
+    await expect(adapter.provider.complete(modelRequest)).resolves.toMatchObject({
+      reply: 'provider-owned tool completed',
+    })
+    expect(attempts).toEqual([8])
+  })
+
   it('holds budget and persists prepared intent before the first external call', async () => {
     const root = runRoot()
     const resolvedAuthority = authority()

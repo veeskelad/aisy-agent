@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import {
   deriveDeterministicMemoryFactKey,
   makeContextLeaseCoordinator,
+  makeToolExecutor,
   type ProtectedMemoryScope,
 } from '@aisy/core'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -343,6 +344,80 @@ describe('protected memory preview runtime', () => {
     await expect(restarted.store.listLiveFacts()).resolves.toEqual([])
     expect(existsSync(runtimePaths.semantic)).toBe(false)
     restarted.close()
+  })
+
+  it('replays one verified remember as one durable fact after executor restart', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'aisy-protected-remember-replay-')))
+    roots.push(root)
+    const runtimePaths = paths(root)
+    const globalScope: ProtectedMemoryScope = { kind: 'global', scopeId: 'global' }
+    let leaseOperation = 0
+    const leases = makeContextLeaseCoordinator({ newId: () => `lease-${++leaseOperation}` })
+    const lease = leases.acquire({
+      operatorId: 'telegram:42', profileId: 'default', projectId: 'workspace-a',
+      projectKind: 'workspace', sessionId: 'session-remember', root: runtimePaths.contentRoot,
+      generation: 1,
+    })
+    const open = () => makeNodeProtectedMemoryScopeRuntime({
+      mode: 'preview', paths: runtimePaths, operatorId: lease.operatorId,
+      profileId: lease.profileId, scope: globalScope, leases, descriptor: { provider: 'none' },
+      nowIso: () => '2026-08-25T20:00:00.000Z', newFactId: () => 'unused-random-fact',
+      deliverPublicationAuditOnce: async () => undefined,
+      deliverDeletionAuditOnce: async () => undefined,
+      deliverUpdateAuditOnce: async () => undefined,
+    })
+    const execute = (runtime: ReturnType<typeof open>) => {
+      const router = makeNodeProtectedMemoryPreviewRouter({
+        leases,
+        globalRuntime: runtime,
+        projectRuntime: () => null,
+        newFactId: () => 'unused-router-fact',
+        provenanceFor: ({ lease: activeLease }) =>
+          `${activeLease.sessionId}:turn-remember:remember`,
+        authorizeHumanConfirmedDelete: async () => false,
+      })
+      if (router === null) throw new Error('protected router expected')
+      return makeToolExecutor({
+        workspaceRoot: runtimePaths.contentRoot,
+        fs: {
+          readFile: () => '', writeFile: () => undefined, listDir: () => [], exists: () => false,
+        },
+        memory: {
+          commit: (op, ctx) => router.commitGlobal(lease, op, ctx),
+        },
+      })
+    }
+    const context = { sessionId: lease.sessionId, turnId: 'turn-remember', ordinal: 1 }
+    const toolCall = { name: 'remember', args: { fact: 'ты предпочитаешь краткие отчёты' } } as const
+
+    const first = open()
+    if (first.mode !== 'preview') throw new Error('preview runtime expected')
+    await first.recovery.recoverScope(lease, globalScope)
+    await expect(execute(first)(toolCall, context)).resolves.toMatchObject({
+      ok: true, output: 'Запомнил, что ты предпочитаешь краткие отчёты', verified: true,
+    })
+    first.close()
+
+    const restarted = open()
+    if (restarted.mode !== 'preview') throw new Error('preview runtime expected')
+    try {
+      await restarted.recovery.recoverScope(lease, globalScope)
+      const replay = await execute(restarted)(toolCall, context)
+      expect(replay).toMatchObject({
+        ok: true, output: 'Запомнил, что ты предпочитаешь краткие отчёты', verified: true,
+      })
+      const replayId = replay.mutationReceipt?.operationId
+      expect(replayId).toMatch(/^[a-f0-9]{64}$/)
+      await expect(restarted.store.loadLiveFactById(replayId!)).resolves.toMatchObject({
+        id: replayId, text: 'ты предпочитаешь краткие отчёты',
+      })
+      await expect(execute(restarted)({
+        name: 'remember', args: { fact: 'ты предпочитаешь подробные отчёты' },
+      }, context)).resolves.toMatchObject({ ok: false })
+      await expect(restarted.store.listLiveFacts()).resolves.toHaveLength(1)
+    } finally {
+      restarted.close()
+    }
   })
 
   it.each([

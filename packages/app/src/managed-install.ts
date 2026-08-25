@@ -26,8 +26,19 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import {
+  prepareNodeAutoSkillRollback,
+  resumeNodeAutoSkillWritesAfterRollForward,
+  verifyNodeAutoSkillRollback,
+} from './auto-skill-store.js'
+
 export const MANAGED_ORIGIN = 'https://github.com/veeskelad/aisy-agent.git'
 export const MANAGED_BRANCH = 'master'
+
+const nodeAutoSkillRoot = (): string => join(
+  process.env['AISY_HOME'] ?? join(homedir(), '.aisy'),
+  'auto-skills-v2',
+)
 
 const COMMIT = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/
 const GENERATION = /^g-[a-f0-9]{16,64}$/
@@ -82,12 +93,22 @@ export interface ManagedUpdatePorts {
   isAncestor(root: string, current: string, target: string): boolean
   prepareRelease(root: string, commit: string): void
   verifyRelease(root: string, commit: string, mode: 'bootstrap' | 'update' | 'rollback'): void
+  prepareAutoSkillRollback(targetCommit: string): AutoSkillRollbackAuthorization
+  verifyAutoSkillRollback(
+    targetCommit: string,
+    authorization: AutoSkillRollbackAuthorization,
+  ): void
   removeRelease(root: string, commit: string): void
   pruneWorktrees(root: string): void
   withOperationLock<T>(root: string, body: () => T): T
   generationId(): string
   fault(point: string): void
 }
+
+export type AutoSkillRollbackAuthorization = Readonly<
+  | { kind: 'state-absent' }
+  | { kind: 'rollback-safe'; certificateId: string }
+>
 
 interface OperationInput {
   root: string
@@ -101,6 +122,11 @@ interface BootstrapInput extends OperationInput {
 
 interface UpdateInput extends OperationInput {
   allowRewrite?: string
+}
+
+interface ResumeAutoSkillsInput extends OperationInput {
+  autoSkillRoot: string
+  currentCommit: string
 }
 
 function canonicalJson(value: object): string {
@@ -426,6 +452,7 @@ function publishGeneration(
   current: string,
   previous: string | null,
   ports: ManagedUpdatePorts,
+  beforeActiveSwitch: () => void = () => undefined,
 ): ActiveGeneration {
   const id = `g-${ports.generationId()}`
   if (!GENERATION.test(id)) throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
@@ -448,6 +475,7 @@ function publishGeneration(
     ports.fault('generation:after-dir-fsync')
     symlinkSync(join('generations', id), temporary)
     fsyncDirectory(root)
+    beforeActiveSwitch()
     ports.fault('active:before-rename')
     renameSync(temporary, join(root, 'active'))
     ports.fault('active:after-rename')
@@ -703,7 +731,14 @@ export function updateManagedInstall(
         oldCommit: active.current, newCommit: target,
       })
       ports.fault('journal:after-verified')
-      const generation = publishGeneration(input.root, target, active.current, ports)
+      const authorization = ports.prepareAutoSkillRollback(target)
+      const generation = publishGeneration(
+        input.root,
+        target,
+        active.current,
+        ports,
+        () => ports.verifyAutoSkillRollback(target, authorization),
+      )
       writeJournal(journalPath, {
         schemaVersion: 1, operation: 'update', phase: 'SWITCHED',
         oldCommit: active.current, newCommit: target,
@@ -735,7 +770,16 @@ export function updateManagedInstall(
       oldCommit: active.current, newCommit: target,
     })
     ports.fault('journal:after-verified')
-    const generation = publishGeneration(input.root, target, active.current, ports)
+    const authorization = descendant ? null : ports.prepareAutoSkillRollback(target)
+    const generation = publishGeneration(
+      input.root,
+      target,
+      active.current,
+      ports,
+      authorization === null
+        ? undefined
+        : () => ports.verifyAutoSkillRollback(target, authorization),
+    )
     writeJournal(journalPath, {
       schemaVersion: 1, operation: 'update', phase: 'SWITCHED',
       oldCommit: active.current, newCommit: target,
@@ -763,12 +807,19 @@ export function rollbackManagedInstall(
       if (error instanceof ManagedUpdateFailure) throw error
       throw new ManagedUpdateFailure('UPDATE_DOCTOR_FAILED')
     }
+    const authorization = ports.prepareAutoSkillRollback(active.previous)
     const journalPath = join(input.root, 'update-state.json')
     writeJournal(journalPath, {
       schemaVersion: 1, operation: 'rollback', phase: 'VERIFIED',
       oldCommit: active.current, newCommit: active.previous,
     })
-    const generation = publishGeneration(input.root, active.previous, active.current, ports)
+    const generation = publishGeneration(
+      input.root,
+      active.previous,
+      active.current,
+      ports,
+      () => ports.verifyAutoSkillRollback(active.previous!, authorization),
+    )
     writeJournal(journalPath, {
       schemaVersion: 1, operation: 'rollback', phase: 'SWITCHED',
       oldCommit: active.current, newCommit: active.previous,
@@ -776,6 +827,32 @@ export function rollbackManagedInstall(
     clearJournal(journalPath)
     publishLauncher(input.root, input.binDir, uid)
     return generation
+  })
+}
+
+export function resumeManagedAutoSkillsAfterRollForward(
+  input: ResumeAutoSkillsInput,
+  ports: ManagedUpdatePorts = nodeManagedUpdatePorts(),
+): ActiveGeneration {
+  safeCommit(input.currentCommit)
+  const uid = ports.effectiveUid()
+  if (uid === 0) throw new ManagedUpdateFailure('UPDATE_SOURCE_REFUSED')
+  assertLayout(input.root, uid)
+  assertLauncherAvailable(input.root, input.binDir, uid)
+  return operation(input.root, ports, () => {
+    const active = readGeneration(input.root) as ActiveGeneration
+    if (active.current !== input.currentCommit) {
+      throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+    }
+    try {
+      resumeNodeAutoSkillWritesAfterRollForward({
+        root: input.autoSkillRoot,
+        currentCommit: input.currentCommit,
+      })
+    } catch {
+      throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+    }
+    return active
   })
 }
 
@@ -1000,6 +1077,35 @@ export function nodeManagedUpdatePorts(): ManagedUpdatePorts {
         throw new ManagedUpdateFailure('UPDATE_DOCTOR_FAILED')
       }
     },
+    prepareAutoSkillRollback: (targetCommit) => {
+      const root = nodeAutoSkillRoot()
+      try {
+        const authorization = prepareNodeAutoSkillRollback({ root, targetCommit })
+        return Object.freeze({
+          kind: 'rollback-safe' as const,
+          certificateId: authorization.certificateId,
+        })
+      } catch {
+        throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+      }
+    },
+    verifyAutoSkillRollback: (targetCommit, authorization) => {
+      const root = nodeAutoSkillRoot()
+      try {
+        if (authorization.kind !== 'rollback-safe' || !verifyNodeAutoSkillRollback({
+          root,
+          authorization: {
+            certificateId: authorization.certificateId,
+            targetCommit,
+          },
+        })) {
+          throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+        }
+      } catch (error) {
+        if (error instanceof ManagedUpdateFailure) throw error
+        throw new ManagedUpdateFailure('UPDATE_STATE_REFUSED')
+      }
+    },
     removeRelease: (root, commit) => {
       const path = releasePath(root, commit)
       const registered = registeredWorktree(root, path)
@@ -1077,33 +1183,46 @@ export async function runManagedUpdateCli(
     err: value => process.stderr.write(`${value}\n`),
   },
 ): Promise<number> {
-  const operation = argv.length === 0
+  const requested = argv.length === 0
     ? { kind: 'update' as const }
     : argv.length === 1 && argv[0] === '--rollback'
       ? { kind: 'rollback' as const }
-      : argv.length === 1 && argv[0] === '--cleanup'
-        ? { kind: 'cleanup' as const }
-        : argv.length === 1 && argv[0]?.startsWith('--allow-rewrite=') &&
+    : argv.length === 1 && argv[0] === '--cleanup'
+      ? { kind: 'cleanup' as const }
+      : argv.length === 1 && argv[0] === '--resume-auto-skills'
+        ? { kind: 'resume-auto-skills' as const }
+      : argv.length === 1 && argv[0]?.startsWith('--allow-rewrite=') &&
           COMMIT.test(argv[0].slice('--allow-rewrite='.length))
           ? { kind: 'rewrite' as const, commit: argv[0].slice('--allow-rewrite='.length) }
           : null
-  if (operation === null) {
-    io.err('usage: aisy update [--rollback | --cleanup | --allow-rewrite=<full-sha>]')
+  if (requested === null) {
+    io.err('usage: aisy update [--rollback | --cleanup | --resume-auto-skills | --allow-rewrite=<full-sha>]')
     return 2
   }
   try {
     const modulePath = fileURLToPath(import.meta.url)
     const root = inferInstallRoot(modulePath)
     const binDir = dirname(process.argv[1] ?? join(homedir(), '.local', 'bin', 'aisy'))
+    if (requested.kind === 'resume-auto-skills') {
+      const releaseCommit = basename(resolve(dirname(modulePath), '../../..'))
+      const generation = resumeManagedAutoSkillsAfterRollForward({
+        root,
+        binDir,
+        autoSkillRoot: nodeAutoSkillRoot(),
+        currentCommit: releaseCommit,
+      })
+      io.out(`Aisy auto-skills=ready current=${generation.current}`)
+      return 0
+    }
     let generation: ActiveGeneration
-    if (operation.kind === 'update') {
+    if (requested.kind === 'update') {
       generation = updateManagedInstall({ root, binDir })
-    } else if (operation.kind === 'rollback') {
+    } else if (requested.kind === 'rollback') {
       generation = rollbackManagedInstall({ root, binDir })
-    } else if (operation.kind === 'cleanup') {
+    } else if (requested.kind === 'cleanup') {
       generation = cleanupManagedInstall({ root, binDir })
     } else {
-      generation = updateManagedInstall({ root, binDir, allowRewrite: operation.commit })
+      generation = updateManagedInstall({ root, binDir, allowRewrite: requested.commit })
     }
     io.out(`Aisy current=${generation.current} previous=${generation.previous ?? 'none'}`)
     return 0

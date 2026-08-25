@@ -855,6 +855,7 @@ export type {
   OwnedDockerRecoveryReadinessProbe,
   ProviderBrokerReadinessProbe,
   TranscriptionReadinessProbe,
+  AutoSkillReadinessProbe,
 } from './onboarding/types.js'
 export { makeCredentialTerminalPrompt, makeNodeCredentialTerminalPrompt, CredentialTerminalError } from './runtime/credential-terminal.js'
 export type { CredentialTerminalInput, CredentialTerminalOutput, CredentialTerminalPrompt } from './runtime/credential-terminal.js'
@@ -977,6 +978,8 @@ export type {
   ActionCompletionStatus,
   ActionContractKind,
   ActionMissingEvidence,
+  VerifiedWorkflowObserver,
+  VerifiedWorkflowStepObservation,
 } from './agent-loop/types.js'
 
 export {
@@ -984,15 +987,18 @@ export {
   actionRecoveryInstruction,
   actionToolFamily,
   attachProviderActionEvidence,
+  attachProviderToolExecutions,
   classifyActionContract,
   evaluateActionContract,
   readProviderActionEvidence,
+  readProviderToolExecutions,
 } from './agent-loop/action-contract.js'
 export type {
   ActionContract,
   ActionContractVerdict,
   ActionEvidence,
   ActionToolFamily,
+  ProviderToolExecution,
 } from './agent-loop/action-contract.js'
 
 // --- AgentCard loader (Tier-3, ADR-0039/0052) ---

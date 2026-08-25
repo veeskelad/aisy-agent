@@ -36,6 +36,8 @@ export interface McpBridgeResult {
   readonly isError: boolean
   /** In-process verification metadata. Never serialized onto the MCP wire. */
   readonly receipt?: boolean
+  /** In-process typed mutation receipt; never serialized onto the MCP wire. */
+  readonly mutationReceipt?: unknown
 }
 
 export interface AisyMcpBridge {

@@ -41,6 +41,8 @@ export interface AgentRunnerDeps {
   preToolDispatch?: AgentLoopDeps['preToolDispatch']
   /** Internal protocol observer for the filtered result returned to the model. */
   postToolDispatch?: AgentLoopDeps['postToolDispatch']
+  /** Typed receipt observer used by the private auto-skill canary. */
+  verifiedWorkflow?: AgentLoopDeps['verifiedWorkflow']
   /** Human approval round-trip — the transport issues a card and awaits the tap. */
   approve: (action: PendingAction) => Promise<ApprovalDecision>
   guardian: LoopGuardian
@@ -168,6 +170,7 @@ export function makeAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       : { propagateToolInterruption: deps.propagateToolInterruption }),
     ...(deps.preToolDispatch === undefined ? {} : { preToolDispatch: deps.preToolDispatch }),
     ...(deps.postToolDispatch === undefined ? {} : { postToolDispatch: deps.postToolDispatch }),
+    ...(deps.verifiedWorkflow === undefined ? {} : { verifiedWorkflow: deps.verifiedWorkflow }),
     ...(deps.maxReplans !== undefined ? { maxReplans: deps.maxReplans } : {}),
     ...(deps.maxTotalToolCalls !== undefined ? { maxTotalToolCalls: deps.maxTotalToolCalls } : {}),
     ...(deps.budgetCheck !== undefined ? { budgetCheck: deps.budgetCheck } : {}),

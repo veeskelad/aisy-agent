@@ -253,9 +253,12 @@ export function makeVerifiedWorkflowEvidence(input: Readonly<{
     JSON.stringify([scopeKey, input.registry.revision, canonical]),
   )
   const skillIdentity = hash(
-    'aisy-auto-skill-identity/v1',
-    JSON.stringify([workflowFingerprint, input.registry.revision,
-      steps.map(step => step.descriptorId)]),
+    'aisy-auto-skill-identity/v2',
+    // Stable procedure identity: registry revision, placeholder slots and
+    // postconditions belong to the revision fingerprint. Keeping them out of
+    // this key lets a verified v2 candidate retain a durable previous pointer
+    // and roll back to v1 instead of appearing as an unrelated skill.
+    JSON.stringify([scopeKey, steps.map(step => step.descriptorId)]),
   )
   const evidenceId = hash(
     'aisy-auto-skill-evidence/v1',
@@ -337,9 +340,8 @@ export function parseVerifiedWorkflowEvidence(value: unknown): VerifiedWorkflowE
     JSON.stringify([root['scopeKey'], root['registryRevision'], canonical]),
   )
   const skillIdentity = hash(
-    'aisy-auto-skill-identity/v1',
-    JSON.stringify([workflowFingerprint, root['registryRevision'],
-      frozenSteps.map(step => step.descriptorId)]),
+    'aisy-auto-skill-identity/v2',
+    JSON.stringify([root['scopeKey'], frozenSteps.map(step => step.descriptorId)]),
   )
   const evidenceId = hash(
     'aisy-auto-skill-evidence/v1',

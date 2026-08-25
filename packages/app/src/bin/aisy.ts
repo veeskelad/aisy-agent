@@ -8,7 +8,7 @@
 // jsonl session log (ADR-0048, Tier-1 wiring). Full crash-resume
 // (SessionLog.resume) is still deferred.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, appendFileSync, realpathSync, renameSync, statSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, appendFileSync, realpathSync, renameSync, statSync, unlinkSync, openSync, fsyncSync, closeSync } from 'node:fs'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { homedir } from 'node:os'
@@ -79,6 +79,8 @@ import {
   isNewerVersion,
   VoiceUnavailable,
   parseDuckDuckGo,
+  parseMemoryRememberReceipt,
+  sameAutoSkillModelIdentity,
   type AnthropicTool,
   type ApprovalDecision,
   type FsPort,
@@ -103,6 +105,22 @@ import { makeSetupTelegramBot } from '../setup-bot.js'
 import { makeServiceKeyStore } from '../service-keys.js'
 import { makeOnboardingBrief } from '../onboarding-brief.js'
 import { makeOnboardingProgress, TOPIC_LABEL } from '../onboarding-progress.js'
+import {
+  makeAutoSkillLiveRuntime,
+  makeAutoSkillPlanningProvider,
+  MEMORY_AUTO_SKILL_REGISTRY,
+  selectAutoSkillCanary,
+  type AutoSkillLiveRuntime,
+} from '../auto-skill-live-runtime.js'
+import {
+  inspectNodeAutoSkillStoreV2,
+  makeNodeAutoSkillStoreV2,
+} from '../auto-skill-store.js'
+import { makeAutoSkillWorker } from '../auto-skill-worker.js'
+import {
+  makeProviderSkillRecipeGenerator,
+  makeProviderSkillRecipeJudge,
+} from '../auto-skill-provider-ports.js'
 import { makeOperatorProfileWriter } from '../operator-profile.js'
 import {
   claudeCodeEnvironment,
@@ -662,6 +680,12 @@ if (argv[0] !== 'run') {
             statusPath: '/run/aisy/voice-status.json',
           },
         }),
+        autoSkills: {
+          inspect: () => inspectNodeAutoSkillStoreV2({
+            root: join(doctorBase, 'auto-skills-v2'),
+            enabled: doctorCfg('AISY_AUTO_SKILLS') === '1',
+          }),
+        },
         mediaInbox: {
           writerLock: () => inspectMediaInboxWriterLock({
             inboxRoot: join(doctorBase, 'media-inbox'),
@@ -789,6 +813,9 @@ const chatIdRaw = cfg('AISY_TELEGRAM_CHAT_ID') ?? ''
 const postToolUse = {
   secretValues: makeLiveSecretValues({ vault: vaultState, dotenv: dotenvState, processEnv: process.env }),
 }
+// Resolved after makeTelegramBot. Background workers retain only this send
+// closure and never receive the bot token or Telegram API object.
+let sendProactiveRef: ((text: string) => Promise<void>) | null = null
 // Provider selection from ~/.aisy/providers.json (per-tier or a single default).
 // Back-compat: no file ⇒ Anthropic + AISY_PROVIDER_MODEL + the legacy reasoning key.
 interface ProviderSel {
@@ -1443,6 +1470,18 @@ const lifecycleRuntime = makeNodeProjectLifecycleAuthorityRuntime({
   },
 })
 
+// Project/session lifecycle is composed before providers and the optional
+// auto-skill canary. The indirection keeps forgetting active even when the
+// canary is off, without constructing the private v2 store on ordinary turns.
+let forgetAutoSkillsBySource: ((selector: Readonly<{
+  projectId?: string
+  sessionId?: string
+}>) => void) | null = null
+let claimAutoSkillsBySource: ((selector: Readonly<{
+  projectId?: string
+  sessionId?: string
+}>) => void) | null = null
+
 // Per-turn context lease (ADR-0060): every scoped subsystem — protected memory,
 // transcript, project tools — takes its authority from this coordinator rather
 // than from ambient process state. It belongs to the project service, because
@@ -1455,6 +1494,14 @@ const projectRuntime = makeNodeProjectServiceRuntime({
   newReceiptId: () => randomUUID(),
   newLeaseId: () => randomUUID(),
   lifecycle: lifecycleRuntime.lifecycle,
+  beforeArchive: (event) => {
+    const selector = event.kind === 'project.archived'
+      ? { projectId: event.projectId }
+      : event.kind === 'session.archived' && event.sessionId !== undefined
+        ? { sessionId: event.sessionId }
+        : null
+    if (selector !== null) claimAutoSkillsBySource?.(selector)
+  },
   // Каскад забывания (спека 24 §7, AC-24-10). Объявление поднято, а журнал
   // автономности создаётся ниже: к моменту первой архивации он уже есть.
   emit: (event) => { forgetAutonomyOn(event) },
@@ -1837,14 +1884,19 @@ const memory: MemoryPort = {
 
 const sessionLogPath = join(base, 'session-log.jsonl')
 const sessionLog: SessionLog = makeJsonlSessionLog({
-  appendLine: (line) => appendFileSync(sessionLogPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
+  appendLine: (line) => {
+    const existed = existsSync(sessionLogPath)
+    appendFileSync(sessionLogPath, line + '\n', { encoding: 'utf8', mode: 0o600 })
+    const descriptor = openSync(sessionLogPath, 'r')
+    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+    if (!existed) {
+      const directory = openSync(base, 'r')
+      try { fsyncSync(directory) } finally { closeSync(directory) }
+    }
+  },
   readLines: () => {
     if (!existsSync(sessionLogPath)) return []
-    try {
-      return readFileSync(sessionLogPath, 'utf8').split('\n').filter((l) => l.trim().length > 0)
-    } catch {
-      return []
-    }
+    return readFileSync(sessionLogPath, 'utf8').split('\n').filter((l) => l.trim().length > 0)
   },
 })
 
@@ -1907,6 +1959,9 @@ function forgetAutonomyOn(event: ProjectServiceEvent): void {
       emit: (name, payload) => { void journal.append('autonomy', name, payload) },
     })
   } catch { /* архивация проекта не падает из-за журнала автономности */ }
+  try {
+    forgetAutoSkillsBySource?.(selector)
+  } catch { /* source lifecycle остаётся доступен при повреждённом optional store */ }
 }
 
 /** Ключ процесса для одного вызова, или null — вызов не входит ни в один. */
@@ -2530,7 +2585,7 @@ const primaryAdapter: ProviderAdapter = providersCfg.tiers
       routine: adapterFor(providersCfg.tiers.routine),
     })
   : adapterFor(defaultSel)
-const provider: ProviderAdapter = providersCfg.fallback
+let provider: ProviderAdapter = providersCfg.fallback
   ? makeFailoverProvider(primaryAdapter, adapterFor(providersCfg.fallback))
   : primaryAdapter
 // Compaction runs on the routine tier when one is configured — it is a rewrite,
@@ -2541,6 +2596,114 @@ compactionProvider = adapterFor(providersCfg.tiers?.routine ?? defaultSel, [])
 // (cost.summary) to show the tiered note instead of a fake model name (#15).
 // Keep the two literals in sync; the event-bridge spec asserts on this exact value.
 const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
+
+// Typed private auto-skills are an explicit production canary. With the flag
+// off this branch performs no store/artifact I/O and installs neither evidence
+// observation nor learned overlays.
+const autoSkillsEnabled = cfg('AISY_AUTO_SKILLS') === '1'
+const autoSkillStateRoot = join(base, 'auto-skills-v2')
+const autoSkillSourceArchived = (source: Readonly<{
+  kind: 'session' | 'project'
+  id: string
+}>): boolean => {
+  const snapshot = registryPair.registry.snapshot()
+  return source.kind === 'project'
+    ? snapshot.projects.some(item => item.id === source.id &&
+      item.operatorId === staticWorkBinding.operatorId &&
+      item.profileId === staticWorkBinding.profileId && item.archivedAt !== undefined)
+    : snapshot.sessions.some(item => item.id === source.id && item.status === 'archived' &&
+      snapshot.projects.some(project => project.id === item.projectId &&
+        project.operatorId === staticWorkBinding.operatorId &&
+        project.profileId === staticWorkBinding.profileId))
+}
+const autoSkillRuntime: AutoSkillLiveRuntime | null = selectAutoSkillCanary(
+  autoSkillsEnabled,
+  () => {
+      const generatorSelection = providersCfg.tiers?.routine ?? defaultSel
+      const judgeSelection = providersCfg.tiers?.critique ?? defaultSel
+      const capabilityRevision = `cap-${createHash('sha256')
+        .update('aisy.auto-skill.capabilities.v1\0')
+        .update(JSON.stringify({
+          tools: mainProviderTools.map(tool => tool.name).sort(),
+          skills: [...activeSkillNames].sort(),
+          mcp: [...activeMcpServers].sort(),
+        }))
+        .digest('hex').slice(0, 32)}`
+      const generator = makeProviderSkillRecipeGenerator({
+        provider: adapterFor(generatorSelection, []),
+        providerId: generatorSelection.provider,
+        model: generatorSelection.model,
+      })
+      const judge = makeProviderSkillRecipeJudge({
+        provider: adapterFor(judgeSelection, []),
+        providerId: judgeSelection.provider,
+        model: judgeSelection.model,
+      })
+      if (sameAutoSkillModelIdentity(generator.identity, judge.identity)) {
+        throw new Error('AUTO_SKILL_JUDGE_IDENTITY_CONFLICT')
+      }
+      const store = makeNodeAutoSkillStoreV2({ root: autoSkillStateRoot })
+      const worker = makeAutoSkillWorker({
+        store, registry: MEMORY_AUTO_SKILL_REGISTRY, generator, judge,
+      })
+      const runtime = makeAutoSkillLiveRuntime({
+        store,
+        scope: {
+          botId: staticWorkBinding.botId ?? activeBot?.id ?? null,
+          operatorId: staticWorkBinding.operatorId,
+          profileId: staticWorkBinding.profileId,
+          projectId: staticWorkBinding.projectId,
+          resourceScope: 'project-workspace',
+          capabilityRevision,
+        },
+        worker,
+        sourceArchived: autoSkillSourceArchived,
+        notify: async text => {
+          if (sendProactiveRef === null) throw new Error('TELEGRAM_SEND_UNAVAILABLE')
+          await sendProactiveRef(text)
+        },
+        emit: (event, payload) => { void journal.append('auto-skill', event, payload) },
+      })
+      runtime.recoverStartup()
+      journal.append('auto-skill', 'auto_skill.canary_ready', runtime.doctor())
+      return runtime
+  },
+)
+forgetAutoSkillsBySource = (selector) => {
+  if (autoSkillRuntime !== null) {
+    autoSkillRuntime.completeSourceForget(selector)
+    return
+  }
+  // Canary-off forbids observation/overlay I/O, but source forgetting remains
+  // an enforcement gate for state left by an earlier enabled release.
+  if (!existsSync(autoSkillStateRoot)) return
+  const store = makeNodeAutoSkillStoreV2({ root: autoSkillStateRoot })
+  const claim = store.claimBySource(selector)
+  store.purgeClaim(claim.claimId)
+  void journal.append('auto-skill', 'auto_skill.source_forgotten', {
+    affected: claim.affected,
+    canaryEnabled: false,
+  })
+}
+claimAutoSkillsBySource = (selector) => {
+  if (autoSkillRuntime !== null) {
+    autoSkillRuntime.claimSource(selector)
+    return
+  }
+  if (!existsSync(autoSkillStateRoot)) return
+  makeNodeAutoSkillStoreV2({ root: autoSkillStateRoot }).claimBySource(selector)
+}
+if (autoSkillRuntime !== null) {
+  provider = makeAutoSkillPlanningProvider({ provider, runtime: autoSkillRuntime })
+} else if (existsSync(autoSkillStateRoot)) {
+  const recovered = makeNodeAutoSkillStoreV2({ root: autoSkillStateRoot })
+    .recoverForgetClaims(autoSkillSourceArchived)
+  if (recovered > 0) {
+    void journal.append('auto-skill', 'auto_skill.forget_recovered', {
+      recovered, canaryEnabled: false,
+    })
+  }
+}
 
 const monitoringEnabled = cfg('AISY_MONITORING') !== '0'
 const boundedMonitoringInteger = (name: string, fallback: number, maximum: number): number => {
@@ -2751,24 +2914,31 @@ const augmentTurnWithHooks = async (
 
 /** Late context for `pre-provider` (ADR-0077): pulled per provider call. */
 const lateContextFromHooks = async (
-  input: { at: 'pre-provider' | 'post-tool'; spans: readonly { text: string }[] },
+  input: {
+    at: 'pre-provider' | 'post-tool'
+    spans: readonly { role: 'system' | 'user' | 'assistant' | 'tool'; provenance: 'operator' | 'learned-procedure' | 'untrusted'; text: string }[]
+  },
 ) => {
   // Every turn passes here exactly once before the provider call, which is the
   // one place that knows how long the session has grown.
   if (input.at === 'pre-provider') memorySelfCheck.check({ sessionMessages: input.spans.length })
 
-  if (extensionHooks.providers.length === 0) return []
+  const learned = autoSkillRuntime?.lateContext(input.spans) ?? []
+  if (extensionHooks.providers.length === 0) return [...learned]
   const query = input.spans.map((span) => span.text).join(' ').slice(0, 2048)
   const fragments = await collectHookContext({
     providers: extensionHooks.providers,
     at: input.at,
     query,
   })
-  return fragments.map((fragment) => ({
-    role: 'user' as const,
-    provenance: 'untrusted' as const,
-    text: `[${fragment.name}]\n${fragment.text}`,
-  }))
+  return [
+    ...learned,
+    ...fragments.map((fragment) => ({
+      role: 'user' as const,
+      provenance: 'untrusted' as const,
+      text: `[${fragment.name}]\n${fragment.text}`,
+    })),
+  ]
 }
 
 const memSearch = async (query: string): Promise<string> => {
@@ -3319,7 +3489,11 @@ const subscriptionPlanProtocol = makePlanToolProtocol({
   mode: () => executionMode.get(),
   reviewPlan: reviewPlanWithOperator,
   toolEffect: planToolEffect,
-  execute: (call) => boundExecuteTool(call),
+  execute: (call, context) => {
+    const authority = nativePlanContexts.get(context)
+    if (authority === undefined) return { ok: false, output: 'PLAN_EXECUTION_IDENTITY_REQUIRED' }
+    return boundExecuteTool(call, authority)
+  },
   workBindingHash: planWorkBindingHash,
   policyRevision: 'plan-live-v1',
 })
@@ -3334,12 +3508,22 @@ const subscriptionCapabilityExecutor = makeCodexCapabilityExecutor({
     : subscriptionPlanProtocol.executeAfterGate(call, runtimeContext),
 })
 invokeSubscriptionTool = async (call, signal, runtimeContext) => {
+  if (!Number.isSafeInteger(runtimeContext.ordinal) || (runtimeContext.ordinal ?? 0) < 1) {
+    return { text: 'PLAN_EXECUTION_IDENTITY_REQUIRED', isError: true }
+  }
+  const executionContext: ToolExecutionContext = Object.freeze({
+    sessionId: runtimeContext.sessionId,
+    ...(runtimeContext.turnId === undefined ? {} : { turnId: runtimeContext.turnId }),
+    ordinal: runtimeContext.ordinal!,
+    signal,
+  })
+  const projectedContext = planContext(executionContext)
   const candidate = Object.freeze({
     name: call.name,
     args: call.args,
     sourceSpanProvenance: 'operator' as const,
   })
-  const preflight = await subscriptionPlanProtocol.preflight(candidate, runtimeContext)
+  const preflight = await subscriptionPlanProtocol.preflight(candidate, projectedContext)
   if (preflight.kind === 'intercept') {
     return { text: preflight.result.output, isError: !preflight.result.ok }
   }
@@ -3348,22 +3532,24 @@ invokeSubscriptionTool = async (call, signal, runtimeContext) => {
     preflight.call,
     { provenance: 'operator', narrowed: untrustedContext },
     signal,
-    runtimeContext,
+    projectedContext,
   )
   // Учёт research-наблюдения — побочная запись, а не часть выполнения: инструмент
   // уже отработал, и его результат принадлежит модели. Прежняя версия здесь
   // возвращала `PLAN_PROTOCOL_UNAVAILABLE`, из-за чего оператор читал код вместо
   // ответа на свой вопрос, а причина отказа терялась целиком.
-  try { subscriptionPlanProtocol.observeAfterGate(preflight.call, runtimeContext, result) } catch (error) {
+  try { subscriptionPlanProtocol.observeAfterGate(preflight.call, projectedContext, result) } catch (error) {
     journal.append('plan', 'plan.observe_failed', {
       tool: preflight.call.name,
       code: error instanceof Error ? error.message : 'unknown',
     })
   }
+  const mutationReceipt = parseMemoryRememberReceipt(result.mutationReceipt)
   return {
     text: result.output,
     isError: !result.ok,
     receipt: actionEvidence(preflight.call, result).receipt,
+    ...(mutationReceipt === null ? {} : { mutationReceipt }),
   }
 }
 
@@ -3641,9 +3827,6 @@ function parseProbe(p?: string): VerificationTrace | null {
   return null
 }
 
-// sendProactive is resolved after makeTelegramBot; runNightly captures it via closure.
-let sendProactiveRef: ((text: string) => Promise<void>) | null = null
-
 // `set_trigger` is built into the tool executor long before the trigger engine
 // and the bot exist, so it calls through this ref. Null ⇒ the tool answers
 // "unavailable" instead of pretending it scheduled something.
@@ -3754,8 +3937,11 @@ const buildMainRunner = (
     propagateToolInterruption: error =>
       durableDelegationRecoverableRuntimeErrorCode(error) !== undefined,
     preToolDispatch: (call, context) => mainPlanProtocol.preflight(call, planContext(context)),
-    postToolDispatch: (call, context, result) =>
-      mainPlanProtocol.observeAfterGate(call, planContext(context), result),
+    postToolDispatch: (call, context, result) => {
+      mainPlanProtocol.observeAfterGate(call, planContext(context), result)
+      autoSkillRuntime?.observeInvocation(call, context, result)
+    },
+    ...(autoSkillRuntime === null ? {} : { verifiedWorkflow: autoSkillRuntime.observer }),
     approve,
     guardian: makeGuardian(),
     sessionLog,
@@ -3820,6 +4006,22 @@ const {
   settings,
   spend,
   budget,
+  ...(autoSkillRuntime === null
+    ? {}
+    : {
+        afterReplyDelivered: ({ sessionId, turnId, result }) => {
+          // Telegram has confirmed the main reply here. Only the supervised
+          // path supplies durable turnId and may count learning evidence.
+          if (turnId !== undefined && result.verifiedWorkflowDelivery !== undefined) {
+            autoSkillRuntime.confirmReply({
+              sessionId,
+              turnId,
+              evidenceId: result.verifiedWorkflowDelivery.evidenceId,
+            })
+          }
+          void autoSkillRuntime.drainAfterReply()
+        },
+      }),
   dailyBudget,
   executionMode,
   transcription,
@@ -4255,6 +4457,10 @@ const {
   },
 })
 sendProactiveRef = sendProactive
+// Resume durable candidate phases and ambiguous-notification accounting after
+// the Telegram send closure exists. This is background work; startup polling
+// and the first operator reply do not wait on model I/O.
+if (autoSkillRuntime !== null) void autoSkillRuntime.drainAfterReply()
 
 const monitoringCoordinator = monitoringRuntime === null || monitoringWindows === null ||
   monitoringTelegramSendLedger === null

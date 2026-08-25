@@ -30,6 +30,7 @@ export type DoctorDomain =
   | 'sandbox'
   | 'mcp'
   | 'nightly'
+  | 'skills'
   | 'sidecars'
   | 'disk'
   | 'clock'
@@ -570,6 +571,21 @@ export interface TranscriptionReadinessProbe {
   }
 }
 
+/** Read-only private typed auto-skill lifecycle projection. */
+export interface AutoSkillReadinessProbe {
+  inspect(): {
+    state: 'disabled' | 'ready' | 'degraded' | 'corrupt'
+    schemaVersion: 2
+    evidence: number
+    pendingReply: number
+    queued: number
+    active: number
+    quarantined: number
+    forgetClaimed: number
+    ambiguousNotifications: number
+  }
+}
+
 export interface OnboardingDeps {
   clock: Clock
   fs: FsPort
@@ -593,6 +609,8 @@ export interface OnboardingDeps {
   providerBroker?: ProviderBrokerReadinessProbe
   /** Optional read-only selected transcription-provider probe. */
   transcription?: TranscriptionReadinessProbe
+  /** Optional read-only typed auto-skill lifecycle probe. */
+  autoSkills?: AutoSkillReadinessProbe
   nightly: NightlyPort
   harnessVersion: string
 

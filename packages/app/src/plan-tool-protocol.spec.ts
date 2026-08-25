@@ -133,14 +133,14 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
 
   it('preserves a code-owned mutation receipt outside plan mode', async () => {
     const mutationReceipt = makeMemoryRememberReceipt(
-      { fact: 'ты любишь получать деньги' },
+      { fact: 'ты предпочитаешь краткие отчёты' },
       { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
     )!
     const { protocol } = fixture({
       mode: 'auto',
       execute: async () => ({
         ok: true,
-        output: 'Запомнил, что ты любишь получать деньги',
+        output: 'Запомнил, что ты предпочитаешь краткие отчёты',
         verified: true,
         mutationReceipt,
       }),
@@ -148,7 +148,7 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
 
     await expect(protocol.invoke(writeCall, context)).resolves.toEqual({
       ok: true,
-      output: 'Запомнил, что ты любишь получать деньги',
+      output: 'Запомнил, что ты предпочитаешь краткие отчёты',
       verified: true,
       mutationReceipt,
     })
@@ -168,7 +168,7 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
     const symbol = { ok: true, output: 'Запомнил.', verified: true }
     Object.defineProperty(symbol, Symbol('receipt'), { value: true })
     const mutationReceipt = makeMemoryRememberReceipt(
-      { fact: 'ты любишь получать деньги' },
+      { fact: 'ты предпочитаешь краткие отчёты' },
       { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
     )!
     const forgedReceipt = { ...mutationReceipt, fact: 'другой факт' }
@@ -177,7 +177,7 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
       { ok: true, output: 'Запомнил.', verified: true, injected: true },
       {
         ok: true,
-        output: 'Запомнил, что ты любишь получать деньги',
+        output: 'Запомнил, что ты предпочитаешь краткие отчёты',
         verified: true,
         mutationReceipt: forgedReceipt,
       },
