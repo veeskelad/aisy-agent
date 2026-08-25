@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
+import { makeMemoryRememberReceipt } from '@aisy/core'
 import type { ModelToolRuntimeContext, ToolCall, ToolResult } from '@aisy/core'
 
 import {
@@ -131,15 +132,25 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
   })
 
   it('preserves a code-owned mutation receipt outside plan mode', async () => {
+    const mutationReceipt = makeMemoryRememberReceipt(
+      { fact: 'ты любишь получать деньги' },
+      { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
+    )!
     const { protocol } = fixture({
       mode: 'auto',
-      execute: async () => ({ ok: true, output: 'Запомнил.', verified: true }),
+      execute: async () => ({
+        ok: true,
+        output: 'Запомнил, что ты любишь получать деньги',
+        verified: true,
+        mutationReceipt,
+      }),
     })
 
     await expect(protocol.invoke(writeCall, context)).resolves.toEqual({
       ok: true,
-      output: 'Запомнил.',
+      output: 'Запомнил, что ты любишь получать деньги',
       verified: true,
+      mutationReceipt,
     })
   })
 
@@ -156,9 +167,20 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
     })
     const symbol = { ok: true, output: 'Запомнил.', verified: true }
     Object.defineProperty(symbol, Symbol('receipt'), { value: true })
+    const mutationReceipt = makeMemoryRememberReceipt(
+      { fact: 'ты любишь получать деньги' },
+      { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
+    )!
+    const forgedReceipt = { ...mutationReceipt, fact: 'другой факт' }
     for (const terminal of [
       { ok: true, output: 'Запомнил.', verified: 'yes' },
       { ok: true, output: 'Запомнил.', verified: true, injected: true },
+      {
+        ok: true,
+        output: 'Запомнил, что ты любишь получать деньги',
+        verified: true,
+        mutationReceipt: forgedReceipt,
+      },
       accessor,
       proxy,
       symbol,

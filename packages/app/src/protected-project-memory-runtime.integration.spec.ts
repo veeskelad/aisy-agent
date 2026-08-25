@@ -10,9 +10,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   makeFreshProjectRegistryV2,
+  makeMemoryRememberReceipt,
   type AgentRunner,
   type ProtectedMemoryScope,
   type ToolCall,
+  type ToolExecutionContext,
   type ToolResult,
 } from '@aisy/core'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -31,6 +33,21 @@ const OWNER = { operatorId: 'telegram:42', profileId: 'default' }
 const NOW = Date.parse('2026-07-27T11:00:00.000Z')
 const roots: string[] = []
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex')
+
+function executionContext(sessionId: string, turnId: string): ToolExecutionContext {
+  return Object.freeze({ sessionId, turnId, ordinal: 1 })
+}
+
+function remembered(fact: string, context: ToolExecutionContext): ToolResult {
+  const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)
+  if (mutationReceipt === null) throw new Error('test receipt expected')
+  return {
+    ok: true,
+    output: `Запомнил, что ${fact}`,
+    verified: true,
+    mutationReceipt,
+  }
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
@@ -204,7 +221,7 @@ describe('protected Project + memory preview composition', () => {
         authorizeHumanConfirmedDelete: async () => false,
       })
       if (!scopedMemory) throw new Error('preview scoped router expected')
-      let executeTool: ((call: ToolCall) => Promise<ToolResult>) | undefined
+      let executeTool: ((call: ToolCall, context?: ToolExecutionContext) => Promise<ToolResult>) | undefined
       const turns = makeNodeInteractiveTurnRuntimeFactory({
         runtime: projectRuntime,
         deps: {
@@ -241,14 +258,14 @@ describe('protected Project + memory preview composition', () => {
         () => async () => ({ decision: 'rejected' }),
       )
       expect(firstTurn.sessionId).toBe(selectedA.sessionId)
+      const firstRememberContext = executionContext(selectedA.sessionId, 'turn-project-a')
       await expect(first.execute()({
         name: 'remember',
-        args: { text: 'Секретный проектный маяк Альфа' },
-      })).resolves.toEqual({
-        ok: true,
-        output: 'Запомнил — Секретный проектный маяк Альфа',
-        verified: true,
-      })
+        args: { fact: 'Секретный проектный маяк Альфа' },
+      }, firstRememberContext)).resolves.toEqual(remembered(
+        'Секретный проектный маяк Альфа',
+        firstRememberContext,
+      ))
       await expect(first.execute()({
         name: 'search_memory',
         args: { query: 'маяк' },
@@ -301,14 +318,14 @@ describe('protected Project + memory preview composition', () => {
         name: 'search_memory',
         args: { query: 'Альфа' },
       })).resolves.toEqual({ ok: true, output: 'Память: ничего не найдено.' })
+      const projectBRememberContext = executionContext(projectB.selection.sessionId, 'turn-project-b')
       await expect(restarted.execute()({
         name: 'remember',
-        args: { text: 'Секретный проектный маяк Гамма' },
-      })).resolves.toEqual({
-        ok: true,
-        output: 'Запомнил — Секретный проектный маяк Гамма',
-        verified: true,
-      })
+        args: { fact: 'Секретный проектный маяк Гамма' },
+      }, projectBRememberContext)).resolves.toEqual(remembered(
+        'Секретный проектный маяк Гамма',
+        projectBRememberContext,
+      ))
       await expect(restarted.execute()({
         name: 'search_memory',
         args: { query: 'Гамма' },
@@ -349,14 +366,14 @@ describe('protected Project + memory preview composition', () => {
         name: 'search_memory',
         args: { query: 'Гамма' },
       })).resolves.toEqual({ ok: true, output: 'Память: ничего не найдено.' })
+      const workspaceRememberContext = executionContext(workspaceTurn.sessionId, 'turn-workspace')
       await expect(restarted.execute()({
         name: 'remember',
-        args: { text: 'Глобальный маяк Бета' },
-      })).resolves.toEqual({
-        ok: true,
-        output: 'Запомнил — Глобальный маяк Бета',
-        verified: true,
-      })
+        args: { fact: 'Глобальный маяк Бета' },
+      }, workspaceRememberContext)).resolves.toEqual(remembered(
+        'Глобальный маяк Бета',
+        workspaceRememberContext,
+      ))
       await expect(restarted.execute()({
         name: 'search_memory',
         args: { query: 'Бета' },

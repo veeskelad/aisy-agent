@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types as utilTypes } from 'node:util'
 import {
   actionEvidence,
   actionRecoveryInstruction,
@@ -7,6 +8,10 @@ import {
   readProviderActionEvidence,
 } from './action-contract.js'
 import type { ActionEvidence } from './action-contract.js'
+import {
+  parseMemoryRememberReceipt,
+  renderMemoryAcknowledgement,
+} from '../runtime/memory-receipt.js'
 import type {
   ActionContractKind,
   AgentLoop,
@@ -74,6 +79,46 @@ export type {
 type HaltReason = NonNullable<TurnResult['haltReason']>
 
 const toolExecutionContextAuthorities = new WeakMap<object, string>()
+
+function memoryAcknowledgement(call: ToolCall, result: unknown):
+{ receiptId: string; output: string } | null {
+  if (call.name !== 'remember' || typeof result !== 'object' || result === null ||
+    utilTypes.isProxy(result) || Object.getPrototypeOf(result) !== Object.prototype ||
+    Object.getOwnPropertySymbols(result).length !== 0) return null
+  const descriptors = Object.getOwnPropertyDescriptors(result) as Record<string, PropertyDescriptor>
+  const keys = Object.keys(descriptors)
+  const expected = ['ok', 'output', 'verified', 'mutationReceipt']
+  if (keys.length !== expected.length || expected.some(key => !Object.hasOwn(descriptors, key))) {
+    return null
+  }
+  for (const key of keys) {
+    const descriptor = descriptors[key]!
+    if (!Object.hasOwn(descriptor, 'value') || descriptor.get !== undefined ||
+      descriptor.set !== undefined) return null
+  }
+  if (descriptors['ok']!.value !== true || descriptors['verified']!.value !== true) return null
+  const receipt = parseMemoryRememberReceipt(descriptors['mutationReceipt']!.value)
+  if (receipt === null) return null
+  const output = renderMemoryAcknowledgement(receipt.fact)
+  return descriptors['output']!.value === output ? { receiptId: receipt.receiptId, output } : null
+}
+
+function terminalReplyWithMemoryAcknowledgements(
+  reply: string,
+  acknowledgements: readonly string[],
+): string {
+  if (acknowledgements.length === 0) return reply
+  let body = reply
+  for (const acknowledgement of acknowledgements) {
+    body = body.split(acknowledgement).join('')
+  }
+  body = body.split(/\r?\n/u)
+    .filter(line => !/^\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)/iu.test(line))
+    .join('\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
+  return [body, ...acknowledgements].filter(part => part.length > 0).join('\n\n')
+}
 
 /** Only AgentLoop can register the exact model-requested tool for this object. */
 export function isGenuineToolExecutionContextFor(
@@ -418,6 +463,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       const actionContract = classifyActionContract(input.spans)
       const actionRequired = actionContract.kind !== 'answer-only'
       const actionEvidenceLog: ActionEvidence[] = []
+      const memoryAcknowledgements = new Map<string, string>()
       log('action.contract', actionContract)
       if (actionContract.kind !== 'answer-only') {
         await emitProgress({ type: 'action-contract', kind: actionContract.kind })
@@ -647,6 +693,10 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           ...effectiveProgress,
         })
         actionEvidenceLog.push(actionEvidence(effective, result))
+        const acknowledgement = memoryAcknowledgement(effective, result)
+        if (acknowledgement !== null) {
+          memoryAcknowledgements.set(acknowledgement.receiptId, acknowledgement.output)
+        }
         const span: ContextSpan = {
           role: 'tool',
           provenance: 'untrusted',
@@ -817,7 +867,10 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             : {}),
         })
         return {
-          reply: response.reply,
+          reply: terminalReplyWithMemoryAcknowledgements(
+            response.reply,
+            [...memoryAcknowledgements.values()],
+          ),
           state: 'ok',
           narrowed: s.narrowed,
           ...(actionRequired

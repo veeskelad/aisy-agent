@@ -1,5 +1,6 @@
 import type { ToolCall } from '../agent-loop/types.js'
 import type { AnthropicTool } from './provider-anthropic.js'
+import { parseRememberFactArgs } from './memory-receipt.js'
 
 export type ToolTier = 0 | 1 | 2 | 3
 export type ToolEffect = 'read' | 'write' | 'execute' | 'delegate' | 'sentinel'
@@ -32,7 +33,7 @@ export const RUNTIME_TOOL_CATALOG = [
   { name: 'list_dir', description: 'List the entries of a workspace directory. Use this FIRST to discover what files exist before reading them, e.g. when asked "what is here" or "what files are there". Arg `path` (omit or "." for the workspace root).', input_schema: objectSchema({ path: { type: 'string' } }), tier: 0, outboundSink: false, effect: 'read' },
   { name: 'bash', description: 'Run a shell command in the workspace and get its stdout/stderr. Use for system facts, searches, and running tools. It is available only through the configured sandbox.', input_schema: objectSchema({ cmd: { type: 'string' } }, ['cmd']), tier: 2, outboundSink: false, effect: 'execute' },
   { name: 'search_memory', description: 'Full-text search long-term memory. Arg `query` is a short keyword query.', input_schema: objectSchema({ query: { type: 'string' } }, ['query']), tier: 0, outboundSink: false, effect: 'read' },
-  { name: 'remember', description: 'Save a durable fact to long-term memory. Arg `text` is the fact. On success, show the returned `Запомнил — <fact>` acknowledgement unchanged; do not paraphrase it as a storage report. Optional arg `topic` says what the fact is about while you are still getting to know the operator: `name`, `work`, `projects`, `style`, `autonomy` or `expectations`. Omit it for anything else.', input_schema: objectSchema({ text: { type: 'string' }, topic: { type: 'string' } }, ['text']), tier: 2, outboundSink: false, effect: 'write' },
+  { name: 'remember', description: 'Save one durable fact to long-term memory. Arg `fact` is the exact statement to store and show back; for a fact about the operator write it naturally in second person, e.g. `ты любишь получать деньги`. Legacy `text` is accepted temporarily, but never send both. On success preserve the returned `Запомнил, что <fact>` acknowledgement unchanged. Optional `topic`: `name`, `work`, `projects`, `style`, `autonomy` or `expectations`.', input_schema: objectSchema({ fact: { type: 'string' }, text: { type: 'string' }, topic: { type: 'string' } }), tier: 2, outboundSink: false, effect: 'write' },
   { name: 'read_knowledge', description: 'Read one article from the knowledge zone. Arg `path` is the article path exactly as it appears in the knowledge catalogue already in your context. Use this when the catalogue shows an article that answers the question.', input_schema: objectSchema({ path: { type: 'string' } }, ['path']), tier: 0, outboundSink: false, effect: 'read' },
   { name: 'write_knowledge', description: 'Save an article to the knowledge zone — durable notes too long for memory facts. Args: `path` (lowercase, `topic/name.md`), `content` (the whole article, starting with a `# Title` heading). Writing replaces the article. Facts about the operator belong in `remember`, not here.', input_schema: objectSchema({ path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']), tier: 2, outboundSink: false, effect: 'write' },
   { name: 'track_task', description: 'Keep the operator\'s task list. Args: `action` — `add` (needs `text`), `done` or `drop` (need `id`), or `list`. A task is a plain reminder to do something; it has no completion check (that is a goal) and no schedule (that is a trigger). Open tasks are already in your context — call `list` only to re-read them after changes.', input_schema: objectSchema({ action: { type: 'string' }, text: { type: 'string' }, id: { type: 'string' } }, ['action']), tier: 1, outboundSink: false, effect: 'write' },
@@ -123,6 +124,11 @@ export function validateRuntimeToolCall(call: ToolCall): ToolCallValidation {
   }
   if (Object.entries(call.args).some(([key, value]) => properties[key]?.type !== 'string' || typeof value !== 'string')) {
     return { ok: false, reason: 'malformed-args' }
+  }
+  if (call.name === 'remember') {
+    if (parseRememberFactArgs(call.args) === null) {
+      return { ok: false, reason: 'malformed-args' }
+    }
   }
   return { ok: true, definition }
 }

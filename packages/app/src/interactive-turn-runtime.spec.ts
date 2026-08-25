@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   makeContextLeaseCoordinator,
+  makeMemoryRememberReceipt,
   type AgentRunner,
   type ApprovalDecision,
   type ConfinementPort,
@@ -9,6 +10,7 @@ import {
   type ResolvedWorkBinding,
   type ScopedMemoryRouter,
   type ToolCall,
+  type ToolExecutionContext,
   type ToolResult,
   type TurnContextLease,
   type TurnInput,
@@ -24,6 +26,22 @@ const CONTEXT = {
   sessionId: 'session-a',
   root: '/Users/operator/projects/a',
   generation: 7,
+}
+const EXECUTION_CONTEXT: ToolExecutionContext = Object.freeze({
+  sessionId: CONTEXT.sessionId,
+  turnId: 'turn-a',
+  ordinal: 1,
+})
+
+function remembered(fact: string, context = EXECUTION_CONTEXT): ToolResult {
+  const mutationReceipt = makeMemoryRememberReceipt({ fact }, context)
+  if (mutationReceipt === null) throw new Error('test receipt expected')
+  return {
+    ok: true,
+    output: `Запомнил, что ${fact}`,
+    verified: true,
+    mutationReceipt,
+  }
 }
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCall {
@@ -141,7 +159,7 @@ function setup(options: {
     lease: TurnContextLease
     grantBinding: ResolvedWorkBinding
     approve: (action: never) => Promise<ApprovalDecision>
-    executeTool: (toolCall: ToolCall) => Promise<ToolResult>
+    executeTool: (toolCall: ToolCall, context?: ToolExecutionContext) => Promise<ToolResult>
   }> = []
   const factory = makeInteractiveTurnRuntimeFactory({
     owner: { operatorId: CONTEXT.operatorId, profileId: CONTEXT.profileId },
@@ -260,11 +278,10 @@ describe('makeInteractiveTurnRuntimeFactory', () => {
       ok: true,
       output: expect.stringContaining('[project:fact-key]'),
     })
-    await expect(execute(call('remember', { text: 'remember me' }))).resolves.toEqual({
-      ok: true,
-      output: 'Запомнил — remember me',
-      verified: true,
-    })
+    await expect(execute(
+      call('remember', { fact: 'ты помнишь меня' }),
+      EXECUTION_CONTEXT,
+    )).resolves.toEqual(remembered('ты помнишь меня'))
     await expect(execute(call('web_search', { query: 'Aisy' }))).resolves.toEqual({
       ok: true,
       output: 'fallback:web_search',
@@ -285,7 +302,10 @@ describe('makeInteractiveTurnRuntimeFactory', () => {
     const state = setup({ workspace: true })
     const runtime = await state.factory.acquire(confirmed)
 
-    await state.built[0]!.executeTool(call('remember', { text: 'global fact' }))
+    await state.built[0]!.executeTool(
+      call('remember', { fact: 'global fact' }),
+      EXECUTION_CONTEXT,
+    )
 
     expect(state.memoryCalls.map((item) => item.kind)).toEqual(['commit-global'])
     await runtime.release?.()
@@ -400,7 +420,7 @@ describe('makeInteractiveTurnRuntimeFactory', () => {
       ok: false,
       output: 'search_memory: STALE_CONTEXT',
     })
-    await expect(execute(call('remember', { text: 'old project fact' }))).resolves.toEqual({
+    await expect(execute(call('remember', { text: 'old project fact' }), EXECUTION_CONTEXT)).resolves.toEqual({
       ok: false,
       output: 'remember: STALE_CONTEXT',
     })

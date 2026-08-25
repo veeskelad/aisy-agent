@@ -50,6 +50,14 @@ describe('единый runtime tool catalog', () => {
     expect(validateRuntimeToolCall({ name: 'read_file', args: { path: 1 } }).ok).toBe(false)
     expect(validateRuntimeToolCall({ name: 'read_file', args: { path: 'a', extra: 'x' } }).ok).toBe(false)
     expect(validateRuntimeToolCall({ name: 'unknown', args: {} }).ok).toBe(false)
+    expect(validateRuntimeToolCall({ name: 'remember', args: { fact: 'ты любишь чай' } }).ok)
+      .toBe(true)
+    expect(validateRuntimeToolCall({ name: 'remember', args: { text: 'legacy fact' } }).ok)
+      .toBe(true)
+    expect(validateRuntimeToolCall({ name: 'remember', args: {} }).ok).toBe(false)
+    expect(validateRuntimeToolCall({
+      name: 'remember', args: { fact: 'one', text: 'two' },
+    }).ok).toBe(false)
   })
 
   it('predicate narrows a string to the closed runtime-name union', () => {
@@ -97,7 +105,7 @@ describe('единый runtime tool catalog', () => {
       list_dir: {},
       bash: { cmd: 'true' },
       search_memory: { query: 'q' },
-      remember: { text: 'fact' },
+      remember: { fact: 'fact' },
       spawn_subagent: { plan: '{}' },
       goal_done: {},
       fetch_url: { url: 'https://example.test' },

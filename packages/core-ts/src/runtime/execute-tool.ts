@@ -11,12 +11,20 @@ import type { ToolCall, ToolExecutionContext } from '../agent-loop/types.js'
 import type { CommitResult, MemoryOp } from '../memory/index.js'
 import type { TaskObservation } from '../orchestration/index.js'
 import { validateRuntimeToolCall } from './tool-catalog.js'
+import {
+  makeMemoryRememberReceipt,
+  parseRememberFactArgs,
+  renderMemoryAcknowledgement,
+  type VerifiedToolMutationReceipt,
+} from './memory-receipt.js'
 
 export interface ToolResult {
   ok: boolean
   output: string
   /** Code-owned durable postcondition; never inferred from model prose. */
   verified?: true
+  /** Exact code-owned mutation proof. Free-form executors cannot mint it. */
+  mutationReceipt?: VerifiedToolMutationReceipt
 }
 
 export interface FsPort {
@@ -105,6 +113,7 @@ export function makeToolExecutor(
   deps: ExecuteToolDeps,
 ): (call: ToolCall, context?: ToolExecutionContext) => Promise<ToolResult> {
   const root = resolve(deps.workspaceRoot)
+  const committedRememberReceipts = new Map<string, ToolResult>()
 
   /** Resolve a tool-supplied path under the workspace root; null if it escapes. */
   const confine = (p: string): string | null => {
@@ -184,17 +193,27 @@ export function makeToolExecutor(
       }
 
       case 'remember': {
-        const text = arg(call, 'text')
-        if (text.trim().length === 0) return { ok: false, output: 'remember: text required' }
+        const input = parseRememberFactArgs(call.args)
+        if (input === null) return { ok: false, output: 'remember: exactly one valid fact or text required' }
+        const receipt = makeMemoryRememberReceipt(input, context)
+        if (receipt === null) return { ok: false, output: 'remember: execution identity required' }
+        const replay = committedRememberReceipts.get(receipt.receiptId)
+        if (replay !== undefined) return replay
         if (!deps.memory) return { ok: false, output: 'remember: unavailable' }
-        const topic = arg(call, 'topic').trim()
         try {
           const r = await deps.memory.commit(
-            { op: 'ADD', text },
-            { withinSession: true, ...(topic.length === 0 ? {} : { topic }) },
+            { op: 'ADD', text: input.fact },
+            { withinSession: true, ...(input.topic === undefined ? {} : { topic: input.topic }) },
           )
           if (r.status === 'COMMITTED') {
-            return { ok: true, output: `Запомнил — ${text.trim()}`, verified: true }
+            const committed = Object.freeze<ToolResult>({
+              ok: true,
+              output: renderMemoryAcknowledgement(input.fact),
+              verified: true,
+              mutationReceipt: receipt,
+            })
+            committedRememberReceipts.set(receipt.receiptId, committed)
+            return committed
           }
           if (r.status === 'BLOCKED') return { ok: false, output: 'Эта информация ранее удалена из памяти.' }
           if (r.status === 'ROUTED_TO_REVIEW') return { ok: true, output: 'Похоже на ранее удалённое — отправил на проверку.' }

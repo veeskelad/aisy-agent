@@ -329,7 +329,7 @@ describe.runIf(
               const text = turn.spans.filter((span) => span.role === 'user').at(-1)?.text ?? ''
               let call: ToolCall
               if (text.startsWith('remember:')) {
-                call = { name: 'remember', args: { text: text.slice('remember:'.length) } }
+                call = { name: 'remember', args: { fact: text.slice('remember:'.length) } }
               } else if (text.startsWith('search:')) {
                 call = { name: 'search_memory', args: { query: text.slice('search:'.length) } }
               } else if (text.startsWith('import:')) {
@@ -342,7 +342,11 @@ describe.runIf(
               } else {
                 call = { name: 'unknown', args: {} }
               }
-              const result = await executeTool(call)
+              const result = await executeTool(call, {
+                sessionId: turn.sessionId,
+                turnId: turn.turnId ?? `test:${turn.sessionId}:${text}`,
+                ordinal: 1,
+              })
               return { state: 'ok', reply: result.output, narrowed: false }
             },
           }) satisfies AgentRunner,
@@ -415,7 +419,7 @@ describe.runIf(
 
     try {
       const first = compose(makeProjectRuntime())
-      await send(first, 'remember:Проектный маяк Альфа', 'Запомнил — Проектный маяк Альфа')
+    await send(first, 'remember:Проектный маяк Альфа', 'Запомнил, что Проектный маяк Альфа')
       await send(first, 'import:upload-1', '"relativePath":"imports/upload-1"')
       await send(first, 'read:imports/upload-1', payload.toString('utf8'))
 
@@ -426,7 +430,7 @@ describe.runIf(
       await send(first, 'search:Альфа', 'Память: ничего не найдено.')
       await send(first, 'read:imports/upload-1', 'read_file:')
       expect(sentTexts(first.calls).at(-1)).not.toContain(payload.toString('utf8'))
-      await send(first, 'remember:Проектный маяк Гамма', 'Запомнил — Проектный маяк Гамма')
+    await send(first, 'remember:Проектный маяк Гамма', 'Запомнил, что Проектный маяк Гамма')
       await send(first, 'search:Гамма', 'Проектный маяк Гамма')
 
       await switchTo(first, 'Workspace')

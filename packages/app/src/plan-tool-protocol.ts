@@ -4,6 +4,10 @@
 
 import { types as utilTypes } from 'node:util'
 
+import {
+  parseMemoryRememberReceipt,
+  renderMemoryAcknowledgement,
+} from '@aisy/core'
 import type {
   AnthropicTool,
   ModelToolRuntimeContext,
@@ -261,14 +265,25 @@ function result(value: unknown): ToolResult | null {
     try {
       captured = exactRecord(value, ['ok', 'output'])
     } catch {
-      captured = exactRecord(value, ['ok', 'output', 'verified'])
+      try {
+        captured = exactRecord(value, ['ok', 'output', 'verified'])
+      } catch {
+        captured = exactRecord(value, ['ok', 'output', 'verified', 'mutationReceipt'])
+      }
     }
     if (typeof captured['ok'] !== 'boolean' || typeof captured['output'] !== 'string') return null
     if (Object.hasOwn(captured, 'verified') && captured['verified'] !== true) return null
+    let receipt: ReturnType<typeof parseMemoryRememberReceipt> | undefined
+    if (Object.hasOwn(captured, 'mutationReceipt')) {
+      receipt = parseMemoryRememberReceipt(captured['mutationReceipt'])
+      if (receipt === null || captured['ok'] !== true || captured['verified'] !== true ||
+        captured['output'] !== renderMemoryAcknowledgement(receipt.fact)) return null
+    }
     return Object.freeze({
       ok: captured['ok'],
       output: captured['output'],
       ...(captured['verified'] === true ? { verified: true as const } : {}),
+      ...(receipt === undefined || receipt === null ? {} : { mutationReceipt: receipt }),
     })
   } catch {
     return null

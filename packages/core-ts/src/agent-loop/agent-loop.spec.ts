@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { isGenuineToolExecutionContextFor, makeAgentLoop } from './index.js'
 import { actionEvidence, attachProviderActionEvidence } from './action-contract.js'
 import { fakeClock } from '../testing/index.js'
+import { makeMemoryRememberReceipt, renderMemoryAcknowledgement } from '../runtime/memory-receipt.js'
 import type {
   AgentLoopDeps,
   ContextSpan,
@@ -1297,6 +1298,44 @@ describe('Tier-2 loop control seams', () => {
       expect(synthSpans.some(s => s.role === 'assistant' && s.text === 'ok')).toBe(true)
       const toolSpan = synthSpans.find(s => s.role === 'tool')
       expect(toolSpan?.text.startsWith('read_file: ')).toBe(true)
+    })
+
+    it('keeps exactly one code-owned memory acknowledgement in a composite reply', async () => {
+      const fact = 'ты любишь получать деньги'
+      const provider = makeScriptedProvider([
+        {
+          reply: '',
+          toolCalls: [{ name: 'remember', args: { fact } }],
+        },
+        {
+          reply: 'Привет!\n\nФакт сохранён: «внутренний production receipt».\n\n' +
+            'Субагент вычислил 23 × 29 = 667.\n\nAISY-TEXT-OK\n\n' +
+            renderMemoryAcknowledgement(fact),
+        },
+      ])
+      const loop = makeAgentLoop(makeDeps({
+        provider,
+        hookGate: makeHookGateFake('allow'),
+        executeTool: async (_call, executionContext) => {
+          const mutationReceipt = makeMemoryRememberReceipt({ fact }, executionContext)
+          if (mutationReceipt === null) throw new Error('receipt expected')
+          return {
+            ok: true,
+            output: renderMemoryAcknowledgement(fact),
+            verified: true,
+            mutationReceipt,
+          }
+        },
+      }))
+
+      const result = await loop.runTurn(makeTurnInput({ turnId: 'turn-memory-1' }))
+
+      expect(result.reply).toContain('Привет!')
+      expect(result.reply).toContain('Субагент вычислил 23 × 29 = 667.')
+      expect(result.reply).toContain('AISY-TEXT-OK')
+      expect(result.reply).not.toContain('Факт сохранён')
+      expect(result.reply.split(renderMemoryAcknowledgement(fact))).toHaveLength(2)
+      expect(result.reply.endsWith(renderMemoryAcknowledgement(fact))).toBe(true)
     })
 
     it('dispatches every tool emitted together, then a single synthesis round', async () => {

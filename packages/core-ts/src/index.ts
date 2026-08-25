@@ -70,6 +70,17 @@ export { makeFailoverProvider } from './runtime/failover-provider.js'
 export { makeToolExecutor } from './runtime/execute-tool.js'
 export type { ExecuteToolDeps, FsPort, ToolResult } from './runtime/execute-tool.js'
 export {
+  makeMemoryRememberReceipt,
+  parseMemoryRememberReceipt,
+  parseRememberFactArgs,
+  renderMemoryAcknowledgement,
+} from './runtime/memory-receipt.js'
+export type {
+  MemoryRememberReceiptV1,
+  RememberFactInput,
+  VerifiedToolMutationReceipt,
+} from './runtime/memory-receipt.js'
+export {
   RUNTIME_TOOL_CATALOG,
   RUNTIME_TOOL_NAMES,
   runtimeProviderTools,

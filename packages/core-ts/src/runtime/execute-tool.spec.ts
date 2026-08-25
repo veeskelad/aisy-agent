@@ -313,49 +313,95 @@ describe('makeToolExecutor — read_journal tool (ADR-0079)', () => {
 })
 
 describe('makeToolExecutor — remember tool', () => {
-  it('calls commit with the text and withinSession:true, returns Запомнил on COMMITTED', async () => {
+  const context: ToolExecutionContext = Object.freeze({
+    sessionId: 'session-a', turnId: 'turn-a', ordinal: 1,
+  })
+
+  it('stores exact fact and returns a code-owned typed receipt on COMMITTED', async () => {
     const commitSpy = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
     const memory: Memory = { ...fakeMemory({ status: 'COMMITTED' }), commit: commitSpy }
     const e = exec({ memory })
-    const r = await e(call('remember', { text: '  User prefers Russian replies  ' }))
-    expect(r).toEqual({
+    const r = await e(call('remember', { fact: 'ты предпочитаешь ответы на русском' }), context)
+    expect(r).toMatchObject({
       ok: true,
-      output: 'Запомнил — User prefers Russian replies',
+      output: 'Запомнил, что ты предпочитаешь ответы на русском',
       verified: true,
+      mutationReceipt: {
+        kind: 'memory.remember/v1',
+        turnId: 'turn-a',
+        fact: 'ты предпочитаешь ответы на русском',
+        committed: true,
+      },
     })
+    expect(r.mutationReceipt?.operationId).toMatch(/^[a-f0-9]{64}$/)
+    expect(r.mutationReceipt?.receiptId).toMatch(/^[a-f0-9]{64}$/)
     expect(commitSpy).toHaveBeenCalledOnce()
     expect(commitSpy).toHaveBeenCalledWith(
-      { op: 'ADD', text: '  User prefers Russian replies  ' },
+      { op: 'ADD', text: 'ты предпочитаешь ответы на русском' },
       { withinSession: true },
     )
   })
 
+  it('keeps punctuation byte-exact and accepts legacy text for one release', async () => {
+    const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
+
+    const withoutDot = await e(call('remember', { text: 'production cutover принят' }), context)
+    const withDot = await e(
+      call('remember', { fact: 'production cutover принят.' }),
+      { ...context, ordinal: 2 },
+    )
+
+    expect(withoutDot.output).toBe('Запомнил, что production cutover принят')
+    expect(withoutDot.mutationReceipt?.fact).toBe('production cutover принят')
+    expect(withDot.output).toBe('Запомнил, что production cutover принят.')
+    expect(withDot.mutationReceipt?.fact).toBe('production cutover принят.')
+  })
+
+  it('replays the same terminal receipt without a second mutation', async () => {
+    const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
+    const toolCall = call('remember', { fact: 'ты любишь получать деньги' })
+
+    const first = await e(toolCall, context)
+    const replay = await e(toolCall, context)
+
+    expect(replay).toEqual(first)
+    expect(commit).toHaveBeenCalledOnce()
+  })
+
   it('returns BLOCKED message on BLOCKED status', async () => {
     const e = exec({ memory: fakeMemory({ status: 'BLOCKED' }) })
-    const r = await e(call('remember', { text: 'some fact' }))
+    const r = await e(call('remember', { fact: 'some fact' }), context)
     expect(r).toEqual({ ok: false, output: 'Эта информация ранее удалена из памяти.' })
   })
 
   it('returns review message on ROUTED_TO_REVIEW status', async () => {
     const e = exec({ memory: fakeMemory({ status: 'ROUTED_TO_REVIEW' }) })
-    const r = await e(call('remember', { text: 'some fact' }))
+    const r = await e(call('remember', { fact: 'some fact' }), context)
     expect(r).toEqual({ ok: true, output: 'Похоже на ранее удалённое — отправил на проверку.' })
   })
 
-  it('rejects empty text', async () => {
-    const e = exec({ memory: fakeMemory({ status: 'COMMITTED' }) })
-    const r = await e(call('remember', { text: '' }))
-    expect(r).toEqual({ ok: false, output: 'remember: text required' })
-  })
-
-  it('rejects whitespace-only text', async () => {
-    const e = exec({ memory: fakeMemory({ status: 'COMMITTED' }) })
-    const r = await e(call('remember', { text: '   ' }))
-    expect(r).toEqual({ ok: false, output: 'remember: text required' })
+  it('rejects missing, conflicting, padded, control and reserved fact before mutation', async () => {
+    const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
+    for (const args of [
+      {},
+      { fact: 'one', text: 'two' },
+      { fact: ' padded ' },
+      { fact: 'line\nbreak' },
+      { fact: 'Факт сохранён: internal receipt' },
+    ]) {
+      await expect(e(call('remember', args), context)).resolves.toEqual({
+        ok: false,
+        output: 'invalid tool call: remember',
+      })
+    }
+    expect(commit).not.toHaveBeenCalled()
   })
 
   it('reports unavailable when memory dep is absent', async () => {
-    const r = await exec()(call('remember', { text: 'hello' }))
+    const r = await exec()(call('remember', { fact: 'hello' }), context)
     expect(r).toEqual({ ok: false, output: 'remember: unavailable' })
   })
 
@@ -365,7 +411,7 @@ describe('makeToolExecutor — remember tool', () => {
       commit: async () => { throw new Error('disk full') },
     }
     const e = exec({ memory })
-    const r = await e(call('remember', { text: 'some fact' }))
+    const r = await e(call('remember', { fact: 'some fact' }), context)
     expect(r.ok).toBe(false)
     expect(r.output).toContain('disk full')
   })

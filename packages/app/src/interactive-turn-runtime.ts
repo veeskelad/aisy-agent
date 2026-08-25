@@ -1,6 +1,9 @@
 import {
   ContextLeaseError,
   makeLeaseBoundToolExecutor,
+  makeMemoryRememberReceipt,
+  parseRememberFactArgs,
+  renderMemoryAcknowledgement,
   WorkBindingError,
   workBindingFromLease,
   type AgentRunner,
@@ -15,6 +18,7 @@ import {
   type ProjectService,
   type ScopedMemoryRouter,
   type ToolCall,
+  type ToolExecutionContext,
   type ToolResult,
   type TurnContextLease,
   type ResolvedWorkBinding,
@@ -49,7 +53,7 @@ export interface InteractiveTurnRuntimeDeps {
     /** Exact context for GrantStore lookup/recording in this runner. */
     grantBinding: ResolvedWorkBinding
     approve: (action: PendingAction) => Promise<ApprovalDecision>
-    executeTool: (call: ToolCall) => Promise<ToolResult>
+    executeTool: (call: ToolCall, context?: ToolExecutionContext) => Promise<ToolResult>
   }): AgentRunner
   /** Preview-safe ADR-0063 layers 2/3; omission preserves the current runtime. */
   layeredContext?: LayeredContextAssembler
@@ -109,6 +113,7 @@ async function makeLeaseTurnRuntime(input: {
   }
   try {
     let claimedDone = false
+    const committedRememberReceipts = new Map<string, ToolResult>()
     const rawApprove = approvalForSession(lease.sessionId)
     const approve = async (action: PendingAction): Promise<ApprovalDecision> => {
       const decision = await rawApprove(action)
@@ -124,7 +129,10 @@ async function makeLeaseTurnRuntime(input: {
       }
     }
 
-    const scopedFallback = async (call: ToolCall): Promise<ToolResult> => {
+    const scopedFallback = async (
+      call: ToolCall,
+      context?: ToolExecutionContext,
+    ): Promise<ToolResult> => {
       if (input.goal === true && call.name === 'goal_done') {
         claimedDone = true
         return { ok: true, output: 'acknowledged' }
@@ -141,15 +149,36 @@ async function makeLeaseTurnRuntime(input: {
         }
       }
       if (call.name === 'remember') {
-        const text = arg(call, 'text')
-        if (text.trim().length === 0) return { ok: false, output: 'remember: text required' }
+        const remembered = parseRememberFactArgs(call.args)
+        if (remembered === null) {
+          return { ok: false, output: 'remember: exactly one valid fact or text required' }
+        }
+        const receipt = makeMemoryRememberReceipt(remembered, context)
+        if (receipt === null) return { ok: false, output: 'remember: execution identity required' }
+        const replay = committedRememberReceipts.get(receipt.receiptId)
+        if (replay !== undefined) return replay
         try {
           const commit = lease.projectKind === 'project'
-            ? deps.scopedMemory.commitProject(lease, { op: 'ADD', text }, { withinSession: true })
-            : deps.scopedMemory.commitGlobal(lease, { op: 'ADD', text }, { withinSession: true })
+            ? deps.scopedMemory.commitProject(
+                lease,
+                { op: 'ADD', text: remembered.fact },
+                { withinSession: true },
+              )
+            : deps.scopedMemory.commitGlobal(
+                lease,
+                { op: 'ADD', text: remembered.fact },
+                { withinSession: true },
+              )
           const result = await commit
           if (result.status === 'COMMITTED') {
-            return { ok: true, output: `Запомнил — ${text.trim()}`, verified: true }
+            const committed = Object.freeze<ToolResult>({
+              ok: true,
+              output: renderMemoryAcknowledgement(remembered.fact),
+              verified: true,
+              mutationReceipt: receipt,
+            })
+            committedRememberReceipts.set(receipt.receiptId, committed)
+            return committed
           }
           if (result.status === 'BLOCKED') {
             return { ok: false, output: 'Эта информация ранее удалена из памяти.' }
@@ -221,8 +250,21 @@ async function makeLeaseTurnRuntime(input: {
       fallback: scopedFallback,
       ...(deps.runBash === undefined ? {} : { runBash: deps.runBash }),
     })
-    const executeTool = async (call: ToolCall): Promise<ToolResult> => {
+    const executeTool = async (
+      call: ToolCall,
+      context?: ToolExecutionContext,
+    ): Promise<ToolResult> => {
       validate?.()
+      if (call.name === 'remember') {
+        try {
+          return await scopedFallback(call, context)
+        } catch (error) {
+          if (error instanceof ContextLeaseError) {
+            return { ok: false, output: `remember: ${error.code}` }
+          }
+          return { ok: false, output: 'remember: unavailable' }
+        }
+      }
       return leaseExecutor(call)
     }
     const baseRunner = deps.buildRunner({
