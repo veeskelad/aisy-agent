@@ -1047,6 +1047,33 @@ export { makeSkillPromptRuntime } from './runtime/skill-prompt-runtime.js'
 export type { SkillPromptRuntime } from './runtime/skill-prompt-runtime.js'
 export { isKnownTimeZone, wallClockIso } from './runtime/wall-clock.js'
 export { makeActiveSkillCatalog } from './runtime/active-skill-catalog.js'
+export {
+  autoSkillScopeKey,
+  buildAutoSkillManifest,
+  canonicalAutoSkillScope,
+  makeVerifiedWorkflowEvidence,
+  parseSkillRecipeDraft,
+  renderAutoSkillDocument,
+  sameAutoSkillModelIdentity,
+  shadowVerifyAutoSkill,
+  validateSkillRecipeDraft,
+} from './runtime/auto-skill-learning.js'
+export type {
+  AutoSkillDescriptor,
+  AutoSkillDescriptorRegistry,
+  AutoSkillManifestV1,
+  AutoSkillModelIdentity,
+  AutoSkillPlaceholderDescriptor,
+  AutoSkillScope,
+  AutoSkillValidationCode,
+  AutoSkillValidationResult,
+  SkillRecipeDraftV1,
+  SkillRecipeGeneratorPort,
+  SkillRecipeJudgePort,
+  SkillRecipeStepV1,
+  VerifiedWorkflowEvidenceV1,
+  VerifiedWorkflowStepV1,
+} from './runtime/auto-skill-learning.js'
 // Installing a skill must accept exactly what the catalog will later serve, so
 // the installer parses with the very same function instead of a lookalike.
 export { parseSkillDocument } from './skills/index.js'
