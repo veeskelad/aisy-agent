@@ -46,9 +46,11 @@ projectId, resourceScope и capabilityRevision. Поля выводятся то
 TurnContextLease, bot ownership registry и resolved capability matrix. Predicate
 learning равен `trusted && !narrowed`. Fixed-order UTF-8 JSON с explicit null
 сравнивается bytewise; domain-separated SHA-256 образует `scopeKey`. Code-derived
-`skillIdentity` строится из verified workflow fingerprint и ordered descriptor
-registry identity; изменения placeholder slots/postconditions являются
-revisions этого skill. CAS pointer key связывает `scopeKey + skillIdentity`.
+`skillIdentity = SHA-256("aisy-auto-skill-identity/v2\n" +
+JSON.stringify([scopeKey, orderedDescriptorIds]))`; registry revision,
+placeholder slots и postconditions входят в `workflowFingerprint`, поэтому их
+изменение является revision того же skill. CAS pointer key связывает canonical
+`[scopeKey, skillIdentity]`.
 Несколько skills одного scope имеют раздельные active/previous pointers.
 `sessionId` в
 scope не входит: он используется только как identity независимой демонстрации.
@@ -63,15 +65,20 @@ scope не входит: он используется только как ident
 счётчик. Неуспех, ambiguous effect, пропущенный postcondition, отмена оператора
 или изменившаяся scope-boundary не считаются демонстрацией.
 
-Перед выпуском terminal reply runtime синхронно дожидается одной bounded local
-transaction: idempotent upsert evidence, enqueue candidate job и запись durable
-reply-release state. Она не вызывает model/network I/O. После commit terminal
-reply выпускается, а generator worker стартует асинхронно. Evidence и reply
-связывают exact `operationId`, `receiptId`, `turnId`; crash/replay возвращает тот
-же release state. Ключ job существует до имени навыка и связывает fingerprint,
-две evidence identity, `AutoSkillScope`, schema revision и policy revision.
-CAS базовой revision выполняется позже, после code-derived имени. Два
-одновременных вторых успеха могут создать только один job.
+Перед выпуском terminal reply runtime синхронно и без model/network I/O
+стадирует evidence как `pending_reply`, связав exact `operationId`, `receiptId`,
+session и turn. Такое evidence не участвует в пороге и не создаёт job. Delivery
+callback вызывается и для legacy transport, но learning guard принимает только
+supervised delivery с exact `sessionId + turnId`; callback без `turnId` не
+подтверждает evidence. Только этот guarded path переводит запись в `live` и
+может enqueue candidate job; generator worker стартует после этого асинхронно.
+Crash до доставки или
+подтверждения даёт безопасный false negative: `pending_reply` не становится
+доказательством сам по себе. Replay exact callback идемпотентен. Ключ job
+связывает fingerprint, две live evidence identity, `AutoSkillScope`, schema
+revision и policy revision. CAS базовой revision выполняется позже, после
+code-derived имени. Два одновременных вторых успеха могут создать только один
+job.
 
 ## 4. Typed recipe вместо свободной инструкции
 
@@ -191,14 +198,39 @@ Store поддерживает durable reverse edges
 jobs/revisions в `forget_claimed`, пишет anti-resurrection markers и снимает
 active pointers/overlays. Только receipt этого claim разрешает source store
 начать purge. После source purge отдельная idempotent фаза удаляет artifacts/
-evidence и одна переводит record в terminal `tombstoned`. Crash до claim
-оставляет source на месте; crash после claim не может вернуть зависимый skill.
+evidence и одна переводит record в terminal `tombstoned`. После restart
+`purging` можно продолжить сразу, но `forget_claimed` разрешает purge только
+после подтверждения exact archived source из Project registry; одинаковый
+predicate работает при canary-on startup и canary-off. Crash до claim оставляет
+source на месте; crash после claim не может вернуть зависимый skill.
 Session без reverse edges ничего не демоутит. Удаление любой из двух evidence
 sessions снимает revision, потому что после forgetting её proof threshold больше
-не доказуем. Gate остаётся активным при canary-off. Перед v2→v1 switch managed
-rollback coordinator под общим state/source-mutation lock завершает reverse-edge
-phases, проверяет пустой dependency set и выдаёт durable certificate, связанный
-с exact state hash и target commit; drift/crash/new edge запрещают switch. Старый
+не доказуем. Tombstone заменяет raw source identifiers и forgotten evidence ids
+domain-separated hashes: exact replay не воскресает, но новый turn после
+повторного создания source не блокируется навсегда. Gate остаётся активным при
+canary-off. Перед v2→v1 switch managed rollback coordinator публикует durable
+write barrier, дожидается отсутствия in-flight mutation, завершает только
+безопасно recoverable reverse-edge phases, проверяет пустой dependency set и
+выдаёт certificate, связанный с exact state hash и target commit. Обычный
+writer проверяет barrier до write и перед atomic state rename; barrier остаётся
+после active switch и блокирует late edge от уже запущенного v2 процесса.
+Certificate повторно проверяется в последнем callback перед active rename;
+drift, corruption, in-flight mutation или новый edge сохраняют прежнюю
+generation. Gate применяется ко всем non-descendant `--allow-rewrite`. После
+roll-forward barrier снимается только explicit командой активного v2-aware
+release. Handle, увидевший barrier или failed persist, остаётся `poisoned`.
+Persistent epoch меняется при rollback и resume, поэтому idle старый handle
+тоже не может записать snapshot; продолжение требует нового handle. Составная artifact/state mutation держит private in-flight marker до
+конца. После crash coordinator удаляет marker только если PID владельца
+доказанно завершён; живой или неоднозначный владелец блокирует rewrite и
+очистку всех остальных marker до global quiescence. Marker v2 связывает exact
+temporary basename: recovery сначала удаляет соответствующий private temporary,
+а unattributed temporary fail-closed. До
+state rename созданный artifact удаляется при доказанной ошибке, после rename
+неоднозначный artifact сохраняется для recovery. Marker связывает exact revision
+hash; после смерти owner orphan удаляется только при отсутствии revision в
+durable state. Poisoned/fenced handle не выдаёт active execution view. Nonterminal claim блокирует
+новое evidence того же source через restart. Старый
 v1 binary не должен понимать v2 schema.
 
 ## 7. Scope и пользовательский контракт
@@ -209,6 +241,25 @@ Scoped manifest виден только в исходном `AutoSkillScope`. Pr
 добавляет learned-procedure overlay в следующий turn текущей сессии, не меняя
 замороженные memory/history snapshots и стабильный prefix. Новая сессия строит
 обычный menu уже с этой revision.
+
+Для exact активного single-step `memory.remember` runtime не полагается на
+Markdown: code-owned planner сопоставляет безопасный текущий запрос с typed
+manifest и создаёт ToolCall. First-person, составной или неоднозначный запрос
+уходит обычному provider planning. Provider receipt учитывается только при
+exact call args, session/turn и следующем монотонном ordinal. `toolOrdinalBase`
+объединяет локальные и subscription-side вызовы через все rounds хода;
+foreign/duplicate/mismatched receipt отклоняется. Provider deltas сначала
+буферизуются через весь ход и выходят только для доказанно answer-only ответа
+без единой provider/local execution/evidence; latch не сбрасывается между
+rounds, поэтому неожиданный effect тоже не покажет ложное подтверждение раньше
+durable receipt. Resume восстанавливает code-owned ordinal high-water из
+exact-turn fsync checkpoint. Каждая provider-попытка через code-owned pre-effect
+callback, включая throw, получает failure evidence. Durable delegation включает
+`toolOrdinalBase` в persisted/hashable projection, а callback валидирует отдельно
+и reattach-ит non-enumerable только перед provider dispatch; progress не является
+authority. После первой tool
+attempt failover запрещён, а failed/ambiguous execution исключает весь turn из
+learning. Transport подтверждает exact evidence id вместе с session/turn.
 
 Основной ответ задачи не задерживается generator/judge. Candidate worker
 ограничен отдельным budget/rate limit. При успешной активации Aisy планирует
@@ -273,8 +324,22 @@ state. Откат binary сохраняет state; неизвестная schema
 13. forget Project/session/skill не оставляет replayable/raw personal evidence
     и не допускает resurrection; crash до/после reverse-edge claim сохраняет
     порядок, а несвязанная session не демоутит skill;
-    process-level v2→v1 rollback требует rollback-safe certificate до switch;
+    process-level v2→v1 rollback и любой non-descendant rewrite требуют
+    persistent barrier и rollback-safe certificate до switch; late writer
+    остаётся заблокирован до explicit active-v2 roll-forward resume;
 14. Telegram E2E accepted-send даёт одно короткое уведомление без внутренних
     receipt/status; ambiguous send не повторяется и виден Doctor;
 15. full package tests, workspace typecheck/build, Doctor, managed
     update/restart/rollback и финальный provenance/secret scan зелёные.
+16. exact typed request использует code-owned plan; foreign/duplicate ordinal,
+    uncertain delivery и преждевременный action acknowledgement не считаются
+    доказанным выполнением.
+17. stale открытый store после barrier/epoch change остаётся poisoned; SIGKILL оставляет
+    marker, который восстанавливается только после доказанного завершения PID;
+    live/неоднозначный marker блокирует rewrite; pre/post-rename artifact faults
+    имеют разные deterministic outcomes, dead-marker recovery сверяет exact
+    revision inventory, poisoned reads fail-closed, source claim переживает restart.
+18. provider throw записывает failed execution, failover после первой tool
+    attempt запрещён, turn-wide delta latch и resume ordinal high-water
+    сохраняются через все rounds/restart; exact evidence delivery и durable
+    `remember` idempotency исключают соседнее подтверждение и второй факт.

@@ -100,11 +100,12 @@ Scope fields come only from trusted `TurnContextLease`, bot ownership registry
 and resolved capability matrix. Fixed-order UTF-8 JSON with explicit `null` is
 compared bytewise; `scopeKey` is
 `SHA-256("aisy-auto-skill-scope/v1\n" + canonicalJson)`. Code derives stable
-`skillIdentity` from the verified workflow fingerprint and ordered descriptor
-registry identity. Placeholder-slot and postcondition changes are revisions of
-that same skill, not new identities. Active/previous
-pointer key is `SHA-256("aisy-auto-skill-pointer/v1\n" + scopeKey + "\n" +
-skillIdentity)`, so different skills in one scope do not share CAS. Unknown/
+`skillIdentity = SHA-256("aisy-auto-skill-identity/v2\n" +
+JSON.stringify([scopeKey, orderedDescriptorIds]))`. Registry revision,
+placeholder slots и postconditions остаются в `workflowFingerprint`, поэтому
+их изменение создаёт новую revision того же skill, а не новую identity.
+Active/previous pointer key строится из domain-separated hash canonical
+`[scopeKey, skillIdentity]`, поэтому разные skills одного scope не делят CAS. Unknown/
 empty field, alternate encoding or collision with a different canonical payload
 fail closed. Learning predicate is exactly `trusted && !narrowed`.
 
@@ -128,13 +129,38 @@ receipt that moves dependent jobs/revisions to `forget_claimed`, writes durable
 anti-resurrection markers and removes active overlays; only then may
 Session/Project storage purge its source. Artifact/evidence purge follows and
 alone transitions to terminal `tombstoned`. Recovery never restores a claimed
-pointer. Removing one evidence session invalidates its derived revision; an
-unrelated session with no edge has no effect. This claim gate remains active
-when learning/overlays are canary-off. A managed rollback coordinator must
-resolve all reverse edges under the same state/source-mutation lock and issue a
-state-hash/target-commit-bound `rollback-safe` certificate before switching to
-an older binary; otherwise rollback is refused. The old binary is never asked
-to interpret an unknown future schema.
+pointer: `purging` may resume immediately, while `forget_claimed` may purge only
+after the Project registry proves the exact source archived. Canary-on startup
+and canary-off enforcement use the same predicate. Removing one evidence session invalidates its derived revision; an
+unrelated session with no edge has no effect. Tombstones contain only
+domain-separated source/evidence hashes, not raw session, Project or fact
+values; exact forgotten evidence cannot resurrect, while a genuinely new
+evidence turn from a later source can be learned again. This claim gate remains
+active when learning/overlays are canary-off. A managed rollback coordinator
+publishes a durable write barrier, waits for mutation quiescence, completes only
+recoverable reverse-edge work, requires an empty dependency set, issues a
+state-hash/target-commit-bound `rollback-safe` certificate and revalidates it
+immediately before the atomic active switch. The barrier remains afterwards,
+so a running v2 writer cannot create a late edge. A new edge, in-flight
+mutation, corruption or target drift refuses rollback and every non-descendant
+rewrite. An explicit command from the active v2-aware roll-forward release is
+the only normal edge that removes the barrier. The old binary is never asked to
+interpret an unknown future schema. A store handle that observes the barrier or
+a failed persist is permanently poisoned. Persistent epoch changes on rollback
+and explicit resume, so an idle pre-barrier handle is fenced too; only a fresh
+handle may write after roll-forward. Compound state/artifact mutations retain a
+private in-flight marker. Recovery removes it only when the recorded PID is
+proven dead. Marker v2 binds an exact temporary basename; recovery removes that
+private temporary before the marker, and an unattributed temporary fails closed.
+Cleanup waits for global marker quiescence, so a dead owner cannot delete a
+same-revision artifact still owned by a live writer. Artifact marker also binds
+the exact revision hash and removes its directory only when durable state has no
+such revision. Read-only Doctor validates the bound temporary's expected type,
+non-symlink identity and private mode. A live or ambiguous owner blocks the rewrite, and poisoned/fenced handles cannot serve active
+execution reads. A source-wide
+nonterminal claim rejects new evidence across restart. Definite pre-state-rename
+failure removes the artifact created by that attempt, while post-rename
+ambiguity preserves it for deterministic recovery.
 
 ## 3. Interfaces
 
@@ -579,10 +605,20 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     the other's active/previous pointer.
 34. **AC-06-34** — Linked Session/Project deletion while canary-off still
     requires reverse-edge `forget_claimed`. Before v2→v1 switch the managed
-    coordinator under one lock either resolves every dependency and issues an
-    exact state-hash/target-commit `rollback-safe` certificate or refuses
-    rollback; process-level deletion after a certified rollback has no v2 edge
-    to bypass. Unrelated source deletion leaves pointers unchanged.
+    coordinator under one lock either quiesces writers, keeps a durable barrier,
+    resolves every safely recoverable dependency and issues an exact
+    state-hash/target-commit `rollback-safe` certificate or refuses rollback;
+    every non-descendant rewrite uses the same gate. Process-level deletion
+    after a certified rollback has no v2 edge to bypass. An opened writer is
+    poisoned by a barrier/persist failure or persistent epoch mismatch, and
+    SIGKILL marker reconciliation permits recovery only after proving the owner
+    dead and reaching global marker quiescence. Exact bound temporaries are
+    removed before their markers; unattributed temporaries fail closed and are
+    visible as corrupt to read-only Doctor, while a valid in-flight marker is
+    degraded. Source-wide claim fencing survives restart; definite pre-rename
+    artifact failure removes the new artifact, while post-rename ambiguity
+    preserves it for recovery. Unrelated source deletion leaves pointers
+    unchanged.
 
 ## 10. Open questions
 

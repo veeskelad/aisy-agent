@@ -1,8 +1,8 @@
 # Компонент 21: Production runtime Skills
 
 **Статус:** LIVE для hash-pinned чтения, prompt-композиции, CLI install/remove и
-Telegram-каталога/управления; typed auto-skill path ADR-0108 принят для
-operator canary, но остаётся DORMANT до реализации всех AC §7  
+Telegram-каталога/управления; typed auto-skill path ADR-0108 LIVE в коде только
+при explicit `AISY_AUTO_SKILLS=1`, target-canary ещё не принят
 **Связанные ADR:** ADR-0015, ADR-0017, ADR-0019, ADR-0027, ADR-0029, ADR-0108  
 **Зависит от:** Agent Loop (01), Skills (06), Safety (05), Agent DNA (20)
 
@@ -114,8 +114,17 @@ pointer key связывает `scopeKey + codeDerivedSkillIdentity`, поэто
 `trusted && !narrowed`. Все файлы `0600`, каталоги `0700`; unknown schema
 fail-closed.
 
-До terminal reply одна bounded local transaction фиксирует verified evidence,
-candidate job и reply-release state. Generator/judge worker идёт после reply.
+До terminal reply bounded local write стадирует verified evidence как
+`pending_reply`; оно не считается повторением и не создаёт candidate job.
+Только callback после подтверждённой транспортом terminal Telegram reply и с
+supervised exact `sessionId + turnId` переводит evidence в `live` и может
+поставить job в очередь. Legacy volatile path не передаёт `turnId` и потому не
+считается learning evidence. Generator/judge worker идёт после этого. Crash до
+подтверждения даёт безопасный false negative; restart не повышает pending
+evidence сам по себе. Blocked edit и uncertain delivery не вызывают callback.
+Provider text сначала буферизуется для любого хода и выходит только если ответ
+доказанно answer-only: неожиданный provider-side effect также отбрасывает ранние
+deltas, поэтому модель не может показать ложное «запомнил» до durable receipt.
 Lifecycle `queued → generated → validated → shadow_verified → prepared → active`
 и forget `forget_claimed → purging → tombstoned` восстанавливаются idempotently.
 Active pointer меняется только atomic CAS; durable previous не теряется при
@@ -126,13 +135,67 @@ Durable reverse edges `session/project → evidence → job → revision` уча
 `claimBySource` receipt, который одной транзакцией переводит зависимости в
 `forget_claimed`, пишет anti-resurrection markers и снимает overlays. После
 source purge отдельная idempotent фаза удаляет artifacts/evidence и переводит
-record в terminal `tombstoned`. Crash до claim не удаляет source; crash после
-claim не возвращает skill. Несвязанная session оставляет revision активной.
-Gate работает и при canary-off. Перед v2→v1 переключением managed rollback
-coordinator удерживает общий auto-skill/source-mutation lock, завершает все
-reverse-edge phases, повторно проверяет пустой dependency set и выдаёт durable
-`rollback-safe` certificate, связанный с exact v2 state hash и target commit.
-Без certificate rollback отказывается; старый v1 binary не обязан понимать v2.
+record в terminal `tombstoned`. После restart фаза `purging` продолжается сама,
+а `forget_claimed` может перейти к purge только если Project registry уже
+подтвердил архивирование exact source. Эта recovery выполняется и при canary-on
+startup, и при canary-off. Crash до claim не удаляет source; crash после claim
+не возвращает skill. Несвязанная session оставляет revision активной.
+
+Перед v2→v1 переключением managed rollback coordinator публикует durable
+`preparing` barrier, дожидается отсутствия mutation-in-flight markers, завершает
+только безопасно recoverable reverse-edge phases, проверяет пустой dependency
+set и заменяет barrier на `certified` с exact v2 state hash и target commit.
+Каждый обычный writer проверяет barrier до записи и непосредственно перед
+atomic state rename. Handle, увидевший barrier или failed persist, навсегда
+poisoned. Persistent store epoch меняется при rollback и explicit resume,
+поэтому idle pre-barrier handle также не может сохранить старый snapshot.
+Artifact prepare держит тот же in-flight marker: definite failure до state
+rename удаляет созданный этой попыткой artifact, а post-rename ambiguity
+сохраняет его для restart recovery. Crash-left marker содержит PID owner: живой owner блокирует switch,
+dead owner сверяется через OS liveness. Очистка начинается только после
+инвентаризации всех marker и глобальной quiescence. Marker v2 связывает exact
+temporary basename: dead-owner temporary удаляется до marker, а temporary без
+проверяемого владельца блокирует открытие и rollback. Read-only Doctor также
+проверяет ожидаемый file/directory type, отсутствие symlink и private mode.
+Artifact marker содержит
+exact revision hash: directory удаляется только если durable state не содержит эту revision.
+Poisoned/fenced handle не обслуживает active execution reads.
+Barrier остаётся после active switch, поэтому уже запущенный процесс v2 тоже не
+может создать поздний edge. Последняя проверка certificate выполняется перед
+active rename. Gate применяется к rollback и ко
+всем non-descendant `--allow-rewrite`, а не только к immediate previous.
+После roll-forward barrier снимает отдельная команда v2-aware active release
+`aisy update --resume-auto-skills`; downgrade target и неактивный release не
+могут её выполнить. Read-only Doctor показывает barrier как `degraded`, а
+malformed barrier как `corrupt`. Старый v1 binary не обязан понимать v2.
+
+Typed manifest является source of truth для исполнения. Для exact активного
+single-step `memory.remember` code-owned planner извлекает только безопасный
+факт из текущего operator request и создаёт typed ToolCall; first-person и
+составные/неоднозначные запросы остаются обычному provider planning. Provider
+execution receipts принимаются только при exact call args, session/turn и
+ожидаемом ordinal. Delivery подтверждает exact `evidenceId + sessionId + turnId`,
+а source-wide nonterminal claim не разрешает новое evidence того же source
+между claim и tombstone даже после restart. AgentLoop передаёт provider общий `toolOrdinalBase`, поэтому
+локальные и subscription-side вызовы образуют одну монотонную последовательность
+через все rounds одного turn; duplicate, foreign или mismatched receipt
+fail-closed. Resume восстанавливает code-owned ordinal high-water из exact-turn
+durable checkpoint, fsync которого завершён до dispatch. Provider-side attempt
+регистрируется code-owned callback до dispatch; durable delegation включает
+`toolOrdinalBase` в hashable projection, но держит callback вне persistence и
+возвращает его non-enumerable только на exact provider dispatch. Progress остаётся наблюдением.
+Thrown/failed
+execution делает весь workflow непригодным для learning. Failover разрешён
+только если primary ещё не сообщил ни одного tool attempt. Text-delta latch
+остаётся закрытым до конца всего turn после plan, tool attempt или evidence, а
+не сбрасывается между synthesis rounds. Generator и judge без tools обязаны иметь
+разные exact provider/model/revision identity уже при startup canary.
+
+Verified `remember` передаёт стабильный operation id в protected-memory
+publication ledger как deterministic fact id. Новый executor после restart
+завершает ту же WAL/completed operation без второго факта; другой fact с тем же
+operation id получает idempotency conflict до новой публикации. In-process Map
+остаётся только оптимизацией.
 
 Следующий turn исходной session получает versioned `learned-procedure` overlay
 без изменения frozen memory/history prefix. Новая session видит revision в
@@ -186,8 +249,22 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
 8. **AC-21-19:** canary-off делает zero auto-skill observation/overlay I/O;
    reverse-edge forget gate при этом остаётся active, а schema rollback и
    Doctor fail-closed проверены. Process-level v2→v1 test требует exact
-   rollback-safe certificate до switch, затем удаляет source без оставшихся v2
-   edges; crash/drift/new edge между certificate и switch запрещают rollback.
+   persistent barrier и rollback-safe certificate до switch, блокирует late
+   writer после switch и допускает снятие barrier только active v2 roll-forward;
+   crash/drift/new edge/in-flight mutation запрещают любой downgrade rewrite;
+   stale store fenced persistent epoch, а SIGKILL marker снимается только после
+   проверки завершившегося PID и global quiescence; exact bound temporary
+   удаляется до marker, unattributed temporary блокирует startup/rollback и
+   виден Doctor как `corrupt`, valid in-flight — как `degraded`; definite pre-rename artifact удаляется,
+   post-rename ambiguity сохраняется для recovery, а dead artifact marker
+   сверяется с durable revision inventory; poisoned handle не выдаёт active view.
+9. **AC-21-20:** active typed manifest планируется кодом для exact safe request;
+   provider не может заменить descriptor, а foreign/duplicate/non-monotonic
+   receipt или преждевременный streamed acknowledgement отклоняются; provider
+   throw остаётся failed evidence, failover после tool attempt запрещён,
+   turn-wide latch и exact-turn resume ordinal high-water сохраняются между
+   rounds/restart; delivery связан с exact evidence id, а verified `remember`
+   остаётся exactly-once после restart protected-memory executor.
 
 ## 8. Трассировка тестов
 
@@ -201,6 +278,14 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
 - `telegram-gw/skill-catalog-view.spec.ts`: AC-21-11;
 - `app/bot-skill-menu.spec.ts`: AC-21-1, 11.
 - `core/auto-skill-learning/*.spec.ts`: AC-21-12, 13, 14, 15, 17, 18;
-- `app/auto-skill-runtime*.spec.ts`: AC-21-12–19, включая concurrency,
-  crash/restart, outbox и canary-off;
+- `app/auto-skill-live-runtime.spec.ts`, `app/auto-skill-store.spec.ts` и
+  `app/auto-skill-provider-ports.spec.ts`: AC-21-12–19, включая delivery
+  confirmation, concurrency, crash/restart, outbox и canary-off;
+- `app/managed-install.spec.ts` и `app/auto-skill-store.spec.ts`: AC-21-19 —
+  persistent barrier, pre-switch drift, все non-descendant rewrites и explicit
+  v2 roll-forward resume, poisoned stale handle и SIGKILL marker recovery;
+- `core/agent-loop.spec.ts`, `app/*subscription*.spec.ts` и
+  `core/runtime/failover-provider.spec.ts`,
+  `app/auto-skill-live-runtime.spec.ts`: AC-21-20, включая failed provider
+  evidence, запрет failover после attempt, turn-wide buffering и resume ordinal;
 - `app/telegram-project-runtime.integration.spec.ts`: AC-21-15, 16.

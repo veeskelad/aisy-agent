@@ -1,10 +1,10 @@
 # Матрица production-готовности Aisy
 
-**Дата среза:** 2026-08-24
+**Дата среза:** 2026-08-25
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current verified code head:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
+**Current verified code head:** `111b143c` (локальный проверенный release candidate)
 
 **Production runtime release из public `master`:**
 `fdfd477f1b84d0155819acaa8d35b03778acba12`
@@ -39,8 +39,9 @@ host.
 Аудит охватил диалог и Telegram UX, voice/media, память и забывание,
 Projects/Sessions/files, tools/Skills/MCP, providers, делегирование, фоновые
 задачи и мониторинг, restart/rollback, доступ к серверу и дополнительные
-operator surfaces. Единственный новый разрыв, который нарушал уже принятое
-требование Aisy, — потеря typed mutation receipt в общем Plan protocol. Остальные
+operator surfaces. Реальными независимыми разрывами оказались потеря typed
+mutation receipt в общем Plan protocol и отсутствие LIVE-композиции уже
+утверждённого typed auto-skill canary. Остальные
 не-LIVE строки ниже либо уже имеют явный target gate, либо являются dormant,
 отсутствующим новым продуктовым срезом или отложенной ADR-границей; их нельзя
 активировать попутным wiring без отдельного решения.
@@ -56,6 +57,7 @@ operator surfaces. Единственный новый разрыв, котор�
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
 | Tools и exact-domain HTTPS | **LIVE с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; Tier-3 и HARD_DENY остаются code-owned | Target approval/Plan Mode E2E; unrestricted `bash` только в explicit bypass |
 | Active Skills | **LIVE для use/install/remove** | Hash-pinned catalog, prompt menu/body-on-trigger, AgentCard filtering, CLI и Telegram controls подключены | Установка, trigger и disable/reload на целевом host |
+| Typed auto-skills | **LIVE в коде при `AISY_AUTO_SKILLS=1`; target-canary не принят** | Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; generator/judge без tools требуют разные identities; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Managed target rollout и Telegram two-session smoke с разными configured identities. До этого default-on запрещён ADR-0108 |
 | Skill promotion runtime | **DORMANT** | Promotion/store/doctor modules и tests существуют отдельно от production composition | Verification probes и human promotion composition |
 | Nightly Skill drafting | **ОТСУТСТВУЕТ** | Nightly loop не имеет реального `draftSkills` seam | Generator output, staged artifact и negative one-off-failure corpus |
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
@@ -83,6 +85,12 @@ operator surfaces. Единственный новый разрыв, котор�
 
 ## Проверки текущего среза
 
+- release candidate `111b143`: Core **2399 passed / 1 skipped**; полный App
+  corpus дал **2614 passed / 2 skipped** и один 5-секундный timeout под общей
+  параллельной нагрузкой, тот же exact файл повторён отдельно — **24/24** без
+  изменения timeout или skip; финальный marker/Doctor corpus — **36/36**,
+  durable delegation adapter — **35/35**; workspace typecheck/build и
+  `git diff --check` green; независимый повторный review — findings отсутствуют;
 - Release `a74419c` на Node **22.23.2**: Core **2364 passed / 1 skipped**,
   Telegram Gateway **255 passed**, App **2542 passed / 19 platform-or-optional
   skipped**. Пять real-process timeouts общего параллельного App run повторены
@@ -148,6 +156,9 @@ operator surfaces. Единственный новый разрыв, котор�
 - локальная gap-audit ветка содержит только устаревший review-срез, а durable
   delegation ветка — три старых commits с эквивалентами в текущей линии;
   прямой merge/cherry-pick вернул бы закрытые промежуточные состояния;
+- legacy local refs, которые всё ещё достигают pre-rewrite истории с приватным
+  marker, признаны непубликуемыми и исключены из merge/cherry-pick/push;
+  publishable current branch, staged diff и public `master` дают marker **0**;
 - legacy publication head относится к отменённому APT-каналу и намеренно не
   мержится после ADR-0106. Перед публикацией `a74419c` remote `master` повторно
   fetched, подтверждён fast-forward `0/1`, а после push exact remote head

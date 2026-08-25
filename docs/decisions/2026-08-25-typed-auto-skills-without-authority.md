@@ -43,10 +43,18 @@ resource scope и capability-catalog revision, но не session id. Все по
 выводятся из trusted runtime binding, canonical JSON сравнивается bytewise и
 образует `scopeKey`. Active/previous CAS pointer отдельно связывает scopeKey с
 code-derived skill identity, поэтому несколько skills одного scope независимы.
+Identity строится только из exact scope и ordered descriptor ids; registry,
+placeholder и postcondition revisions остаются в workflow fingerprint и могут
+без потери previous pointer заменить revision того же skill.
 Typed skill входит в prompt как
 `learned-procedure` ниже constitution/operator/project instructions. Каждый
 реальный tool call повторно проходит approvals, HARD_DENY, sandbox, budgets и
 egress. Auto-skill не создаёт autonomy grant; ADR-0061 остаётся неизменным.
+Для закрытых single-step recipes planning также принадлежит коду: exact scoped
+manifest и текущий запрос дают typed ToolCall, а не доверие Markdown-тексту.
+Synthesis ответа остаётся у provider, но action-required ход не может заранее
+выдать потоковое подтверждение эффекта, а execution receipt принимается только
+при exact session/turn/monotonic ordinal binding.
 
 Agent-authored свободный `SKILL.md`, nightly draft, imported edit и любое
 изменение, которое способно добавить текст, tool, scope или authority,
@@ -55,8 +63,44 @@ Agent-authored свободный `SKILL.md`, nightly draft, imported edit и л
 Первый LIVE rollout — explicit operator canary. Default-on требует отдельного
 release решения после race/restart/adversarial и rollback gates.
 Rollback на binary, не знающий private schema, разрешён только managed
-coordinator-ом после завершения reverse-edge phases и выдачи exact
-state-hash/target-commit-bound `rollback-safe` certificate.
+coordinator-ом. Он сначала публикует durable write barrier, дожидается quiesce
+обычных writers, затем завершает только доказанно recoverable reverse-edge
+phases и выдаёт exact state-hash/target-commit-bound `rollback-safe`
+certificate. Barrier повторно проверяется непосредственно перед atomic active
+switch и остаётся после него, поэтому старый уже запущенный v2 process не может
+создать late edge. Новый edge, in-flight mutation, corruption или target drift
+блокируют `--rollback` и любой non-descendant `--allow-rewrite`. После
+roll-forward barrier снимает только explicit команда v2-aware active release;
+downgrade target этого сделать не может.
+
+Store handle, который увидел barrier или ошибку durable persist, становится
+`poisoned`. Persistent epoch меняется при rollback и explicit resume, поэтому
+даже idle pre-barrier handle не может записать старый in-memory snapshot после
+roll-forward; требуется открыть state заново. Каждая составная мутация, включая
+публикацию artifact, держит private in-flight marker; после аварийного
+завершения coordinator сверяет владельца marker по PID, удаляет только marker
+доказанно завершившегося процесса и повторно проверяет state. Живой или
+неоднозначный владелец блокирует rewrite и любую очистку других marker до
+глобальной quiescence. Marker v2 связывает exact temporary basename; после
+смерти owner временный state/artifact удаляется до снятия marker, а потерявший
+marker temporary fail-closed. Artifact marker также содержит exact revision
+hash: directory удаляется только если durable state не содержит эту revision.
+Poisoned/fenced handle не обслуживает execution-facing
+reads. Provider failover разрешён только до
+первой code-owned попытки tool execution: exact-turn ordinal checkpoint
+синхронно записывается до вызова инструмента, observational progress не даёт
+authority. Durable delegation хеширует только serializable projection с
+`toolOrdinalBase`, а ephemeral `markToolAttempt` проверяет отдельно и возвращает
+неперечисляемым только непосредственно на provider dispatch. Failed или неоднозначная provider-попытка делает весь turn
+непригодным для learning, даже если следующий локальный шаг успешен.
+
+Delivery callback связывает exact evidence id, session и turn. Source-wide
+nonterminal claim запрещает новое evidence того же source через restart.
+Artifact сохраняется только при неоднозначности после atomic state rename;
+доказанная ошибка до rename удаляет artifact этой попытки. Durable idempotency
+`remember` использует code-owned operation id как fact id защищённого
+publication ledger: restart replay завершает ту же операцию, а другой факт с тем
+же id fail-closed.
 
 ## Последствия
 
