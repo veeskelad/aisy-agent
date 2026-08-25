@@ -4,13 +4,13 @@
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current verified code head:** `111b143c` (локальный проверенный release candidate)
+**Current verified code head:** `f12f06eaeb70d74d4ce30fcad618dd3913892df8`
 
 **Production runtime release из public `master`:**
-`fdfd477f1b84d0155819acaa8d35b03778acba12`
+`f12f06eaeb70d74d4ce30fcad618dd3913892df8`
 
-**Managed production current:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
-**Managed production previous:** `a74419ca917254e6468dd6f64b07f89d762c6199`
+**Managed production current:** `f12f06eaeb70d74d4ce30fcad618dd3913892df8`
+**Managed production previous:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -57,7 +57,7 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
 | Tools и exact-domain HTTPS | **LIVE с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; Tier-3 и HARD_DENY остаются code-owned | Target approval/Plan Mode E2E; unrestricted `bash` только в explicit bypass |
 | Active Skills | **LIVE для use/install/remove** | Hash-pinned catalog, prompt menu/body-on-trigger, AgentCard filtering, CLI и Telegram controls подключены | Установка, trigger и disable/reload на целевом host |
-| Typed auto-skills | **LIVE в коде при `AISY_AUTO_SKILLS=1`; target-canary не принят** | Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; generator/judge без tools требуют разные identities; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Managed target rollout и Telegram two-session smoke с разными configured identities. До этого default-on запрещён ADR-0108 |
+| Typed auto-skills | **LIVE на target при explicit canary; behavioural acceptance не завершён** | Target `f12f06e`: `AISY_AUTO_SKILLS=1`, generator `claude-subscription/sonnet`, отдельный judge `claude-subscription/opus`; Doctor загружает private v2 state и даёт `pass`. Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Один реальный Telegram two-session repeat от operator ещё нужен: computer-use не получил доступ к Telegram UI, synthetic inbound не засчитывается |
 | Skill promotion runtime | **DORMANT** | Promotion/store/doctor modules и tests существуют отдельно от production composition | Verification probes и human promotion composition |
 | Nightly Skill drafting | **ОТСУТСТВУЕТ** | Nightly loop не имеет реального `draftSkills` seam | Generator output, staged artifact и negative one-off-failure corpus |
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
@@ -75,8 +75,8 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
-| Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `fdfd477→a74419c→fdfd477` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
-| Managed Git install/update/rollback | **LIVE: target cutover принят** | fr1 current=`fdfd477`, previous=`a74419c`; staged Doctor, offline rollback и roll-forward зелёные, release worktree clean | Следующий release cycle |
+| Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `f12f06e→fdfd477→f12f06e` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
+| Managed Git install/update/rollback | **LIVE: target cutover принят** | fr1 current=`f12f06e`, previous=`fdfd477`; staged Doctor, offline rollback, explicit auto-skill resume и roll-forward зелёные, release worktree clean | Следующий release cycle |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
@@ -91,6 +91,16 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
   изменения timeout или skip; финальный marker/Doctor corpus — **36/36**,
   durable delegation adapter — **35/35**; workspace typecheck/build и
   `git diff --check` green; независимый повторный review — findings отсутствуют;
+- public fast-forward `1457bc6→f12f06e` опубликован; independent `ls-remote`
+  показал один head `master=f12f06e`, tags/других heads нет;
+- fr1 managed update `fdfd477→f12f06e`, explicit restart, canary-on и offline
+  цикл `f12f06e→fdfd477→f12f06e` завершены; previous Doctor **18 pass / 7 warn**,
+  final Doctor **19 pass / 7 warn**, `ok=true`, typed auto-skills `pass`, service
+  active и `NRestarts=0`; roll-forward выполнил explicit `--resume-auto-skills`;
+- Telegram Bot API доставил два сообщения в exact allowlisted chat, включая
+  smoke-инструкцию (`message_id=4118`), без вывода token/chat_id. Inbound
+  operator checkpoint за первое окно ожидания не появился и остаётся отдельным
+  честным acceptance gate;
 - Release `a74419c` на Node **22.23.2**: Core **2364 passed / 1 skipped**,
   Telegram Gateway **255 passed**, App **2542 passed / 19 platform-or-optional
   skipped**. Пять real-process timeouts общего параллельного App run повторены
