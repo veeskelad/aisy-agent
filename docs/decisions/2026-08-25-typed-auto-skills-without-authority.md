@@ -30,16 +30,18 @@ Auto-skill может активироваться без human tap только
 
 1. два verified terminal success с разными durable session id и одним
    code-derived fingerprint;
-2. trusted/narrowed boundary разрешает learning, а каждый effect имеет receipt
-   и проверенный postcondition;
+2. code-owned predicate равен `trusted && !narrowed`, а каждый effect имеет
+   receipt и проверенный postcondition;
 3. strict schema и validators не допускают новых descriptors, scope, authority,
    секретов или конкретных персональных значений;
 4. отдельный judge имеет другую exact provider/model/revision identity;
 5. artifact-bound shadow replay воспроизводит оба очищенных fixture;
 6. compare-and-swap и private revision ledger атомарно публикуют scoped pointer.
 
-`AutoSkillScope` включает operator/profile, project, resource scope и revision
-capability catalog, но не session id. Typed skill входит в prompt как
+`AutoSkillScope` включает exact nullable bot, operator, profile, project,
+resource scope и capability-catalog revision, но не session id. Все поля
+выводятся из trusted runtime binding, canonical JSON сравнивается bytewise и
+входит в domain-separated SHA-256 CAS key. Typed skill входит в prompt как
 `learned-procedure` ниже constitution/operator/project instructions. Каждый
 реальный tool call повторно проходит approvals, HARD_DENY, sandbox, budgets и
 egress. Auto-skill не создаёт autonomy grant; ADR-0061 остаётся неизменным.

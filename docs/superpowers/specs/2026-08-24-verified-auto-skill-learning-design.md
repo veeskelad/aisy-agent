@@ -41,9 +41,13 @@ receipt ids, verification kinds и project/resource scope. Ход из narrowed 
 untrusted context, `actionStatus: unverified`, ambiguous effect, отмена либо
 пропущенный postcondition evidence не создаёт.
 
-`AutoSkillScope` состоит из operator/profile id, project id, resource scope и
-capability-catalog revision. `sessionId` в scope не входит: он используется
-только как identity независимой демонстрации. Код строит fingerprint из
+`AutoSkillScope` состоит из exact nullable botId, operatorId, profileId,
+projectId, resourceScope и capabilityRevision. Поля выводятся только из trusted
+TurnContextLease, bot ownership registry и resolved capability matrix. Predicate
+learning равен `trusted && !narrowed`. Fixed-order UTF-8 JSON с explicit null
+сравнивается bytewise; CAS key равен domain-separated SHA-256. `sessionId` в
+scope не входит: он используется только как identity независимой демонстрации.
+Код строит fingerprint из
 упорядоченной последовательности
 `autonomyWorkflowStep`/`similarDescriptor`, типов проверки и стабильной
 `AutoSkillScope`. Сырые аргументы, ответы инструментов и текст
@@ -110,8 +114,10 @@ Auto-skill загружается не как `operator` system span, а как 
 Кандидат активируется только при последовательном успехе всех gates:
 
 1. strict recipe schema, parser формата и exact artifact/manifest hash;
-2. `refs_exist`, `no_constitution_conflict`, `has_verification_section` и
-   отсутствие любых шагов вне исходного evidence;
+2. typed `descriptors_exist`, `slot_arity_matches`,
+   `postconditions_registered`, rejection extra model fields и отсутствие
+   любых шагов вне исходного evidence; `has_verification_section` проверяет
+   только детерминированный renderer, не model text;
 3. code-owned проверка отсутствия authority fields, секретов, персональных
    значений и запрещённых путей;
 4. отдельный skill judge видит только typed recipe, deterministic rendering,
@@ -132,8 +138,8 @@ validator failure, trace mismatch или revision conflict означает «н
 может выразить новый tool, scope или authority. Каждый будущий tool call заново
 проходит обычный HookGate. Если процедура требует подтверждения, Aisy
 продолжает его спрашивать. Новый ADR явно supersede-ит human-gate только в этой
-   узкой части ADR-0015/0016; scoped autonomy grants ADR-0061 и остальные
-   promotions не меняются.
+узкой части ADR-0015/0016; scoped autonomy grants ADR-0061 и остальные
+promotions не меняются.
 
 ## 6. Scoped private state, lifecycle и rollback
 
@@ -173,6 +179,16 @@ Candidate lifecycle также durable:
 `queued → generated → validated → shadow_verified → prepared → active`, с
 terminal `quarantined|demoted|forgotten`. Каждая фаза idempotent и hash-bound;
 recovery повторяет только локально доказанно незавершённый переход.
+
+Store поддерживает durable reverse edges
+`session/project → evidence → job → revision`. Удаление source session/Project
+сначала вызывает `claimBySource`: одной транзакцией tombstone-ит все зависимые
+jobs/revisions и снимает их active pointers/overlays. Только receipt этого claim
+разрешает source store начать purge. После source purge recovery доводит
+`purging → tombstoned`. Crash до claim оставляет source на месте; crash после
+claim не может вернуть зависимый skill. Session без reverse edges ничего не
+демоутит. Удаление любой из двух evidence sessions снимает revision, потому что
+после forgetting её proof threshold больше не доказуем.
 
 ## 7. Scope и пользовательский контракт
 
@@ -244,7 +260,8 @@ state. Откат binary сохраняет state; неизвестная schema
 12. disable/re-enable/remove/restart, concurrent activation и crash phases
     сохраняют revisions и replay tombstones;
 13. forget Project/session/skill не оставляет replayable/raw personal evidence
-    и не допускает resurrection;
+    и не допускает resurrection; crash до/после reverse-edge claim сохраняет
+    порядок, а несвязанная session не демоутит skill;
 14. Telegram E2E accepted-send даёт одно короткое уведомление без внутренних
     receipt/status; ambiguous send не повторяется и виден Doctor;
 15. full package tests, workspace typecheck/build, Doctor, managed

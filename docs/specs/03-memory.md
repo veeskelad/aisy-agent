@@ -85,6 +85,17 @@ interface MemoryFact {
   extends?: string        // fact_key this record elaborates or specializes
 }
 
+// Personal memory is already owner/profile/scope-bound. A second-person
+// surface form means the current operator under that binding; it is not a new
+// mutable subject field and remains byte-identical through retrieval.
+interface PersonalFactProjection {
+  ownerId: string
+  profileId: string
+  scopeId: string
+  text: string
+  perspective: 'operator-second-person' | 'neutral'
+}
+
 type MemoryOp =
   | { op: 'ADD'; text: string }
   | { op: 'UPDATE'; targetId: string; text: string }
@@ -750,6 +761,11 @@ callback и его restart-E2E готовы; ещё нужны approved binding/
     ограничивает delivery/read/ack, но их поздний результат не может продолжить
     pass. После неоднозначного `ACK_TIMEOUT` новый pass перечитывает durable
     голову: она могла измениться, если поздний ack успел зафиксироваться.
+31. **AC-03-31** — Remembered second-person fact хранится и извлекается
+    byte-identical под exact owner/profile/scope, prompt projection явно задаёт
+    perspective `operator-second-person`, а другой owner/profile/Project не
+    получает этот fact. Никакое model-authored subject metadata не участвует в
+    owner routing.
 
 ## 10. Open questions
 

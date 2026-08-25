@@ -105,9 +105,12 @@ opt-in настройку; её default cutover требует отдельно�
 
 При `AISY_AUTO_SKILLS=1` private schema v2 хранит immutable recipe revisions,
 scoped active/previous pointers, evidence/jobs, forget tombstones и delivery
-outbox. `AutoSkillScope` состоит из operator/profile, Project, resource scope и
-capability revision без session id. Все файлы `0600`, каталоги `0700`; unknown
-schema fail-closed.
+outbox. `AutoSkillScope` состоит из exact nullable botId, operatorId, profileId,
+Project, resource scope и capability revision без session id. Поля выводятся
+только из trusted runtime binding, кодируются fixed-order JSON с explicit null,
+сравниваются bytewise и образуют domain-separated SHA-256 CAS key. Predicate
+learning равен `trusted && !narrowed`. Все файлы `0600`, каталоги `0700`;
+unknown schema fail-closed.
 
 До terminal reply одна bounded local transaction фиксирует verified evidence,
 candidate job и reply-release state. Generator/judge worker идёт после reply.
@@ -115,6 +118,12 @@ Lifecycle `queued → generated → validated → shadow_verified → prepared �
 и forget `forget_claimed → purging → tombstoned` восстанавливаются idempotently.
 Active pointer меняется только atomic CAS; durable previous не теряется при
 активации другого Skill.
+
+Durable reverse edges `session/project → evidence → job → revision` участвуют
+в удалении source state. Session/Project purge начинается только после
+`claimBySource` receipt, который одной транзакцией tombstone-ит зависимые
+revisions и снимает overlays. Crash до claim не удаляет source; crash после
+claim не возвращает skill. Несвязанная session оставляет revision активной.
 
 Следующий turn исходной session получает versioned `learned-procedure` overlay
 без изменения frozen memory/history prefix. Новая session видит revision в
@@ -163,7 +172,8 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
 6. **AC-21-17:** permanent exact-revision receipt демоутит; transient failure —
    нет; re-enable повторно проходит gates.
 7. **AC-21-18:** forget удаляет replayable/raw evidence, оставляет только
-   минимальный tombstone и не допускает resurrection.
+   минимальный tombstone и не допускает resurrection; linked source сначала
+   снимает revision, unrelated session её не меняет, crash ordering сохраняется.
 8. **AC-21-19:** canary-off делает zero auto-skill observation/overlay I/O;
    schema rollback и Doctor fail-closed проверены.
 

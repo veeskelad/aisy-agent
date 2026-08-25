@@ -289,11 +289,13 @@ JSON/cache и prose evidence не создают. Несогласованная
 `spawn_subagent` и минимальный однозадачный JSON `{"intent":"standalone task"}`;
 самостоятельный расчёт или role-play ответа субагента запрещён и evidence не
 создаёт. Императивы `запомни` / `remember` выбирают `mutate-required`.
-Успешный durable `remember` со статусом `COMMITTED` возвращает typed
-`verified:true` и пользовательское подтверждение `Запомнил — <факт>` с
-обрезанными внешними пробелами. Provider показывает это подтверждение без
-перефразирования в системный отчёт о хранилище; повторный readback памяти в том
-же ходе не нужен.
+Успешный durable `remember` со статусом `COMMITTED` возвращает exact
+`{ok:true, output, verified:true, mutationReceipt}`. Receipt имеет закрытую
+schema `memory.remember/v1` и связывает `operationId`, `receiptId`, `turnId`,
+exact trimmed `fact` и literal `committed:true`. Code-owned `output` равен
+`Запомнил, что <факт>` и проходит terminal renderer без synthesis-round
+перефразирования. Durable reply-release outbox дедуплицирует retry/replay;
+повторный readback памяти в том же ходе не нужен.
 Составная команда с делегированием и мутацией сохраняет оба обязательства:
 делегирование не маскирует запись, а receipt записи не заменяет результат
 субагента.
@@ -344,11 +346,12 @@ compaction, nightly или sub-agent loops.
 
 Нормализация terminal result не теряет code-owned mutation receipt:
 `verified:true` проходит через общий protocol в `auto`, `confirm` и после exact
-planned admission. Разрешены только точные структуры `{ok, output}` и
-`{ok, output, verified:true}`. Truthy-значение, `verified:false`, accessor,
-Proxy, symbol или дополнительное поле дают `PLAN_EXECUTOR_RESULT_INVALID` и не
-создают action evidence. Provider prose, progress и сериализованный MCP-ответ
-не являются receipt.
+planned admission. Разрешены только точные структуры `{ok, output}`,
+`{ok, output, verified:true}` и exact remember-структура
+`{ok:true, output, verified:true, mutationReceipt}` из §4.7. Другой extra field,
+неверная nested schema, truthy-значение, `verified:false`, accessor, Proxy или
+symbol дают `PLAN_EXECUTOR_RESULT_INVALID` и не создают action evidence.
+Provider prose, progress и сериализованный MCP-ответ не являются receipt.
 
 ## 5. Behavior & control flow
 
@@ -704,13 +707,17 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     и provider tool description явно называют `spawn_subagent`, показывают
     минимальный `{"intent":"standalone task"}` и запрещают имитацию child result.
 61. **AC-01-61** — `запомни` / `remember` классифицируются как
-    `mutate-required`, а tool получает typed `verified:true` только после
-    durable `COMMITTED` и возвращает `Запомнил — <trimmed fact>`; BLOCKED/error
-    и невалидный MCP terminal receipt не удовлетворяют mutation contract.
+    `mutate-required`, а tool получает literal `verified:true` и exact
+    `memory.remember/v1` receipt только после durable `COMMITTED`; code-owned
+    output равен `Запомнил, что <trimmed fact>`. Missing/both `fact|text`,
+    BLOCKED/error и невалидный MCP terminal receipt не удовлетворяют mutation
+    contract и не создают reply-release.
 62. **AC-01-62** — Provider-neutral Plan protocol сохраняет literal
     `verified:true` code-owned executor result через `auto`/`confirm` и exact
-    planned path; truthy/false receipt, accessor/Proxy/symbol и любое лишнее
-    поле дают `PLAN_EXECUTOR_RESULT_INVALID` и zero verified action evidence.
+    planned path; exact `memory.remember/v1` является единственным разрешённым
+    расширением структуры. Truthy/false receipt, accessor/Proxy/symbol, иной
+    nested receipt и любое другое лишнее поле дают
+    `PLAN_EXECUTOR_RESULT_INVALID` и zero verified action evidence.
 
 ## 10. Open questions
 

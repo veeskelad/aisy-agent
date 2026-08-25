@@ -25,18 +25,19 @@ Remember принимает ровно одно из полей `fact` или le
 Именно эта строка записывается в canonical memory. Отдельного модельного
 `acknowledgement` нет, поэтому сохранить чай и подтвердить кофе невозможно.
 Пользователь видит сохранённую формулировку и может сразу её исправить.
-Second-person facts маркируются code-owned subject `operator` и входят в prompt
-с явной рамкой «ты = текущий оператор»; retrieval не вправе приписать факт Aisy
-или третьему лицу.
+Отдельного subject-поля этот срез не вводит. Существующая owner/profile/scope
+привязка personal memory задаёт prompt-рамку «ты = текущий оператор»;
+second-person text остаётся byte-identical и не может попасть в память другого
+owner/profile/Project.
 
 Код проверяет `oneOf`: missing и одновременные `fact + text` отклоняются до
 mutation; legacy `text` нормализуется в `fact`. Далее проверяются одна непустая
 строка, bounded length, отсутствие control chars и служебных receipt/status
 prefixes. После durable `COMMITTED` executor возвращает typed receipt
-`{ operationId, receiptId, turnId, fact, committed: true }`. Durable terminal
-outbox атомарно связывает receipt с состоянием reply release, а renderer, не
-synthesis model, строит `Запомнил, что <fact>`. Точка добавляется только если её
-нет.
+`{ ok:true, output, verified:true, mutationReceipt:{ kind, operationId,
+receiptId, turnId, fact, committed:true } }`. Durable terminal outbox атомарно
+связывает receipt с состоянием reply release, а `output` рендерит код, не
+synthesis model: `Запомнил, что <fact>`. Точка добавляется только если её нет.
 
 До commit, при validation failure, `BLOCKED`, ambiguous effect или ошибке слово
 «Запомнил» не выводится. Старый вызов с допустимым `text` мигрируется как alias
@@ -47,7 +48,7 @@ mutation.
 
 ## Границы
 
-Срез не меняет storage/index/forgetting, не пытается выполнять морфологическую
+Срез не меняет storage/index/forgetting schema, не пытается выполнять морфологическую
 перезапись регулярными выражениями и не доверяет модели заявлять о совершённой
 mutation. Он меняет только форму входа remember и code-owned terminal receipt.
 

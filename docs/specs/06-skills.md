@@ -92,18 +92,37 @@ ADR-0108 permits unattended activation only for a strict manifest whose model
 payload contains ordered `descriptorId`, `placeholderId` and `postconditionId`
 values already present in code-owned registries and the two source evidences.
 Code, not the model, supplies name, triggers, display text, scope and
-verification. `AutoSkillScope = { operatorProfileId, projectId, resourceScope,
-capabilityRevision }`; session id is evidence identity and never part of scope.
+verification. `AutoSkillScope = { botId, operatorId, profileId, projectId,
+resourceScope, capabilityRevision }`; session id is evidence identity and never
+part of scope. `botId` is exact string or literal `null`, never omitted.
+
+Scope fields come only from trusted `TurnContextLease`, bot ownership registry
+and resolved capability matrix. Fixed-order UTF-8 JSON with explicit `null` is
+compared bytewise; CAS/store key is
+`SHA-256("aisy-auto-skill-scope/v1\n" + canonicalJson)`. Unknown/empty field,
+alternate encoding or collision with a different canonical payload fail closed.
+Learning predicate is exactly `trusted && !narrowed`.
 
 The v1 placeholder source enum is `current_request | verified_scope_metadata`.
 Missing or ambiguous binding blocks planning before HookGate. The planner emits
 ordinary tool calls; every call retains approvals, HARD_DENY, sandbox, budget
 and egress checks. The typed recipe enters context as `learned-procedure` below
 constitution/operator/project instructions, never as an operator system span.
+Typed validators require exact descriptor arity, exact placeholder-to-slot
+mapping, registered postconditions, no extra model fields and no missing
+required effect. Free-form `has_verification_section` applies only to the
+deterministically rendered view, never as evidence about model text.
 
 Free-form `SKILL.md`, nightly draft, imported edit and any candidate containing
 new text/tool/scope/authority remain on the human approval path. Auto-skill
 artifacts and evidence live only in private runtime state, never source Git.
+
+Private state stores reverse edges `session/project → evidence → job →
+revision`. Source forgetting must first obtain an atomic `claimBySource`
+receipt that tombstones dependent jobs/revisions and removes active overlays;
+only then may Session/Project storage purge its source. Recovery never restores
+a claimed pointer. Removing one evidence session invalidates its derived
+revision; an unrelated session with no edge has no effect.
 
 ## 3. Interfaces
 
@@ -147,7 +166,9 @@ export interface Skills {
 }
 
 export interface AutoSkillScope {
-  operatorProfileId: string
+  botId: string | null
+  operatorId: string
+  profileId: string
   projectId: string
   resourceScope: string
   capabilityRevision: string
@@ -485,9 +506,10 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 
 **Staging governance & approval integrity (ADR-0015, ADR-0029, finding 1)**
 
-14. **AC-06-14** — Every agent-authored (`provenance: agent-authored`) skill that reaches prod
-    has a git commit, and that commit's parent state had the skill in `staging/` (no
-    agent-authored skill appears in prod without a prior staged artifact).
+14. **AC-06-14** — Every free-form agent-authored
+    (`provenance: agent-authored`) skill that reaches prod has a git commit, and
+    that commit's parent state had the skill in `staging/`. ADR-0108 typed
+    manifests are a separate private-runtime class and cannot enter this path.
 15. **AC-06-15** — The review payload for a staged skill contains all three of: full skill text,
     the diff vs prod, and the triggering context.
 16. **AC-06-16** — Any trust/permanence field present in generator or judge output is absent
@@ -529,12 +551,25 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 29. **AC-06-29** — skill trust is graded by source (builtin > trusted-repo > community > user) and
     the model cannot raise its own skill's trust level.
 
+**Typed auto-skills (ADR-0108)**
+
+30. **AC-06-30** — Model output with an extra field, unknown descriptor/
+    postcondition, wrong registry arity or incorrect placeholder-slot mapping is
+    rejected before judge/activation.
+31. **AC-06-31** — Missing or ambiguous `current_request` /
+    `verified_scope_metadata` value blocks planning before HookGate and emits no
+    tool call.
+32. **AC-06-32** — Scope canonicalization derives exact nullable bot/operator/
+    profile/project/resource/capability fields from trusted runtime bindings;
+    alternate encoding, collision or `narrowed=true` creates zero evidence.
+
 ## 10. Open questions
 
-- **Trust gradient for low-risk categories.** Auto-commit for categories with a clean approval
-  track record is deferred to [ADR-0016](../decisions/2026-06-11-generator-judge-self-learning.md);
-  irreversible/safety-touching categories never auto-commit. Resolution lives in the nightly-loop
-  milestone, not this component.
+- **Trust gradient for free-form categories.** Auto-commit of free-form drafts
+  remains deferred to
+  [ADR-0016](../decisions/2026-06-11-generator-judge-self-learning.md);
+  irreversible/safety-touching categories never auto-commit. ADR-0108 already
+  decides only the narrower typed zero-authority class.
 - **Hysteresis constants** for the negative-skill threshold and the probe cadence are left to
   implementation tuning under [ADR-0025](../decisions/2026-06-11-transient-vs-permanent-skill-failure.md);
   the invariant (N≥3 distinct sessions, advisory, probe un-fossilizes) is fixed here.
@@ -554,6 +589,7 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
   - [ADR-0019 — Stable-Prefix KV-Cache](../decisions/2026-06-11-stable-prefix-kv-cache.md)
   - [ADR-0023 — Durable Forgetting with Tombstones](../decisions/2026-06-11-durable-forgetting-tombstones.md)
   - [ADR-0014 — Narrow-Waist Tool Set](../decisions/2026-06-11-narrow-waist-tool-set.md)
+  - [ADR-0108 — Typed auto-skills without authority](../decisions/2026-08-25-typed-auto-skills-without-authority.md)
   - [ADR-0004 — TypeScript for Core](../decisions/2026-06-11-typescript-for-core.md)
 - Concept docs:
   - [`docs/concepts/skill-lifecycle.md`](../concepts/skill-lifecycle.md)
