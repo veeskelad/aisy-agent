@@ -63,6 +63,16 @@ verification по-прежнему принадлежит Aisy.
 классификатора не отменяет второе обязательство: terminal verifier требует
 успешное evidence делегирования и отдельно receipt либо readback мутации.
 
+Однострочный stdin интерфейс CLI не превращает структурные spans в настоящие
+provider roles. Поэтому adapter не печатает служебные метки `System:` / `User:`:
+они выглядят для CLI как текст оператора и могут вызвать ложное сообщение о
+prompt injection. Frozen prefix остаётся первым byte-identical trusted-блоком,
+а spans передаются в versioned `AISY_CONTEXT_V1` JSON-envelope. Code-owned поле
+`source` различает `aisy_control`, `operator`, `learned_procedure`,
+`untrusted_input`, `assistant_history` и `tool_result`; только
+`source="operator"` разрешено приписывать оператору. Текст остаётся verbatim
+JSON-значением и не может создать соседний структурный элемент.
+
 **Транспорт — loopback HTTP, а не stdio.** stdio заставил бы CLI породить второй
 процесс Aisy, которому понадобились бы собственные блокировки памяти и который
 исполнял бы инструменты вне живой композиции. Сервер слушает только `127.0.0.1`
@@ -96,6 +106,9 @@ verification по-прежнему принадлежит Aisy.
   кредит — экономика может измениться.
 - Модель читает описания инструментов и их результаты, поэтому инъекция из
   tool-result уводит именно её. Входной классификатор результатов не сделан.
+- JSON-envelope добавляет небольшой фиксированный token overhead. Он устраняет
+  неоднозначность code-owned ролей, но не делает содержимое `untrusted_input`
+  доверенным и не заменяет narrowing/HARD_DENY.
 - Codex-подписка подключена отдельным version-pinned `codex app-server`
   адаптером. Для каждого хода он создаёт новый loopback MCP bridge, передаёт
   только allowlist Aisy tools, связывает вызовы с exact thread/turn и выключает

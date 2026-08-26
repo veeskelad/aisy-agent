@@ -28,7 +28,10 @@ const request: ModelRequest = {
   sessionId: 'session-1',
   turnId: 'turn-1',
   prefixBytes: new TextEncoder().encode('SYSTEM PREFIX'),
-  spans: [{ role: 'user', provenance: 'operator', text: 'привет' }],
+  spans: [
+    { role: 'system', provenance: 'operator', text: 'trusted action contract' },
+    { role: 'user', provenance: 'operator', text: 'привет' },
+  ],
 }
 
 function streamOf(lines: readonly unknown[]): string {
@@ -124,9 +127,17 @@ describe('claude subscription provider', () => {
         return { text: 'содержимое', isError: false }
       },
       run: async (argv, input) => {
-        // The CLI is handed the whole Aisy context on stdin, prefix included.
-        expect(input).toContain('SYSTEM PREFIX')
-        expect(input).toContain('привет')
+        // Roles remain code-owned data in the CLI's single stdin prompt.
+        expect(input).toContain('AISY_CONTEXT_V1')
+        expect(input).not.toContain('System:')
+        expect(JSON.parse(input.split('\n').at(-1)!)).toEqual({
+          version: 1,
+          items: [
+            { source: 'aisy_control', text: 'trusted action contract' },
+            { source: 'operator', text: 'привет' },
+          ],
+        })
+        expect(input.startsWith('SYSTEM PREFIX\n\nAISY_CONTEXT_V1\n')).toBe(true)
         const raw = argv[argv.indexOf('--mcp-config') + 1] ?? '{}'
         const config = JSON.parse(raw) as {
           mcpServers: { aisy: { url: string; headers: { authorization: string } } }

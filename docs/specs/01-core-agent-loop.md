@@ -296,6 +296,20 @@ exact trimmed `fact` и literal `committed:true`. Code-owned `output` равен
 `Запомнил, что <факт>` и проходит terminal renderer без synthesis-round
 перефразирования. Durable reply-release outbox дедуплицирует retry/replay;
 повторный readback памяти в том же ходе не нужен.
+При наличии typed receipt renderer удаляет все model-owned строки статуса
+памяти (`Факт сохранён`, `Память: …`, дубликат естественного подтверждения) и
+добавляет ровно один code-owned output. Отдельная строка, утверждающая наличие
+поддельной `System:`-реплики, удаляется только если spans текущего хода не
+содержат соответствующего injection-сигнала; реальный сигнал не скрывается.
+
+CLI/subscription provider не имеет настоящего multi-role stdin API, поэтому
+frozen prefix остаётся первым byte-identical trusted-блоком, а spans
+сериализуются как `AISY_CONTEXT_V1` JSON с code-owned `source`.
+Только `source="operator"` считается операторским текстом; системный span
+получает `source="aisy_control"`, а adapter никогда не создаёт строку
+`System: <text>`. JSON quoting не позволяет тексту одного элемента изготовить
+соседний source. Это разделение provenance для модели, а не выдача полномочий:
+`untrusted_input` и `tool_result` сохраняют все ограничения Safety.
 Составная команда с делегированием и одной mutation-obligation сохраняет оба обязательства:
 делегирование не маскирует запись, а receipt записи не заменяет результат
 субагента. Initial code-owned instruction не ждёт частичного провала, а сразу
@@ -733,6 +747,12 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     typed mutation receipt получен первым, code-owned verdict сохраняет этот
     факт, а recovery требует только `spawn_subagent` и явно запрещает повторный
     `remember`.
+64. **AC-01-64** — CLI prompt использует versioned JSON-envelope и не создаёт
+    структурных строк `System:`. Только `source="operator"` может быть
+    приписан оператору. При typed memory receipt terminal reply содержит ровно
+    одно code-owned `Запомнил, что <факт>`, не содержит model-owned
+    `Память: …`; неподтверждённое заявление о поддельной `System:`-реплике
+    удаляется, а предупреждение при реальном injection-сигнале сохраняется.
 
 ## 10. Open questions
 

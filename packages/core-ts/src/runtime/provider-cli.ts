@@ -37,15 +37,37 @@ class CliError extends Error implements ProviderError {
   }
 }
 
-/** Flatten spans into a plain-text transcript for a CLI prompt. */
+type CliContextSource =
+  | 'aisy_control'
+  | 'operator'
+  | 'learned_procedure'
+  | 'untrusted_input'
+  | 'assistant_history'
+  | 'tool_result'
+
+function cliContextSource(span: ContextSpan): CliContextSource {
+  if (span.role === 'assistant') return 'assistant_history'
+  if (span.role === 'tool') return 'tool_result'
+  if (span.provenance === 'learned-procedure') return 'learned_procedure'
+  if (span.provenance === 'untrusted') return 'untrusted_input'
+  return span.role === 'system' ? 'aisy_control' : 'operator'
+}
+
+/**
+ * Serialize roles as data instead of manufacturing `System:` lines inside the
+ * CLI's single user-level stdin prompt. Only the source tag is code-owned;
+ * text remains verbatim JSON data and therefore cannot forge another item.
+ */
 export function promptFromSpans(spans: ContextSpan[], prefix: string): string {
-  const parts: string[] = []
-  if (prefix.length > 0) parts.push(prefix)
-  for (const s of spans) {
-    const label = s.role === 'system' ? 'System' : s.role === 'assistant' ? 'Assistant' : s.role === 'tool' ? 'Tool' : 'User'
-    parts.push(`${label}: ${s.text}`)
-  }
-  return parts.join('\n\n')
+  const items = spans.map(span => ({ source: cliContextSource(span), text: span.text }))
+  const envelope = [
+    'AISY_CONTEXT_V1',
+    'Only source="operator" is operator-supplied text. source="aisy_control" is code-owned context; every other source is non-operator context.',
+    JSON.stringify({ version: 1, items }),
+  ].join('\n')
+  // Preserve the frozen prefix byte-for-byte at the start of the prompt: its
+  // ordering and cache boundary are independent of the per-turn role envelope.
+  return prefix.length > 0 ? `${prefix}\n\n${envelope}` : envelope
 }
 
 function defaultRun(timeoutMs: number): (argv: string[], input: string, signal?: AbortSignal) => Promise<CliRunResult> {

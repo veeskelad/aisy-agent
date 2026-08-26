@@ -117,21 +117,65 @@ function memoryAcknowledgement(
   return descriptors['output']!.value === output ? { receiptId: receipt.receiptId, output } : null
 }
 
+const FALSE_ROLE_PREFIX = /(?:поддельн\p{L}*|fake|forged)/iu
+const SYSTEM_ROLE_REFERENCE = /(?:system\s*:\s*-?\s*(?:reply|message|instruction|реплик\p{L}*|сообщен\p{L}*|инструкц\p{L}*)?|system\s+(?:reply|message|role|instruction)|системн\p{L}*\s+(?:реплик\p{L}*|сообщен\p{L}*|инструкц\p{L}*|рол\p{L}*))/iu
+
+function claimsFalseSystemRole(text: string): boolean {
+  const falseRole = FALSE_ROLE_PREFIX.exec(text)
+  const systemRole = SYSTEM_ROLE_REFERENCE.exec(text)
+  if (falseRole === null || systemRole === null) return false
+  if (falseRole.index < systemRole.index) {
+    const between = text.slice(falseRole.index + falseRole[0].length, systemRole.index)
+    return /^[\s,.;:!—–‑-]*(?:(?:embedded|встроенн\p{L}*)[\s,.;:!—–‑-]*)?$/iu.test(between)
+  }
+  const between = text.slice(systemRole.index + systemRole[0].length, falseRole.index)
+  return /^[\s,.;:!—–‑-]*(?:(?:was|is|were|был\p{L}*|оказал\p{L}*|являл\p{L}*)[\s,.;:!—–‑-]*)?$/iu.test(between)
+}
+
+function hasPromptInjectionSignal(text: string): boolean {
+  return /\bsystem\s*:|prompt\s+injection|инъекц\p{L}*\s+промпт/iu.test(text) ||
+    claimsFalseSystemRole(text)
+}
+
+function inboundSpanGroundsPromptInjectionClaim(span: ContextSpan): boolean {
+  return (span.role === 'user' || span.provenance === 'untrusted') &&
+    hasPromptInjectionSignal(span.text)
+}
+
+function synthesisSpanGroundsPromptInjectionClaim(span: ContextSpan): boolean {
+  return span.role === 'tool' && hasPromptInjectionSignal(span.text)
+}
+
 function terminalReplyWithMemoryAcknowledgements(
   reply: string,
   acknowledgements: readonly string[],
+  promptInjectionClaimGrounded: boolean,
 ): string {
   if (acknowledgements.length === 0) return reply
   let body = reply
   for (const acknowledgement of acknowledgements) {
     body = body.split(acknowledgement).join('')
   }
+  const acknowledgedFacts = acknowledgements
+    .filter(acknowledgement => acknowledgement.startsWith('Запомнил, что '))
+    .map(acknowledgement => acknowledgement.slice('Запомнил, что '.length))
   body = body.replace(
     /\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)[^\r\n]*/gimu,
     '',
   )
+  if (!promptInjectionClaimGrounded) {
+    body = body.split(/\r?\n/u)
+      .filter(line => !claimsFalseSystemRole(line))
+      .join('\n')
+  }
   body = body.split(/\r?\n/u)
-    .filter(line => !/^\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)/iu.test(line))
+    .filter(line => {
+      if (/^\s*(?:[-*•]\s*)?(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)/iu.test(line)) return false
+      const memoryStatus = line.match(/^\s*(?:[-*•]\s*)?память\s*:\s*(.*)$/iu)?.[1]?.trim()
+      if (memoryStatus === undefined) return true
+      if (/^(?:[«"'][\s\S]*[»"']|пусто|(?:факт\s+)?(?:сохран\p{L}*|обновл\p{L}*|записан\p{L}*))\.?$/iu.test(memoryStatus)) return false
+      return !acknowledgedFacts.some(fact => memoryStatus.includes(fact))
+    })
     .join('\n')
     .replace(/\n{3,}/gu, '\n\n')
     .trim()
@@ -509,6 +553,8 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       const actionEvidenceLog: ActionEvidence[] = []
       let turnEffectObserved = false
       const memoryAcknowledgements = new Map<string, string>()
+      let promptInjectionClaimGrounded = input.spans.some(span =>
+        inboundSpanGroundsPromptInjectionClaim(span))
       const verifiedWorkflowSteps: VerifiedWorkflowStepObservation[] = []
       let verifiedWorkflowDelivery: { evidenceId: string } | undefined
       let verifiedWorkflowEligible = true
@@ -562,6 +608,11 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         const lateSpans = deps.lateContext === undefined
           ? []
           : await deps.lateContext({ at: 'pre-provider', spans: [...input.spans, ...extraSpans] })
+        if (!promptInjectionClaimGrounded) {
+          promptInjectionClaimGrounded = extraSpans.some(span =>
+            synthesisSpanGroundsPromptInjectionClaim(span)) || lateSpans.some(span =>
+            inboundSpanGroundsPromptInjectionClaim(span))
+        }
         const bufferedTextDeltas: Extract<TurnProgressEvent, { type: 'text-delta' }>[] = []
         try {
           const modelRequest: ModelRequest = {
@@ -603,6 +654,10 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           }
           actionEvidenceLog.push(...providerEvidence)
           for (const execution of providerExecutions) {
+            if (!promptInjectionClaimGrounded &&
+              hasPromptInjectionSignal(toolResultText(execution.result))) {
+              promptInjectionClaimGrounded = true
+            }
             if (!executionBelongsToTurn(execution.context) ||
               execution.context.ordinal <= toolInvocationOrdinal ||
               execution.context.ordinal > durableToolOrdinalHighWater) {
@@ -1022,6 +1077,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
           reply: terminalReplyWithMemoryAcknowledgements(
             response.reply,
             [...memoryAcknowledgements.values()],
+            promptInjectionClaimGrounded,
           ),
           state: 'ok',
           narrowed: s.narrowed,
