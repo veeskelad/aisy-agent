@@ -1,16 +1,16 @@
 # Матрица production-готовности Aisy
 
-**Дата среза:** 2026-08-25
+**Дата среза:** 2026-08-27
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current verified code head:** `f12f06eaeb70d74d4ce30fcad618dd3913892df8`
+**Current verified code head:** `1df48515b55cd2d9dff2e8046ad18179ad30573e`
 
 **Production runtime release из public `master`:**
-`f12f06eaeb70d74d4ce30fcad618dd3913892df8`
+`1df48515b55cd2d9dff2e8046ad18179ad30573e`
 
-**Managed production current:** `f12f06eaeb70d74d4ce30fcad618dd3913892df8`
-**Managed production previous:** `fdfd477f1b84d0155819acaa8d35b03778acba12`
+**Managed production current:** `1df48515b55cd2d9dff2e8046ad18179ad30573e`
+**Managed production previous:** `2a98797fffbec630f81d8897874d437f35ec0c27`
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -41,7 +41,15 @@ Projects/Sessions/files, tools/Skills/MCP, providers, делегирование
 задачи и мониторинг, restart/rollback, доступ к серверу и дополнительные
 operator surfaces. Реальными независимыми разрывами оказались потеря typed
 mutation receipt в общем Plan protocol и отсутствие LIVE-композиции уже
-утверждённого typed auto-skill canary. Остальные
+утверждённого typed auto-skill canary. Управляемый rollback-drill дополнительно
+выявил два независимых операционных разрыва: roll-forward к retained descendant
+после rollback и отсутствие code-owned выхода из restart-budget quarantine.
+Они закрыты commits `bd1f635` и `558a4ce` через уточнение ADR-0071/0108,
+русские acceptance criteria и fault-тесты. Release `1df4851` отдельно закрыл
+независимый диалоговый разрыв: краткое «Покажи» после code-owned утреннего
+уведомления больше не превращается в action verification, а служебные action
+spans и промежуточные provider attempts не попадают в следующий модельный
+контекст. Остальные
 не-LIVE строки ниже либо уже имеют явный target gate, либо являются dormant,
 отсутствующим новым продуктовым срезом или отложенной ADR-границей; их нельзя
 активировать попутным wiring без отдельного решения.
@@ -50,20 +58,20 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
 |---|---|---|---|
-| Telegram text, streaming, attachments и forwarded batches | **LIVE** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в `packages/app/src/bin/aisy.ts`; после managed cutover operator composite round-trip доставил один terminal ответ | Повторять короткий operator smoke для каждого UX release |
+| Telegram text, streaming, attachments и forwarded batches | **LIVE** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в `packages/app/src/bin/aisy.ts`. Release `1df4851` добавляет одноразовый code-owned переход из точного утреннего уведомления в staging-card: краткое «Покажи» не запускает provider/action loop, а конкретное «Покажи файл» сохраняет inspect-path | После следующего утреннего уведомления от нового процесса подтвердить живой shortcut; старое уведомление до restart доказательством не считается |
 | Workspace, Projects, Sessions и files | **LIVE** | Registry v2, ProjectService, session lease, scoped files и Telegram lifecycle controls находятся в production composition | Project create/switch/resume и restart E2E на целевом host |
-| Transcript v2 и compaction | **LIVE в коде** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; failure деградирует до bounded truncation | Target-FS self-test и long-session Telegram acceptance; day-log/activity pipeline DORMANT |
-| Keyword/scoped memory и forgetting | **LIVE** | Protected global/Project stores и `makeScopedMemoryLiveView` — единственный live path; nightly проходит shared forget filter | Restart, recall, correction и human-confirmed forget E2E |
+| Transcript v2 и compaction | **LIVE в коде** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; raw audit остаётся неизменным. Provider-facing projection удаляет code-owned recovery/action spans и промежуточные model attempts, сохраняя user ingress, значимые tool spans и terminal reply | Target-FS self-test и long-session Telegram acceptance; day-log/activity pipeline DORMANT |
+| Keyword/scoped memory и forgetting | **LIVE** | Protected global/Project stores и `makeScopedMemoryLiveView` — единственный live path; nightly проходит shared forget filter. Release `2a98797` закрепляет ровно одно code-owned естественное подтверждение typed receipt и удаляет model-owned пустые/дублирующие статусы памяти | Composite receipt, restart, recall, correction и human-confirmed forget E2E |
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
 | Tools и exact-domain HTTPS | **LIVE с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; Tier-3 и HARD_DENY остаются code-owned | Target approval/Plan Mode E2E; unrestricted `bash` только в explicit bypass |
 | Active Skills | **LIVE для use/install/remove** | Hash-pinned catalog, prompt menu/body-on-trigger, AgentCard filtering, CLI и Telegram controls подключены | Установка, trigger и disable/reload на целевом host |
-| Typed auto-skills | **LIVE на target при explicit canary; behavioural acceptance не завершён** | Target `f12f06e`: `AISY_AUTO_SKILLS=1`, generator `claude-subscription/sonnet`, отдельный judge `claude-subscription/opus`; Doctor загружает private v2 state и даёт `pass`. Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Один реальный Telegram two-session repeat от operator ещё нужен: computer-use не получил доступ к Telegram UI, synthetic inbound не засчитывается |
+| Typed auto-skills | **LIVE на target при explicit canary; behavioural acceptance не завершён** | Target `2a98797`: `AISY_AUTO_SKILLS=1`, generator `claude-subscription/sonnet`, отдельный judge `claude-subscription/opus`; Doctor загружает private v2 state и даёт `pass`, `active=0`, очереди и quarantine пусты. Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Нужны два реальных чистых `memory.remember` turn в разных выделенных Telegram sessions, activation/planner smoke и точная cleanup-проверка; составной turn намеренно не считается evidence |
 | Skill promotion runtime | **DORMANT** | Promotion/store/doctor modules и tests существуют отдельно от production composition | Verification probes и human promotion composition |
 | Nightly Skill drafting | **ОТСУТСТВУЕТ** | Nightly loop не имеет реального `draftSkills` seam | Generator output, staged artifact и negative one-off-failure corpus |
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
 | Streamable HTTP MCP | **DORMANT** | Transport policy и wire foundation существуют, но live binding выключен | Отдельное security/authority решение и acceptance |
 | Native API providers | **LIVE под supervisor** | Семь fixed descriptors, root-owned broker, validator/worker sockets, host-encrypted A/B slots и rollback развёрнуты; arbitrary URL не принимается | TTY enrollment, bounded vendor call, switch, restart и revoke real slot |
-| Claude/Codex subscription brains | **LIVE на target; receipt fix принят** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы; release `a74419c` сохранил literal code-owned receipt, fail-closed отклонил truthy/extra/accessor/Proxy/symbol terminal, а повторный operator composite turn завершил durable memory mutation и настоящую delegation одним terminal ответом без recovery/unverified | Повторять composite smoke после изменений action protocol |
+| Claude/Codex subscription brains | **LIVE на target; provenance/receipt fix развёрнут** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы. Releases `2a98797` и `1df4851` сохраняют frozen prefix, сериализуют spans как `AISY_CONTEXT_V1`, не приписывают оператору неподтверждённые ложные предупреждения и фильтруют их до streaming/history, сохраняя реальное untrusted/tool grounding и приватный raw audit | Повторить composite smoke на exact `1df4851` |
 | Voice provider registry / Deepgram proxy | **LIVE framework; text-only по умолчанию; structural target gate принят** | Telegram voice ingress, общий `Transcriber` для local/model-native/cloud adapter, one-use media capability, root-owned Deepgram broker/worker, consent/spend boundary и A/B rollback реализованы; target Doctor подтверждает artifact/backend/proxy/outbox, stale/unsafe choice изолирован с zero egress | Optional Deepgram acceptance отдельно: TTY enrollment, consent, Telegram voice, bounded vendor call и revoke; отсутствие подключения не блокирует harness cutover |
 | Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены; ordinary delegation через Telegram после `a74419c` вернула проверенный terminal result | Отдельные target ambiguity и `/stop` fault drills |
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
@@ -75,16 +83,71 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
-| Supervisor restart/rollback | **LIVE для managed release** | Target unit использует managed `active/current`; explicit restart и цикл `f12f06e→fdfd477→f12f06e` завершены, оба Doctor `ok=true`, финальный service active и `NRestarts=0` | Повторять тот же gate для каждого следующего release |
-| Managed Git install/update/rollback | **LIVE: target cutover принят** | fr1 current=`f12f06e`, previous=`fdfd477`; staged Doctor, offline rollback, explicit auto-skill resume и roll-forward зелёные, release worktree clean | Следующий release cycle |
+| Supervisor restart/rollback | **LIVE для managed release; destructive drill принят с recovery** | Target unit использует managed `active/current`. Rollback сохранил auto-skill barrier и fail-closed остановил старый writer; deliberate crash loop исчерпал budget. `558a4ce` снял только exact `RESTART_BUDGET_EXHAUSTED` после manager/runtime leases, сохранил authority/receipt и вернул service в `active/running`; Doctor `ok=true`. `NRestarts=235` — исторический след drill, после recovery не растёт | В обычном release gate не требовать `NRestarts=0` после намеренного storm; фиксировать до/после и отсутствие роста |
+| Managed Git install/update/rollback | **LIVE: target cutover и исправленный roll-forward приняты** | current=`1df4851`, previous=`2a98797`; managed update прошёл staged build/Doctor, explicit restart дал service `active/running`, `ExecMainStatus=0`, `NRestarts=0`, full Doctor `ok=true`; retained previous остаётся rollback-слотом | Offline rollback/roll-forward текущей пары после очистки behavioral test state |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **LIVE по ADR-0107** | Новый PUBLIC repository содержит только root `2de457f` и `master`: source/root tree exact, strict fsck clean, private-reference markers 0, Gitleaks 0; прежняя история переименована и подтверждена PRIVATE | После финального status commit повторить refs/tree/history scan; archive не менять на public |
+| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один ref `master=1df4851`, без tags/других heads; 32 reachable commits прошли Gitleaks с 0 findings, tree/history marker scans дали 0 совпадений. Локальные legacy refs не являются publish authority | После финального status commit повторить public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
 
 ## Проверки текущего среза
 
+- exact release `1df4851`: Core **2410 passed / 1 skipped** (139 файлов pass,
+  1 штатно skipped), App **2638 passed / 2 skipped** (252 файла pass, 1
+  штатно skipped); workspace typecheck/build и `git diff --check` — green.
+  Targeted regressions покрывают exact bare/concrete show-intent, single-use
+  staging shortcut, empty/stale staging, steering precedence, неизменный raw
+  audit, provider projection и фильтрацию ложной атрибуции до streaming/history.
+  Три независимых review-round завершены без P0–P2 findings;
+- public fast-forward `2a98797→1df4851` опубликован; independent `ls-remote`
+  показал ровно один head `master=1df4851` и ноль tags. Gitleaks по 32 reachable
+  commits — 0 findings; tracked tree и reachable-history marker scans — 0
+  совпадений;
+- fr1 managed update `2a98797→1df4851` и explicit restart завершены:
+  current=`1df4851`, previous=`2a98797`, full Doctor healthy (**19 pass / 7
+  optional warn**), service `active`, `ExecMainStatus=0`, `NRestarts=0`.
+  Живой shortcut «Покажи» остаётся отложенным acceptance до нового утреннего
+  уведомления от уже обновлённого процесса;
+- exact release `2a98797`: Core **2403 passed / 1 skipped** (139 файлов pass,
+  1 штатно skipped), App **2634 passed / 2 skipped** (252 файла pass, 1
+  штатно skipped); Core/App typecheck и build, `git diff --check` — green.
+  Обезличенный production-аудит дефекта зафиксировал `System:` count=0 в
+  текущем inbound и 0 в предыдущих 60 spans, но 1 в model reply: предупреждение
+  не было ответом на операторский текст. Причиной оказался прежний CLI adapter,
+  который сам изготовлял role-labelled plain text из code-owned spans.
+  Targeted regressions покрывают provenance JSON-envelope, hostile JSON text,
+  source mapping, неподтверждённое и подтверждённое `System:`-предупреждение,
+  пустой/дублирующий memory status и сохранение соседнего результата
+  делегирования. Независимый review после всех правок — findings отсутствуют;
+- public fast-forward `558a4ce→2a98797` опубликован; remote имеет ровно один
+  head и ноль tags. Gitleaks по 31 reachable commit — 0 findings; tracked tree,
+  reachable history pickaxe и object path inventory — 0 запрещённых маркеров;
+- fr1 managed update `558a4ce→2a98797`, staged build/Doctor и explicit restart
+  завершены: current=`2a98797`, previous=`558a4ce`, full Doctor `ok=true`
+  (**19 pass / 7 optional warn**), service `active/running`,
+  `ExecMainStatus=0`, `NRestarts=0`; typed auto-skills `pass`, `active=0`, все
+  очереди/quarantine пусты. Composite Telegram и offline rollback/roll-forward
+  остаются текущими внешними gates;
+- exact production commit `558a4ce`: полный App corpus **2633 passed / 3
+  skipped**, targeted supervisor/state/recovery **67/67**, workspace
+  Core/Telegram/App typecheck и build green, `git diff --check` green;
+  recovery diff прошёл три независимых review-round: code-only exception,
+  post-rename ambiguity, сохранение authority/release receipt, real SQLite
+  leases и ложная cross-invocation идемпотентность исправлены, финал — findings
+  отсутствуют;
+- rollback drill начал с `d1e8e3d→f12f06e`, подтвердил fail-closed auto-skill
+  barrier и выявил retained-descendant deadlock. `bd1f635` восстановил
+  descendant roll-forward без второго downgrade certificate; deliberate
+  старый-runtime crash storm оставил durable `RESTART_BUDGET_EXHAUSTED`, после
+  чего `558a4ce` под двумя leases опубликовал recovery revision 106. Финальный
+  current=`558a4ce`, previous=`bd1f635`, Doctor `ok=true`, service
+  `active/running`, исторический `NRestarts=235` стабилен; session log и
+  transcript до Telegram smoke сохранили исходные size/mtime;
+- public fast-forward `bd1f635→558a4ce` опубликован; independent `ls-remote`
+  показал единственный head `master=558a4ce`, tags/других heads нет; точный
+  staged diff прошёл Gitleaks и private/personal fixture marker scans с нулём
+  совпадений;
 - release candidate `111b143`: Core **2399 passed / 1 skipped**; полный App
   corpus дал **2614 passed / 2 skipped** и один 5-секундный timeout под общей
   параллельной нагрузкой, тот же exact файл повторён отдельно — **24/24** без
@@ -156,23 +219,33 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 
 ## Несмерженные ветки и commits
 
-- актуальная public-линия начинается с clean snapshot и имеет один development
-  head `master`; release `a74419c` основан на последнем fetched public head, без
-  merge-base с локальной архивной линией, поэтому cherry-pick из архива запрещён;
-- локальные feature-ветки до переписывания public history проверены через
-  patch-equivalence и текущие production imports/tests: их содержательные
-  изменения уже присутствуют в public `master` в переписанном или усиленном
-  виде; отдельного отсутствующего feature commit не найдено;
-- локальная gap-audit ветка содержит только устаревший review-срез, а durable
-  delegation ветка — три старых commits с эквивалентами в текущей линии;
-  прямой merge/cherry-pick вернул бы закрытые промежуточные состояния;
-- legacy local refs, которые всё ещё достигают pre-rewrite истории с приватным
-  marker, признаны непубликуемыми и исключены из merge/cherry-pick/push;
-  publishable current branch, staged diff и public `master` дают marker **0**;
-- legacy publication head относится к отменённому APT-каналу и намеренно не
-  мержится после ADR-0106. Перед публикацией `a74419c` remote `master` повторно
-  fetched, подтверждён fast-forward `0/1`, а после push exact remote head
-  независимо прочитан как `a74419ca917254e6468dd6f64b07f89d762c6199`.
+- публичный remote на момент аудита имеет ровно один head
+  `master=1df48515b55cd2d9dff2e8046ad18179ad30573e`, tags и дополнительных heads
+  нет; commit опубликован fast-forward от `2a98797`;
+- `git branch --no-merged 1df4851` по-прежнему показывает локальные feature- и
+  legacy-ветки, потому что clean public snapshot переписал корень истории:
+  отсутствие merge-base здесь не означает отсутствующий feature и запрещает
+  механический merge/cherry-pick;
+- независимый read-only аудит проверил все **35** локальных refs. Старый
+  snapshot-tip `e78ca0f` и clean public root `2de457f` имеют exact одинаковый
+  tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`: поэтому каждый предок
+  `e78ca0f` уже вошёл byte-for-byte, несмотря на разорванную ancestry. Для
+  остальных веток найдены tree-identical переписанные commits либо более новые
+  superseding implementations с production imports и тестами; paths, которые
+  присутствуют в расходящейся code-ветке и отсутствуют в snapshot, — **0**;
+- Telegram receipt, typed auto-skill lifecycle, managed distribution, provider
+  broker, delegation, monitoring и Docker recovery представлены в `master`
+  собственными либо усиленными commits. `unique-candidate`, включая
+  security-функции высокого риска, — **0**;
+- локальные status/gap-audit heads содержат устаревшие review-срезы, а старые
+  durable/distribution heads — промежуточные состояния, закрытые более новыми
+  public commits. Их перенос вернул бы уже исправленные safety/recovery gaps;
+- локальные legacy refs и unreachable objects не являются publish authority и
+  не отправляются ни в какой remote. Отменённый APT publication head отдельно
+  исключён ADR-0106: это orphan с устаревшими бинарными артефактами, а не
+  отсутствующий source feature. Push выполнялся только как `HEAD:master` в
+  публичный remote; независимый аудит не выполнял checkout, merge или
+  cherry-pick и не обращался к приватному remote.
 
 ## Release gate
 
