@@ -753,6 +753,19 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     одно code-owned `Запомнил, что <факт>`, не содержит model-owned
     `Память: …`; неподтверждённое заявление о поддельной `System:`-реплике
     удаляется, а предупреждение при реальном injection-сигнале сохраняется.
+65. **AC-01-65** — Bare `Покажи` / `Show` без объекта классифицируется как
+    `answer-only` и выполняет не более одного provider call; `Покажи файл` /
+    `Show the report` остаётся `inspect-required`. Provider-facing история
+    завершённого action-turn не содержит code-owned contract/recovery spans и
+    промежуточных assistant attempts, но full-fidelity transcript сохраняет их
+    без изменений. В обычном answer-only ходе неподтверждённая атрибуция
+    поддельной или подставной `System:`-реплики удаляется на уровне предложения,
+    соседний прямой ответ сохраняется, streaming не выпускает исходный ложный
+    delta, а следующая provider-facing история не возвращает его модели. Raw
+    provider reply остаётся в private transcript для аудита. Реальный inbound
+    injection-сигнал разрешает предупреждение; общее security-объяснение без
+    заявления о фактически обнаруженной вставке, включая `embedded` /
+    `встроенное`, не удаляется.
 
 ## 10. Open questions
 

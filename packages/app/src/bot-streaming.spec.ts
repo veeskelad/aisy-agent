@@ -87,6 +87,7 @@ function harness(
   durableTurnControl?: TelegramBotDeps['durableTurnControl'],
   afterReplyDelivered?: TelegramBotDeps['afterReplyDelivered'],
   failFinalEdit = false,
+  extraDeps: Pick<TelegramBotDeps, 'getStaging'> = {},
 ) {
   let untrustedContext = false
   let messageId = 100
@@ -120,6 +121,7 @@ function harness(
     debounceMs: 1,
     streamEditIntervalMs: 0,
     registerCommands: false,
+    ...extraDeps,
     ...(durableExecution
       ? {
           executionCheckpoint: {
@@ -151,6 +153,7 @@ function harness(
   })
   return {
     bot, calls, checkpointStore,
+    sendProactive: runtime.sendProactive,
     resumeDurableTurn: runtime.resumeDurableTurn,
     checkpointContent: () => checkpointContent,
     untrustedContext: () => untrustedContext,
@@ -701,6 +704,117 @@ describe('Telegram structured reply streaming', () => {
       .map(call => String(call.payload['text'] ?? '')).join('\n')
     expect(status).not.toContain('Токены')
     expect(status).not.toContain('999')
+  })
+
+  it('opens available staged memory edits for a bare natural «Покажи» without running the agent', async () => {
+    const handle = vi.fn<AgentRunner['handle']>()
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      {
+        getStaging: async () => [{ id: 'edit-1', preview: 'Уточнить предпочтение', judged: true }],
+      },
+    )
+
+    await h.sendProactive(
+      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
+        'Открой карточку — покажу каждую.',
+    )
+    await h.bot.handleUpdate(textUpdate(1, 'Покажи'))
+
+    expect(handle).not.toHaveBeenCalled()
+    const stagingCard = h.calls.find(call => call.method === 'sendMessage' &&
+      String(call.payload['text'] ?? '').includes('Правки памяти ждут решения'))
+    expect(stagingCard).toBeDefined()
+    expect(JSON.stringify(stagingCard?.payload['reply_markup'])).toContain('Уточнить предпочтение')
+  })
+
+  it('does not let stale staging hijack an unarmed bare «Покажи»', async () => {
+    const result = {
+      state: 'ok' as const,
+      reply: 'Что показать?',
+      narrowed: false,
+    }
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue(result)
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+
+    await h.bot.handleUpdate(textUpdate(1, 'Покажи'))
+    await waitFor(() => handle.mock.calls.length === 1)
+    expect(handle).toHaveBeenCalledOnce()
+    expect(getStaging).not.toHaveBeenCalled()
+  })
+
+  it('falls through after an armed notice with empty staging and does not hijack a concrete object', async () => {
+    const result = {
+      state: 'ok' as const,
+      reply: 'Что показать?',
+      narrowed: false,
+    }
+    const emptyHandle = vi.fn<AgentRunner['handle']>().mockResolvedValue(result)
+    const empty = harness(
+      { handle: emptyHandle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging: async () => [] },
+    )
+    await empty.sendProactive(
+      '🌅 Разобрала память за 2026-08-27: 0 правок ждут решения. ' +
+        'Открой карточку — покажу каждую.',
+    )
+
+    await empty.bot.handleUpdate(textUpdate(1, 'Покажи'))
+    await waitFor(() => emptyHandle.mock.calls.length === 1)
+    expect(emptyHandle).toHaveBeenCalledOnce()
+
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const concreteHandle = vi.fn<AgentRunner['handle']>().mockResolvedValue(result)
+    const concrete = harness(
+      { handle: concreteHandle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+    await concrete.sendProactive(
+      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
+        'Открой карточку — покажу каждую.',
+    )
+
+    await concrete.bot.handleUpdate(textUpdate(2, 'Покажи файл'))
+    await waitFor(() => concreteHandle.mock.calls.length === 1)
+    expect(concreteHandle).toHaveBeenCalledOnce()
+    expect(getStaging).not.toHaveBeenCalled()
+  })
+
+  it('keeps steering precedence over an armed staging shortcut during an active turn', async () => {
+    let finish!: (value: Awaited<ReturnType<AgentRunner['handle']>>) => void
+    const pending = new Promise<Awaited<ReturnType<AgentRunner['handle']>>>(resolve => {
+      finish = resolve
+    })
+    const handle = vi.fn<AgentRunner['handle']>(() => pending)
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+
+    await h.bot.handleUpdate(textUpdate(1, 'Начни долгий ответ'))
+    await waitFor(() => handle.mock.calls.length === 1)
+    await h.sendProactive(
+      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
+        'Открой карточку — покажу каждую.',
+    )
+    const messagesBeforeSteer = h.calls.filter(call => call.method === 'sendMessage').length
+    await h.bot.handleUpdate(textUpdate(2, 'Покажи'))
+    const messagesAfterSteer = h.calls.filter(call => call.method === 'sendMessage').length
+    finish({ state: 'ok', reply: 'Готово', narrowed: false })
+
+    expect(getStaging).not.toHaveBeenCalled()
+    expect(messagesAfterSteer).toBe(messagesBeforeSteer + 1)
   })
 
   it('renders action recovery and the authoritative unverified result', async () => {

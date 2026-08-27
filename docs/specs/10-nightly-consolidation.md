@@ -545,6 +545,13 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     telemetry. Restart детерминирован; stale lease, pending mutation WAL,
     forget-chain tamper, missing/wrong Project runtime и неизвестная structured
     activity schema блокируют Project snapshot до generator/judge.
+44. **AC-10-44** — успешно доставленное code-owned утреннее уведомление
+    одноразово разрешает следующей обычной реплике bare `Покажи` при непустом
+    staging открыть существующую карточку без запуска AgentRunner/provider.
+    Любой другой обычный текст снимает разрешение; старый staging сам его не
+    создаёт, а активный AgentRunner сохраняет steering-приоритет. Если staging
+    пуст, transport не поглощает реплику и передаёт её обычному диалогу;
+    конкретное `Покажи <объект>` не считается этим shortcut.
 
 ## 10. Open questions
 

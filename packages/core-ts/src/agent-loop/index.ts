@@ -117,13 +117,16 @@ function memoryAcknowledgement(
   return descriptors['output']!.value === output ? { receiptId: receipt.receiptId, output } : null
 }
 
-const FALSE_ROLE_PREFIX = /(?:поддельн\p{L}*|fake|forged)/iu
+const FALSE_ROLE_PREFIX = /(?:поддельн\p{L}*|подставн\p{L}*|fake|forged)/iu
 const SYSTEM_ROLE_REFERENCE = /(?:system\s*:\s*-?\s*(?:reply|message|instruction|реплик\p{L}*|сообщен\p{L}*|инструкц\p{L}*)?|system\s+(?:reply|message|role|instruction)|системн\p{L}*\s+(?:реплик\p{L}*|сообщен\p{L}*|инструкц\p{L}*|рол\p{L}*))/iu
+const OBSERVED_FALSE_ROLE = /(?:\b(?:detected|found|checked|ignored)\b|(?:обнаруж|наш[её]л|провер|игнорир|оказал|являл)\p{L}*)/iu
+const CURRENT_INPUT_PAST_FALSE_ROLE = /(?:(?:в|из)\s+(?:(?:присланн|входящ|этом|ваш|тво)\p{L}*\s+)?(?:текст|сообщен|запрос)\p{L}*\s+(?:был|находил|содержал)\p{L}*|\b(?:input|message|text|prompt)\b[^.!?]{0,80}\b(?:contained|included|had)\b)/iu
 
 function claimsFalseSystemRole(text: string): boolean {
   const falseRole = FALSE_ROLE_PREFIX.exec(text)
   const systemRole = SYSTEM_ROLE_REFERENCE.exec(text)
-  if (falseRole === null || systemRole === null) return false
+  if (falseRole === null || systemRole === null ||
+    (!OBSERVED_FALSE_ROLE.test(text) && !CURRENT_INPUT_PAST_FALSE_ROLE.test(text))) return false
   if (falseRole.index < systemRole.index) {
     const between = text.slice(falseRole.index + falseRole[0].length, systemRole.index)
     return /^[\s,.;:!—–‑-]*(?:(?:embedded|встроенн\p{L}*)[\s,.;:!—–‑-]*)?$/iu.test(between)
@@ -146,13 +149,25 @@ function synthesisSpanGroundsPromptInjectionClaim(span: ContextSpan): boolean {
   return span.role === 'tool' && hasPromptInjectionSignal(span.text)
 }
 
-function terminalReplyWithMemoryAcknowledgements(
+function removeUnsupportedFalseSystemAttributions(text: string): string {
+  return text.split(/\r?\n/u)
+    .map(line => line.split(/(?<=[.!?])\s+/u)
+      .filter(sentence => !claimsFalseSystemRole(sentence))
+      .join(' '))
+    .join('\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
+}
+
+function renderTerminalReply(
   reply: string,
   acknowledgements: readonly string[],
   promptInjectionClaimGrounded: boolean,
 ): string {
-  if (acknowledgements.length === 0) return reply
-  let body = reply
+  let body = promptInjectionClaimGrounded
+    ? reply
+    : removeUnsupportedFalseSystemAttributions(reply)
+  if (acknowledgements.length === 0) return body
   for (const acknowledgement of acknowledgements) {
     body = body.split(acknowledgement).join('')
   }
@@ -163,11 +178,6 @@ function terminalReplyWithMemoryAcknowledgements(
     /\s*(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)[^\r\n]*/gimu,
     '',
   )
-  if (!promptInjectionClaimGrounded) {
-    body = body.split(/\r?\n/u)
-      .filter(line => !claimsFalseSystemRole(line))
-      .join('\n')
-  }
   body = body.split(/\r?\n/u)
     .filter(line => {
       if (/^\s*(?:[-*•]\s*)?(?:факт сохран[её]н|память (?:сохранена|обновлена)|сохранил(?:а)? факт)(?:\s|:|$)/iu.test(line)) return false
@@ -180,6 +190,54 @@ function terminalReplyWithMemoryAcknowledgements(
     .replace(/\n{3,}/gu, '\n\n')
     .trim()
   return [body, ...acknowledgements].filter(part => part.length > 0).join('\n\n')
+}
+
+function isTurnLocalActionControl(span: ContextSpan): boolean {
+  return span.role === 'system' && span.provenance === 'operator' &&
+    span.text.startsWith('Action contract: ') &&
+    span.text.includes('Missing evidence: ') &&
+    span.text.includes('Do not claim completion.')
+}
+
+/**
+ * The transcript is an audit record, not a ready-made provider prompt. A
+ * required-action turn records its private controls and every provider attempt
+ * for post-mortem evidence, while the next conversational turn needs only the
+ * operator input and the terminal reply from that group.
+ */
+function projectHistoryForProvider(history: readonly ContextSpan[]): ContextSpan[] {
+  const groups: ContextSpan[][] = []
+  for (const span of history) {
+    const current = groups.at(-1)
+    if (current === undefined ||
+      (span.role === 'user' && current.some(item => item.role === 'user'))) {
+      groups.push([span])
+    } else {
+      current.push(span)
+    }
+  }
+  return groups.flatMap(group => {
+    let projected = group
+    const firstActionControl = group.findIndex(isTurnLocalActionControl)
+    if (firstActionControl >= 0) {
+      let terminalAssistant = -1
+      for (let index = 0; index < group.length; index++) {
+        if (group[index]!.role === 'assistant') terminalAssistant = index
+      }
+      projected = group.filter((span, index) =>
+        !isTurnLocalActionControl(span) &&
+        (span.role !== 'assistant' || index < firstActionControl || index === terminalAssistant))
+    }
+    const claimGrounded = group.some((span, index) =>
+      ((span.role === 'user' ||
+        (span.role === 'assistant' && firstActionControl >= 0 && index < firstActionControl)) &&
+        inboundSpanGroundsPromptInjectionClaim(span)) ||
+      synthesisSpanGroundsPromptInjectionClaim(span))
+    if (claimGrounded) return projected
+    return projected.map(span => span.role === 'assistant'
+      ? { ...span, text: removeUnsupportedFalseSystemAttributions(span.text) }
+      : span)
+  })
 }
 
 /** Only AgentLoop can register the exact model-requested tool for this object. */
@@ -491,6 +549,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       const historySpans = transcriptRecorder === undefined
         ? []
         : await transcriptRecorder.history({ sessionId: input.sessionId })
+      const providerHistorySpans = projectHistoryForProvider(historySpans)
       for (const span of input.spans) await recordSpan(span)
 
       // Narrowing asks one question: did untrusted material enter this session
@@ -622,7 +681,13 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             prefixBytes: snapshot.prefixBytes,
             // ADR-0102: a synthesis round appends the assistant preamble + tool
             // results after the turn's spans so the model can answer from them.
-            spans: [...historySpans, ...input.spans, ...actionContractSpan, ...extraSpans, ...lateSpans],
+            spans: [
+              ...providerHistorySpans,
+              ...input.spans,
+              ...actionContractSpan,
+              ...extraSpans,
+              ...lateSpans,
+            ],
           }
           // The in-process authority must not enter serializable provider payloads.
           // Non-enumerability keeps structuredClone/JSON adapters compatible while
@@ -676,7 +741,16 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             observeVerifiedExecution(execution.call, execution.context, execution.result)
           }
           if (!actionRequired && !turnEffectObserved) {
-            for (const event of bufferedTextDeltas) await emitProgress(event)
+            const deliverableReply = renderTerminalReply(
+              r.reply,
+              [],
+              promptInjectionClaimGrounded,
+            )
+            if (deliverableReply === r.reply) {
+              for (const event of bufferedTextDeltas) await emitProgress(event)
+            } else if (deliverableReply.length > 0) {
+              await emitProgress({ type: 'text-delta', text: deliverableReply })
+            }
           }
           if (r.usage) {
             usageIn += r.usage.inputTokens
@@ -1074,7 +1148,7 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         })
         checkpoint('complete')
         return {
-          reply: terminalReplyWithMemoryAcknowledgements(
+          reply: renderTerminalReply(
             response.reply,
             [...memoryAcknowledgements.values()],
             promptInjectionClaimGrounded,

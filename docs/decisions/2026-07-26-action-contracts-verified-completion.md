@@ -56,12 +56,34 @@ Typed memory receipt также владеет пользовательским 
 санитайзер входа и не evidence выполнения, а запрет приписывать оператору
 неподтверждённое содержимое в terminal reply.
 
+Граница action-контракта определяется наличием конкретного объекта или эффекта,
+а не одним глаголом. Короткое дейктическое `Покажи` / `Show` остаётся
+`answer-only`: transport может детерминированно разрешить его из собственной
+активной карточки, а при отсутствии такого контекста модель отвечает или
+уточняет предмет. Конкретное `Покажи файл` по-прежнему является
+`inspect-required`. Так verifier не создаёт бессмысленный recovery-round и
+задержку для обычной реплики.
+
+Full-fidelity transcript сохраняет action-инструкции и все provider attempts
+для аудита, но не является готовой историей для следующего prompt. Перед новым
+provider-вызовом code-owned проекция удаляет из завершённой action-группы
+turn-local contract/recovery spans и промежуточные assistant attempts, оставляя
+operator input, значимые tool spans и terminal assistant reply. Неподтверждённая
+атрибуция поддельной `System:`-реплики удаляется из любого terminal reply, а не
+только из хода с memory receipt; соседний содержательный текст сохраняется.
+Если answer-only provider прислал такую атрибуцию в stream, наружу выпускается
+уже очищенный terminal text, а не исходные deltas. Узкий matcher требует
+утверждения о фактически обнаруженной/проверенной вставке и не удаляет общие
+объяснения вида «атакующий может добавить поддельное System message».
+
 ## Consequences
 
 - **Positive:** dry action responses and false completion become measurable,
   testable failures rather than prompt-quality problems.
 - **Positive:** pure conversation stays natural because tools are not forced on
   answer-only turns.
+- **Positive:** внутренний recovery-контекст не становится темой следующего
+  пользовательского диалога и не провоцирует вымышленные объяснения.
 - **Neutral:** intent classification may use deterministic rules plus a bounded
   structured classifier, but the completion invariant is code-owned.
 - **Negative:** false-positive action classification adds latency or an

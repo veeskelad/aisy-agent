@@ -2431,8 +2431,14 @@ let pendingFormUntilMs = 0
     }
   }
 
-  const sendStaging = async (say: (text: string) => Promise<unknown>): Promise<void> => {
-    const items = (await deps.getStaging?.()) ?? []
+  let stagingShortcutArmed = false
+
+  const sendStaging = async (
+    say: (text: string) => Promise<unknown>,
+    preloadedItems?: { id: string; preview: string; judged: boolean }[],
+  ): Promise<void> => {
+    stagingShortcutArmed = false
+    const items = preloadedItems ?? (await deps.getStaging?.()) ?? []
     if (items.length === 0) {
       await say('Правок памяти на проверке нет.')
       return
@@ -4054,6 +4060,29 @@ let pendingFormUntilMs = 0
       await ctx.reply(STEER_ACK)
       return
     }
+
+    // Only the next ordinary text after the code-owned morning notice can use
+    // its deictic “Покажи”. Old pending proposals cannot hijack an unrelated
+    // conversation, and an in-flight turn keeps steering precedence.
+    const openStaging = stagingShortcutArmed &&
+      /^(?:покажи|show)[.!?…]*$/iu.test(span.text.trim())
+    stagingShortcutArmed = false
+    if (openStaging && deps.getStaging !== undefined) {
+      try {
+        const stagedItems = await deps.getStaging()
+        if (stagedItems.length > 0) {
+          await sendStaging(
+            (text) => bot.api.sendMessage(deps.allowedChatId, text),
+            stagedItems,
+          )
+          return
+        }
+      } catch {
+        await ctx.reply('Не смогла открыть правки памяти. Попробуй ещё раз.')
+        return
+      }
+    }
+
     buffered.push({
       text: span.text,
       provenance: span.provenance,
@@ -4431,7 +4460,10 @@ let pendingFormUntilMs = 0
         agentStateHolder.value = 'idle'
       }
     },
-    sendProactive: (text: string): Promise<void> => sendReply(text),
+    sendProactive: async (text: string): Promise<void> => {
+      await sendReply(text)
+      stagingShortcutArmed = /^🌅 Разобрала память за \d{4}-\d{2}-\d{2}: \d+ правок ждут решения\. Открой карточку — покажу каждую\.$/u.test(text)
+    },
     /**
      * The goal's progress, as one post edited in place — the same shape the
      * 🎯 Цели screen shows, so there is one description of a goal and not two.

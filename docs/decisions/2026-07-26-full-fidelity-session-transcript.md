@@ -50,6 +50,19 @@ The context engine projects/compacts this journal at read time and never mutates
 it. Telemetry remains content-redacted, while the private transcript retains
 the content required for exact resume.
 
+Полнота журнала не означает дословный replay каждого внутреннего span модели.
+Provider-facing проекция сохраняет пользовательскую семантику завершённого
+хода, но исключает turn-local action/recovery instructions и промежуточные
+provider attempts, если в том же ходе уже записан terminal assistant reply.
+Исходные строки, их hashes и порядок остаются неизменными и доступны аудиту.
+Таким образом audit record и conversational prompt являются разными
+детерминированными представлениями одного журнала. Тот же принцип применяется
+к неподтверждённой атрибуции текущему входу: raw provider reply остаётся в
+private audit, но очищается в следующей provider-facing проекции. Untrusted
+assistant ingress, записанный до code-owned action boundary, остаётся входом и
+может обосновать предупреждение; provider attempts после boundary входом не
+считаются.
+
 Legacy `session-log.jsonl` remains byte-identical and checksum-anchored. Since
 it lacks dialogue, migrated sessions are labelled `metadata-only`; Aisy never
 fabricates an exact resume. Continuing one creates a v2 session linked by a
@@ -63,6 +76,8 @@ This decision supersedes ADR-0044.
   after process restart and remain auditable by context/session.
 - **Positive:** per-session ordering and integrity survive concurrent sessions
   without relying on process-local counters.
+- **Positive:** exact audit не загрязняет последующие ответы скрытой
+  оркестрацией завершённого хода.
 - **Neutral:** the audit event stream and private transcript are distinct
   projections with different privacy surfaces.
 - **Negative:** full transcripts consume more disk and require retention,

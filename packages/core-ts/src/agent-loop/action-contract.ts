@@ -167,6 +167,7 @@ export function readProviderToolExecutions(
 }
 
 const INFORMATIONAL_PREFIX = /^(?:объясни|расскажи|почему|что такое|можно ли|как (?:мне |нам )?(?:сделать|создать|настроить|установить)|explain|describe|why|what is|how (?:do|can|should|to)\b)/i
+const BARE_DEICTIC_RE = /^(?:покажи|show)[.!?…]*$/iu
 // JavaScript's `\b` is ASCII-centric: it does not form reliable boundaries
 // around Cyrillic words. Keep Russian alternatives explicit, and use `\b`
 // only inside the English-only branches.
@@ -196,7 +197,8 @@ function operatorTexts(spans: ContextSpan[]): string[] {
 
 export function classifyActionContract(spans: ContextSpan[]): ActionContract {
   // An informational span must not mask a later imperative operator span.
-  const texts = operatorTexts(spans).filter((text) => !INFORMATIONAL_PREFIX.test(text))
+  const texts = operatorTexts(spans).filter((text) =>
+    !INFORMATIONAL_PREFIX.test(text) && !BARE_DEICTIC_RE.test(text))
   if (texts.length === 0) return { kind: 'answer-only', reasonCode: 'ANSWER' }
   const text = texts.join('\n')
   if (DELEGATE_RE.test(text)) {

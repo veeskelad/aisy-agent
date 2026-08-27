@@ -453,6 +453,15 @@ day-log/maintenance pipeline остаются вне `bot.ts`/`aisy.ts`.
 29. **AC-23-29:** activation self-test на фактических Linux/macOS local
     filesystems доказывает contention, crash-release и exact identity; NFS/SMB
     блокируют LIVE.
+30. **AC-23-30:** provider-facing projection завершённой action-группы удаляет
+    только code-owned contract/recovery spans и все assistant attempts кроме
+    terminal reply. Operator input и значимые tool spans сохраняют порядок;
+    durable transcript rows, ordinals и hash chain остаются byte-неизменными.
+    Для ordinary-группы raw неподтверждённая атрибуция текущему входу также
+    остаётся в audit row, но отсутствует в следующем provider prompt. Untrusted
+    assistant ingress до первого code-owned action boundary сохраняется и
+    может обосновать terminal warning; assistant attempts после boundary таким
+    основанием не являются.
 
 ## 9. Трассировка тестов
 
@@ -471,6 +480,8 @@ day-log/maintenance pipeline остаются вне `bot.ts`/`aisy.ts`.
 - `runtime/session-transcript-recorder.spec.ts`: deterministic ids, binding и
   exact-fields gate;
 - `agent-loop/agent-loop.spec.ts`: AC-23-8…10 и code-owned spans;
+- `agent-loop/agent-loop.spec.ts`: AC-23-30, разделение полного audit-журнала и
+  очищенной provider-facing истории;
 - `runtime/agent-runner.spec.ts`: lazy augmentation и AC-23-11.
 - `app/session-transcript-runtime.spec.ts`: AC-23-9, 11, 12 через реальный Node
   store и новый AgentRunner после restart; AC-23-13 проверяет model request.
