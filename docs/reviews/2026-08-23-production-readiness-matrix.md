@@ -89,7 +89,7 @@ spans и промежуточные provider attempts не попадают в �
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один ref `master=1df4851`, без tags/других heads; 32 reachable commits прошли Gitleaks с 0 findings, tree/history marker scans дали 0 совпадений. Локальные legacy refs не являются publish authority | После финального status commit повторить public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
+| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один ref `master`, без tags/других heads; последний code-bearing release `1df4851` и последующий status-only diff прошли Gitleaks с 0 findings, tree/history marker scans дали 0 совпадений. Локальные legacy refs не являются publish authority | После каждого следующего status commit повторять public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
 
 ## Проверки текущего среза
 
@@ -101,9 +101,9 @@ spans и промежуточные provider attempts не попадают в �
   audit, provider projection и фильтрацию ложной атрибуции до streaming/history.
   Три независимых review-round завершены без P0–P2 findings;
 - public fast-forward `2a98797→1df4851` опубликован; independent `ls-remote`
-  показал ровно один head `master=1df4851` и ноль tags. Gitleaks по 32 reachable
-  commits — 0 findings; tracked tree и reachable-history marker scans — 0
-  совпадений;
+  показал ровно один head `master` и ноль tags. Gitleaks по code history через
+  `1df4851` и отдельному status-only diff — 0 findings; tracked tree и
+  reachable-history marker scans — 0 совпадений;
 - fr1 managed update `2a98797→1df4851` и explicit restart завершены:
   current=`1df4851`, previous=`2a98797`, full Doctor healthy (**19 pass / 7
   optional warn**), service `active`, `ExecMainStatus=0`, `NRestarts=0`.
@@ -219,9 +219,10 @@ spans и промежуточные provider attempts не попадают в �
 
 ## Несмерженные ветки и commits
 
-- публичный remote на момент аудита имеет ровно один head
-  `master=1df48515b55cd2d9dff2e8046ad18179ad30573e`, tags и дополнительных heads
-  нет; commit опубликован fast-forward от `2a98797`;
+- публичный remote на момент аудита имеет ровно один head `master`, tags и
+  дополнительных heads нет; последний code-bearing commit `1df4851`
+  опубликован fast-forward от `2a98797`, последующие status-only commits не
+  меняют production code tree;
 - `git branch --no-merged 1df4851` по-прежнему показывает локальные feature- и
   legacy-ветки, потому что clean public snapshot переписал корень истории:
   отсутствие merge-base здесь не означает отсутствующий feature и запрещает
