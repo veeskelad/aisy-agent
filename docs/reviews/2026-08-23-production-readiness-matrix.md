@@ -136,10 +136,12 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
   parent continuation после ordinary provider failure. Exact retirement
   привязан к continuation hash, owner и revision; ambiguity, actor, любой exact
   run, `paused|cancelling`, corrupt state и drift остаются fail-closed.
-  Финальный App corpus — **2678 passed / 2 skipped** (256 test files pass,
-  1 штатно skipped), Telegram Gateway — **258 passed**, targeted recovery —
-  **82/82**, отдельный admission corpus — **5/5**; workspace typecheck/build и
-  `git diff --check` green. Staged Gitleaks — 0 findings. Public fast-forward
+  Финальный Core corpus — **2419 passed / 1 skipped**, App — **2678 passed /
+  2 skipped** (256 test files pass, 1 штатно skipped), Telegram Gateway —
+  **258 passed**, Python sidecars — **215 passed / 39 platform-or-optional
+  skipped**, Ruff green; targeted recovery — **82/82**, отдельный admission
+  corpus — **5/5**. Полный workspace test, typecheck/build и `git diff --check`
+  green. Staged Gitleaks — 0 findings. Public fast-forward
   `c5db7ae→763ed88` подтверждён: один head `master`, tags нет. Production
   остаётся на `c5db7ae`: прямой SSH недоступен, Tailscale disconnected, поэтому
   deploy/restart/живой Telegram-ответ честно не приняты;
