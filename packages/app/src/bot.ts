@@ -579,7 +579,7 @@ export interface TelegramBotDeps {
    * nothing would bring the process back, or a turn is still running.
    */
   restartRuntime?: Pick<RuntimeRestart, 'prepare' | 'commitExit' | 'cancel'> &
-    Partial<Pick<RuntimeRestart, 'previous'>>
+    Partial<Pick<RuntimeRestart, 'previous' | 'acknowledgePrevious'>>
   /**
    * Transcription providers (ADR-0085). The list says of each whether audio
    * leaves the host; choosing one that does is always explicit.
@@ -1038,21 +1038,25 @@ let pendingFormUntilMs = 0
     const previousUpdateId = restartTelegramUpdateId(previous.reason)
     if (previousUpdateId !== null) {
       if (ctx.update.update_id === previousUpdateId) {
-        recoveredRestart = null
         return
       }
-      if (ctx.update.update_id > previousUpdateId) recoveredRestart = null
+      if (ctx.update.update_id > previousUpdateId) {
+        deps.restartRuntime?.acknowledgePrevious?.(previous)
+        recoveredRestart = null
+      }
       await next()
       return
     }
 
     // One-release bridge for the already deployed loop, whose old receipt did
-    // not carry update_id. It is consumed by the first allowed update either
-    // way, so a later legitimate button press can never be swallowed.
-    recoveredRestart = null
+    // not carry update_id. Keep its retained evidence while the exact stuck
+    // menu update repeats; the first different allowed update proves progress,
+    // acknowledges the evidence and proceeds normally.
     if (previous.reason === 'новая сессия' &&
       typeof ctx.message?.text === 'string' &&
       resolveMenu(ctx.message.text) === 'new_session') return
+    deps.restartRuntime?.acknowledgePrevious?.(previous)
+    recoveredRestart = null
     await next()
   })
 

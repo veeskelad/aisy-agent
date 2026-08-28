@@ -11,6 +11,7 @@ import {
 export type {
   RestartCommitResult,
   RestartCancelResult,
+  RestartPreviousAckResult,
   RestartIntent,
   RestartRefusal,
   RuntimeRestart,

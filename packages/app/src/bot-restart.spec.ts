@@ -1,9 +1,12 @@
 import type { Gateway } from '@aisy/core'
 import type { Update, UserFromGetMe } from 'grammy/types'
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { makeTelegramBot, type TelegramBotDeps } from './bot.js'
-import type { RestartIntent } from './runtime-restart.js'
+import { makeRuntimeRestart, type RestartIntent } from './runtime-restart.js'
 
 const BOT_INFO: UserFromGetMe = {
   id: 999, is_bot: true, first_name: 'Aisy', username: 'aisy_test_bot',
@@ -25,6 +28,12 @@ const gateway: Gateway = {
   handleCardTap: async () => ({ decision: 'rejected', reason: 'unused' }),
 }
 
+const roots: string[] = []
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
 function update(): Update {
   return {
     update_id: 1,
@@ -41,7 +50,8 @@ function update(): Update {
 
 function harness(
   restartRuntime: Pick<NonNullable<TelegramBotDeps['restartRuntime']>, 'prepare' | 'commitExit'>
-    & Partial<Pick<NonNullable<TelegramBotDeps['restartRuntime']>, 'cancel' | 'previous'>>,
+    & Partial<Pick<NonNullable<TelegramBotDeps['restartRuntime']>,
+      'cancel' | 'previous' | 'acknowledgePrevious'>>,
   options: {
     replyError?: Error
     order?: string[]
@@ -184,8 +194,10 @@ describe('/restart command', () => {
     })
     const replayPrepare = vi.fn(() => nextIntent)
     const replayCommit = vi.fn(async () => 'committed' as const)
+    const acknowledgePrevious = vi.fn(() => 'acknowledged' as const)
     const second = harness({
       previous: () => intent,
+      acknowledgePrevious,
       prepare: replayPrepare,
       commitExit: replayCommit,
     })
@@ -194,6 +206,7 @@ describe('/restart command', () => {
 
     expect(replayPrepare).not.toHaveBeenCalled()
     expect(replayCommit).not.toHaveBeenCalled()
+    expect(acknowledgePrevious).not.toHaveBeenCalled()
     expect(second.replies()).toBe('')
 
     const next = update()
@@ -202,19 +215,28 @@ describe('/restart command', () => {
 
     expect(replayPrepare).toHaveBeenCalledWith('telegram-update:2 · после обновления')
     expect(replayCommit).toHaveBeenCalledWith(nextIntent)
+    expect(acknowledgePrevious).toHaveBeenCalledWith(intent)
   })
 
   it('bridges the deployed legacy new-session loop only for the first exact menu update', async () => {
     const startNewSession = vi.fn(async () => ({ ok: true as const, name: 'New session' }))
-    const prepare = vi.fn()
+    const nextIntent = Object.freeze({
+      requestedAt: '2026-08-28T00:01:00.000Z',
+      reason: 'telegram-update:8 · после обновления',
+      activeTurns: 0,
+    })
+    const prepare = vi.fn(() => nextIntent)
+    const acknowledgePrevious = vi.fn(() => 'acknowledged' as const)
+    const legacy = Object.freeze({
+      requestedAt: '2026-08-28T00:00:00.000Z',
+      reason: 'новая сессия',
+      activeTurns: 0,
+    })
     const h = harness({
-      previous: () => Object.freeze({
-        requestedAt: '2026-08-28T00:00:00.000Z',
-        reason: 'новая сессия',
-        activeTurns: 0,
-      }),
+      previous: () => legacy,
+      acknowledgePrevious,
       prepare,
-      commitExit: vi.fn(),
+      commitExit: vi.fn(async () => 'committed' as const),
     }, { deps: { startNewSession } })
 
     await h.bot.handleUpdate({
@@ -230,17 +252,28 @@ describe('/restart command', () => {
 
     expect(startNewSession).not.toHaveBeenCalled()
     expect(prepare).not.toHaveBeenCalled()
+    expect(acknowledgePrevious).not.toHaveBeenCalled()
     expect(h.replies()).toBe('')
+
+    const next = update()
+    next.update_id = 8
+    await h.bot.handleUpdate(next)
+
+    expect(acknowledgePrevious).toHaveBeenCalledWith(legacy)
+    expect(prepare).toHaveBeenCalledWith('telegram-update:8 · после обновления')
   })
 
   it('does not swallow the first update after a non-Telegram planned restart', async () => {
     const prepare = vi.fn(() => validRestartIntent())
+    const acknowledgePrevious = vi.fn(() => 'acknowledged' as const)
+    const previous = Object.freeze({
+      requestedAt: '2026-08-28T00:00:00.000Z',
+      reason: 'daily session rotation',
+      activeTurns: 0,
+    })
     const h = harness({
-      previous: () => Object.freeze({
-        requestedAt: '2026-08-28T00:00:00.000Z',
-        reason: 'daily session rotation',
-        activeTurns: 0,
-      }),
+      previous: () => previous,
+      acknowledgePrevious,
       prepare,
       commitExit: vi.fn(async () => 'committed' as const),
     })
@@ -248,6 +281,40 @@ describe('/restart command', () => {
     await h.bot.handleUpdate(update())
 
     expect(prepare).toHaveBeenCalledWith('telegram-update:1 · после обновления')
+    expect(acknowledgePrevious).toHaveBeenCalledWith(previous)
+  })
+
+  it('keeps replay evidence through a second process replacement until a newer update arrives', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-bot-restart-'))
+    roots.push(root)
+    const path = join(root, 'restart.json')
+    const runtime = () => makeRuntimeRestart({
+      path,
+      nowIso: () => '2026-08-28T00:00:00.000Z',
+      supervised: () => true,
+      activeTurns: () => 0,
+      authorizePlannedRestart: async () => undefined,
+      exit: () => undefined,
+    })
+
+    const first = harness(runtime())
+    await first.bot.handleUpdate(update())
+
+    const replacement = harness(runtime())
+    await replacement.bot.handleUpdate(update())
+    expect(replacement.replies()).toBe('')
+
+    const stoppedAndStartedAgain = harness(runtime())
+    await stoppedAndStartedAgain.bot.handleUpdate(update())
+    expect(stoppedAndStartedAgain.replies()).toBe('')
+
+    const newer = update()
+    newer.update_id = 2
+    newer.message!.text = '/server'
+    newer.message!.entities = [{ type: 'bot_command', offset: 0, length: 7 }]
+    await stoppedAndStartedAgain.bot.handleUpdate(newer)
+    expect(stoppedAndStartedAgain.replies()).toContain('Состояние сервера недоступно')
+    expect(runtime().previous()).toBeNull()
   })
 })
 

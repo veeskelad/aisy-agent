@@ -45,6 +45,10 @@ export type RestartCommitResult =
   | 'restart-state-ambiguous'
 
 export type RestartCancelResult = 'cancelled' | 'already-cancelled' | 'restart-state-ambiguous'
+export type RestartPreviousAckResult =
+  | 'acknowledged'
+  | 'already-acknowledged'
+  | 'restart-state-ambiguous'
 
 export interface RuntimeRestart {
   /**
@@ -58,6 +62,8 @@ export interface RuntimeRestart {
   cancel(intent: RestartIntent): RestartCancelResult
   /** The durably consumed intent of the run that exited, if there was one. */
   previous(): RestartIntent | null
+  /** Remove the retained previous intent only after its transport update advanced. */
+  acknowledgePrevious(intent: RestartIntent): RestartPreviousAckResult
 }
 
 const MAX_RECEIPT_BYTES = 4096
@@ -266,6 +272,12 @@ function decodeBytes(bytes: Buffer): RestartIntent | null {
   }
 }
 
+function sameRestartIntent(left: RestartIntent, right: RestartIntent): boolean {
+  return left.requestedAt === right.requestedAt &&
+    left.reason === right.reason &&
+    left.activeTurns === right.activeTurns
+}
+
 function readBoundedReceipt(fd: number, uid: number): { intent: RestartIntent | null; owned: OwnedFile } {
   const before = fstatSync(fd)
   if (!isPrivateRegular(before, uid) || before.size > MAX_RECEIPT_BYTES) {
@@ -311,7 +323,32 @@ function rollbackConsumedReceipt(
   }
 }
 
-function consumePrevious(path: string): { previous: RestartIntent | null; ambiguous: boolean } {
+function readRetainedPrevious(
+  previousPath: string,
+  directory: PrivateDirectory,
+): { previous: RestartIntent | null; previousOwned: OwnedFile | null } {
+  let receipt: number | null = null
+  try {
+    receipt = openSync(previousPath, constants.O_RDONLY | noFollowFlag())
+    const read = readBoundedReceipt(receipt, directory.uid)
+    return read.intent === null
+      ? { previous: null, previousOwned: null }
+      : { previous: read.intent, previousOwned: read.owned }
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { previous: null, previousOwned: null }
+    // The retained file is evidence for transport deduplication, not authority
+    // to restart. Unsafe or malformed residue must never block a fresh runtime.
+    return { previous: null, previousOwned: null }
+  } finally {
+    closeQuietly(receipt)
+  }
+}
+
+function consumePrevious(path: string): {
+  previous: RestartIntent | null
+  previousOwned: OwnedFile | null
+  ambiguous: boolean
+} {
   let directory: PrivateDirectory | null = null
   let receipt: number | null = null
   let moved = false
@@ -323,7 +360,9 @@ function consumePrevious(path: string): { previous: RestartIntent | null; ambigu
     try {
       receipt = openSync(path, constants.O_RDONLY | noFollowFlag())
     } catch (error) {
-      if (errorCode(error) === 'ENOENT') return { previous: null, ambiguous: false }
+      if (errorCode(error) === 'ENOENT') {
+        return { ...readRetainedPrevious(previousPath, directory), ambiguous: false }
+      }
       throw new AmbiguousRestartState('restart receipt cannot be opened safely')
     }
     const read = readBoundedReceipt(receipt, directory.uid)
@@ -343,13 +382,17 @@ function consumePrevious(path: string): { previous: RestartIntent | null; ambigu
     restartCheckpoint('consume:before-dir-fsync')
     fsyncSync(directory.fd)
     restartCheckpoint('consume:after-dir-fsync')
-    return { previous: read.intent, ambiguous: false }
+    return {
+      previous: read.intent,
+      previousOwned: read.intent === null ? null : read.owned,
+      ambiguous: false,
+    }
   } catch {
     if (moved && owned !== null && directory !== null
       && rollbackConsumedReceipt(path, previousPath, owned, directory)) {
-      return { previous: null, ambiguous: false }
+      return { previous: null, previousOwned: null, ambiguous: false }
     }
-    return { previous: null, ambiguous: true }
+    return { previous: null, previousOwned: null, ambiguous: true }
   } finally {
     closeQuietly(receipt)
     closeQuietly(directory?.fd ?? null)
@@ -537,6 +580,20 @@ export function makeRuntimeRestartInternal(
 
   return {
     previous: () => (consumed.previous === null ? null : { ...consumed.previous }),
+
+    acknowledgePrevious(intent) {
+      if (consumed.previous === null || consumed.previousOwned === null) {
+        return 'already-acknowledged'
+      }
+      if (!sameRestartIntent(consumed.previous, intent)) return 'restart-state-ambiguous'
+      if (!cancelPublishedReceipt(`${deps.path}.previous`, consumed.previousOwned)) {
+        ambiguous = true
+        return 'restart-state-ambiguous'
+      }
+      consumed.previous = null
+      consumed.previousOwned = null
+      return 'acknowledged'
+    },
 
     prepare(reason) {
       if (ambiguous) return 'restart-state-ambiguous'

@@ -93,10 +93,15 @@ checkpoint- и provider-работы.
 14. Запланированный `/restart` получает отдельный одноразовый permit, связанный с
    текущими session, deadline и hash устойчивого intent. Durable intent также
    содержит code-owned identity входного Telegram `update_id`. После замены
-   процесса transport до любых session/project/model mutations поглощает ровно
-   один replay того же update и нормально завершает handler, чтобы long polling
-   продвинул offset. Более новый update не поглощается; произвольный текст или
-   модельное утверждение не могут выбрать identity. Для ранее опубликованных
+   процесса restart receipt остаётся private retained evidence до наблюдения
+   более нового Telegram update. Transport до любых session/project/model
+   mutations поглощает replay того же update и нормально завершает handler,
+   чтобы long polling продвинул offset. Если replacement или весь service
+   остановлен между consume receipt и продвижением offset, следующий process
+   читает retained evidence и снова поглощает replay без побочных эффектов.
+   Только более новый update атомарно подтверждает retained evidence и проходит
+   обычный handler; произвольный текст или модельное утверждение не могут выбрать
+   identity. Для ранее опубликованных
    intent без identity допустим только одноразовый startup-совместимый случай:
    первый разрешённый update и точная кнопка новой Session при exact причине
    `новая сессия`; любой другой первый update снимает fallback без подавления.
@@ -185,10 +190,13 @@ checkpoint- и provider-работы.
 - restart storm останавливается по backoff и бюджету;
 - плановый restart из Telegram после замены child поглощает replay exact
   `update_id` до побочных эффектов и не повторяет сообщение, создание Session,
-  переключение Project/model или новый restart; следующий update проходит;
-- legacy intent `новая сессия` без transport identity подавляет только первый
-  exact reply-keyboard update новой Session и не может проглотить произвольное
-  либо более позднее сообщение;
+  переключение Project/model или новый restart; SIGTERM всего service после
+  consume receipt не теряет dedupe evidence, а следующий update проходит и
+  только тогда удаляет его;
+- legacy intent `новая сессия` без transport identity подавляет только один
+  exact reply-keyboard update новой Session при каждом его повторе до
+  продвижения offset и не может проглотить произвольное либо более позднее
+  сообщение;
 - real-process parent без stdout/IPC/diagnostic handles переживает unexpected
   child exit, дожидается code-owned backoff без `unsettled top-level await` и
   запускает один replacement без рестарта service manager;

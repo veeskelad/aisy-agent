@@ -302,7 +302,7 @@ describe('runtime restart (plan 11.9)', () => {
     else expect(existsSync(h.path)).toBe(false)
   })
 
-  it('consumes and exposes a restart receipt exactly once after durable rename', () => {
+  it('retains a consumed receipt across process restarts until exact acknowledgement', () => {
     const path = statePath()
     restart({ path }).value.prepare('плановый перезапуск')
 
@@ -318,6 +318,16 @@ describe('runtime restart (plan 11.9)', () => {
     expect(existsSync(path)).toBe(false)
     expect(statSync(`${path}.previous`).mode & 0o777).toBe(0o600)
 
+    const replacement = restart({ path })
+    const retained = replacement.value.previous()
+    expect(retained).toMatchObject({ reason: 'плановый перезапуск' })
+    expect(replacement.value.acknowledgePrevious({
+      ...retained!, reason: 'другой перезапуск',
+    })).toBe('restart-state-ambiguous')
+    expect(existsSync(`${path}.previous`)).toBe(true)
+    expect(replacement.value.acknowledgePrevious(retained!)).toBe('acknowledged')
+    expect(replacement.value.previous()).toBeNull()
+    expect(existsSync(`${path}.previous`)).toBe(false)
     expect(restart({ path }).value.previous()).toBeNull()
   })
 
@@ -353,6 +363,7 @@ describe('runtime restart (plan 11.9)', () => {
     expect(h.value.previous()).toBeNull()
     expect(existsSync(path)).toBe(false)
     expect(readFileSync(`${path}.previous`, 'utf8')).toBe('не json')
+    expect(restart({ path }).value.previous()).toBeNull()
   })
 
   it('fatally rejects invalid UTF-8 instead of decoding replacement characters', () => {
