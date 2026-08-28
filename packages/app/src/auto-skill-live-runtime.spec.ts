@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   autoSkillScopeKey,
   makeMemoryRememberReceipt,
+  parseRememberFactArgs,
   renderMemoryAcknowledgement,
   type AutoSkillScope,
   type ToolExecutionContext,
@@ -63,11 +64,18 @@ function observe(runtime: ReturnType<typeof fixture>['runtime'], sessionId: stri
   const context: ToolExecutionContext = {
     sessionId, turnId: `turn-${sessionId}`, ordinal: 1,
   }
-  const receipt = makeMemoryRememberReceipt({ fact }, context)!
+  const normalized = parseRememberFactArgs({ fact })
+  if (normalized === null) throw new Error('valid remember fact expected')
+  const receipt = makeMemoryRememberReceipt(normalized, context)!
   const step = runtime.observer.capture(
     { name: 'remember', args: { fact } },
     context,
-    { ok: true, output: renderMemoryAcknowledgement(fact), verified: true, mutationReceipt: receipt },
+    {
+      ok: true,
+      output: renderMemoryAcknowledgement(normalized.fact),
+      verified: true,
+      mutationReceipt: receipt,
+    },
   )
   expect(step).not.toBeNull()
   const delivery = runtime.observer.commit({
