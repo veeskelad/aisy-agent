@@ -42,6 +42,9 @@ Skill мог бы получить prompt-authority. Нужна отдельна
    пользовательский ответ или следующую provider-facing историю.
 5. `SOUL.md` остаётся стабильным операторски управляемым ядром. Явная поправка
    общения создаёт versioned typed preference и действует со следующего turn.
+   Грамматический род — самостоятельная mutually-exclusive family
+   `masculine-russian|feminine-russian`, поэтому его исправление не меняет
+   tone, verbosity, memory acknowledgement или полномочия tools.
 6. Неявное обучение общению выбирает только descriptor закрытого registry и
    требует два delivery-confirmed совпадения в разных Session. Preference не
    может добавить tool, scope, authority или external effect.
@@ -83,6 +86,12 @@ defaults`; constitution/code policy всегда выше. Forget сначала
 оставляет tombstone ревизии и не сохраняет raw dialogue. Rollback возвращает
 только previous revision того же key. Многофазный preference WAL с repair UI
 **отложен** до появления внешнего concurrent writer.
+
+Закрытый registry включает family `grammatical-gender`. Явная фраза оператора
+«отвечай в мужском/женском роде» активирует соответствующий descriptor со
+следующего turn; в durable state остаются descriptor и hash evidence, но не
+исходная реплика. Противоположный descriptor создаёт новую revision той же
+family, поэтому rollback и forget не затрагивают остальные настройки общения.
 
 Это решение заменяет отдельный выбор persistent scope ADR-0093 для обычной
 успешно подтверждённой Tier-2 карточки в `auto/plan`. Granularity, deny

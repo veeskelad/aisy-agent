@@ -16,6 +16,7 @@ export type CommunicationPreferenceFamily =
   | 'internal-detail'
   | 'tone'
   | 'memory-ack'
+  | 'grammatical-gender'
 
 export type CommunicationPreferenceDescriptor =
   | 'concise'
@@ -26,6 +27,8 @@ export type CommunicationPreferenceDescriptor =
   | 'natural-russian'
   | 'neutral-russian'
   | 'second-person-memory-ack'
+  | 'masculine-russian'
+  | 'feminine-russian'
 
 type PreferenceSource = 'explicit' | 'inferred'
 
@@ -79,7 +82,7 @@ export interface CommunicationPreferenceStore {
 }
 
 const FAMILIES: readonly CommunicationPreferenceFamily[] = [
-  'verbosity', 'internal-detail', 'tone', 'memory-ack',
+  'verbosity', 'internal-detail', 'tone', 'memory-ack', 'grammatical-gender',
 ]
 const DESCRIPTOR_FAMILY: Readonly<Record<CommunicationPreferenceDescriptor, CommunicationPreferenceFamily>> = {
   concise: 'verbosity',
@@ -90,6 +93,8 @@ const DESCRIPTOR_FAMILY: Readonly<Record<CommunicationPreferenceDescriptor, Comm
   'natural-russian': 'tone',
   'neutral-russian': 'tone',
   'second-person-memory-ack': 'memory-ack',
+  'masculine-russian': 'grammatical-gender',
+  'feminine-russian': 'grammatical-gender',
 }
 const PROMPT: Readonly<Record<CommunicationPreferenceDescriptor, string>> = {
   concise: 'Отвечай кратко и по делу; подробности добавляй только когда они нужны для решения.',
@@ -100,6 +105,8 @@ const PROMPT: Readonly<Record<CommunicationPreferenceDescriptor, string>> = {
   'natural-russian': 'Пиши живым естественным русским языком от первого лица и обращайся к собеседнику на «ты».',
   'neutral-russian': 'Пиши нейтральным деловым русским языком без фамильярности.',
   'second-person-memory-ack': 'Подтверждай память естественно: «Запомнил, что ты…», без служебной записи факта.',
+  'masculine-russian': 'Говоря о себе по-русски, используй мужской род: «сделал», «готов», «обновился»; не используй женские формы.',
+  'feminine-russian': 'Говоря о себе по-русски, используй женский род: «сделала», «готова», «обновилась»; не используй мужские формы.',
 }
 const DESCRIPTORS = new Set<CommunicationPreferenceDescriptor>(
   Object.keys(DESCRIPTOR_FAMILY) as CommunicationPreferenceDescriptor[],
@@ -184,6 +191,19 @@ function explicitDescriptors(text: string): CommunicationPreferenceDescriptor[] 
   }
   if (/запомнил,?\s+что\s+ты|пиши.*запомнил.*что\s+ты/u.test(normalized)) {
     out.add('second-person-memory-ack')
+  }
+  const genderMentions = [...normalized.matchAll(/(?:в\s+)?(мужском|женском)\s+роде/gu)]
+  const lastGender = genderMentions.at(-1)
+  if (lastGender?.index !== undefined) {
+    const prefix = normalized.slice(Math.max(0, lastGender.index - 120), lastGender.index)
+    const negative = /не\s+(?:надо\s+)?(?:отвеча(?:й|ть)\s+)?(?:в\s+)?$/u.test(prefix)
+    const directed = negative ||
+      /(?:пусть\s+отвечает|отвечай|говори|пиши|обращайся|о\s+себе).{0,100}(?:в\s+)?$/u
+        .test(prefix)
+    if (directed) {
+      const masculine = (lastGender[1] === 'мужском') !== negative
+      out.add(masculine ? 'masculine-russian' : 'feminine-russian')
+    }
   }
   return [...out]
 }

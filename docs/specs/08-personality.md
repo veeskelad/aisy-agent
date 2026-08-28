@@ -208,6 +208,13 @@ correction applies next turn; an inferred descriptor requires two
 delivery-confirmed matches in different durable Sessions. Neither form can add
 a tool, scope, authority or external effect.
 
+`grammatical-gender` — отдельная mutually-exclusive family закрытого registry:
+`masculine-russian|feminine-russian`. Явная поправка «отвечай в мужском/женском
+роде» применяется со следующего turn. Она не меняет `tone`, `verbosity`,
+`memory-ack`, tools или authority; durable revision хранит descriptor и hash
+evidence, но не исходный текст. Противоположный descriptor становится новой
+revision той же family, а rollback/forget действуют только на неё.
+
 ## 4. Data structures
 
 ### 4.1 `SOUL.md` (on-disk, byte-stable for the session)
@@ -525,6 +532,21 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     `checkVeto()` from running on a subsequent irreversible action.
 19. **AC-08-19** — Every identity load, re-seed, mode change, and veto block emits an event
     to the append-only Observability journal carrying the identity `hash`.
+
+**Typed communication preferences (ADR-0110)**
+
+20. **AC-08-20** — Явная фраза «отвечай в мужском роде» активирует descriptor
+    `masculine-russian` family `grammatical-gender`; следующий overlay содержит
+    мужские self-reference examples и не сохраняет raw dialogue.
+21. **AC-08-21** — Явная фраза «отвечай в женском роде» после мужского descriptor
+    создаёт новую revision той же family, не меняя активные `tone`, `verbosity`
+    или `memory-ack`.
+22. **AC-08-22** — После restart активный grammatical-gender descriptor и overlay
+    совпадают с состоянием до restart.
+23. **AC-08-23** — Rollback возвращает previous gender revision, а forget снимает
+    только gender overlay; остальные preference families остаются активными.
+24. **AC-08-24** — Повреждённый snapshot `grammatical-gender` suppress'ит только
+    эту family и не выключает остальные typed preferences.
 
 ## 10. Open questions
 

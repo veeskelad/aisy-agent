@@ -72,6 +72,86 @@ describe('communication preference store', () => {
     })
   })
 
+  it('activates an explicit grammatical gender and applies it on the next overlay', () => {
+    const p = persistence()
+    const store = makeCommunicationPreferenceStore({ scope: SCOPE, persistence: p.port })
+
+    expect(store.observeExplicit({
+      text: 'Агент отвечает в женском роде, не надо так, пусть отвечает в мужском роде',
+      sessionId: 's1',
+      evidenceId: 'update-gender-1',
+    })).toBe(1)
+    expect(store.active()).toContainEqual(expect.objectContaining({
+      family: 'grammatical-gender', descriptor: 'masculine-russian', source: 'explicit',
+    }))
+    expect(store.overlay()).toContain('используй мужской род')
+    expect(JSON.stringify(p.port.load('grammatical-gender'))).not.toContain('женском роде')
+  })
+
+  it('uses only the last explicit gender directive and understands a negative correction', () => {
+    const p = persistence()
+    const store = makeCommunicationPreferenceStore({ scope: SCOPE, persistence: p.port })
+
+    expect(store.observeExplicit({
+      text: 'Отвечай в женском роде. Нет, отвечай в мужском роде.',
+      sessionId: 's1', evidenceId: 'gender-order',
+    })).toBe(1)
+    expect(store.active().filter(item => item.family === 'grammatical-gender'))
+      .toEqual([expect.objectContaining({ descriptor: 'masculine-russian' })])
+    expect(store.observeExplicit({
+      text: 'Не отвечай в мужском роде', sessionId: 's2', evidenceId: 'gender-negative',
+    })).toBe(1)
+    expect(store.active().filter(item => item.family === 'grammatical-gender'))
+      .toEqual([expect.objectContaining({ descriptor: 'feminine-russian' })])
+  })
+
+  it('persists, rolls back and forgets grammatical gender independently', () => {
+    const p = persistence()
+    const clock = (() => {
+      let tick = 0
+      return () => `2026-08-28T12:10:0${tick++}.000Z`
+    })()
+    const first = makeCommunicationPreferenceStore({ scope: SCOPE, persistence: p.port, nowIso: clock })
+    first.observeExplicit({
+      text: 'Пиши живее', sessionId: 's1', evidenceId: 'tone-one',
+    })
+    first.observeExplicit({
+      text: 'Отвечай в женском роде', sessionId: 's1', evidenceId: 'gender-one',
+    })
+    first.observeExplicit({
+      text: 'Отвечай в мужском роде', sessionId: 's2', evidenceId: 'gender-two',
+    })
+
+    const restarted = makeCommunicationPreferenceStore({ scope: SCOPE, persistence: p.port })
+    expect(restarted.overlay()).toContain('используй мужской род')
+    expect(restarted.overlay()).toContain('живым естественным русским')
+    expect(restarted.rollback('grammatical-gender')).toBe(true)
+    expect(restarted.overlay()).toContain('используй женский род')
+    expect(restarted.active().find(item => item.family === 'tone')?.descriptor)
+      .toBe('natural-russian')
+    expect(restarted.forget('grammatical-gender')).toBe(true)
+    expect(restarted.overlay()).not.toContain('род')
+    expect(restarted.overlay()).toContain('живым естественным русским')
+  })
+
+  it('suppresses a corrupt grammatical-gender snapshot without disabling tone', () => {
+    const seededPersistence = persistence()
+    const seeded = makeCommunicationPreferenceStore({
+      scope: SCOPE,
+      persistence: seededPersistence.port,
+    })
+    seeded.observeExplicit({ text: 'Пиши живее', sessionId: 's1', evidenceId: 'tone' })
+    const corrupt = persistence({
+      'grammatical-gender': { invalid: true },
+      tone: seededPersistence.port.load('tone'),
+    })
+
+    const restarted = makeCommunicationPreferenceStore({ scope: SCOPE, persistence: corrupt.port })
+    expect(restarted.healthyFamilies()['grammatical-gender']).toBe(false)
+    expect(restarted.overlay()).toContain('живым естественным русским')
+    expect(restarted.overlay()).not.toContain('используй мужской род')
+  })
+
   it('preserves the active revision on a failed update and rolls back one family only', () => {
     const p = persistence()
     const store = makeCommunicationPreferenceStore({
