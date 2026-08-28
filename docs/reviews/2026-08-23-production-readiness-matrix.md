@@ -109,7 +109,7 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один head `master` на `c3268de` и ноль tags; Gitleaks по 47 reachable commits дал 0 findings, tree/history marker scans — 0 совпадений. Локальные legacy refs не являются publish authority и повторно не содержат независимого missing-candidate по завершённому content-аудиту | После status commit повторить public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
+| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один head `master` и ноль tags; текущий code-bearing release — `c3268de`, evidence-only commits не меняют runtime. Gitleaks по reachable history дал 0 findings, tree/history marker scans — 0 совпадений. Локальные legacy refs не являются publish authority и повторно не содержат независимого missing-candidate по завершённому content-аудиту | После каждого code-bearing release повторять public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
 
 ## Проверки текущего среза
 
