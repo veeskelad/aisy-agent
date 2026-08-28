@@ -248,6 +248,31 @@ describe('execution parent supervisor real process', () => {
     expect(runtime.spawned()).toBe(2)
   }, 20_000)
 
+  it('keeps the parent alive through unexpected-exit backoff without auxiliary handles', async () => {
+    const directory = root()
+    const trace = join(directory, 'trace.log')
+    const marker = join(directory, 'crash.marker')
+    const external = join(directory, 'external.log')
+    const manager = startManager({
+      stateRoot: join(directory, 'manager'),
+      trace,
+      external,
+      mode: 'crash-once',
+      extra: {
+        AISY_SUPERVISOR_FIXTURE_MARKER: marker,
+        AISY_SUPERVISOR_FIXTURE_NO_STATUS_TIMER: '1',
+      },
+    })
+
+    await waitUntil(() => eventCount(trace, 'manager-spawn-2') === 1 &&
+      eventCount(trace, 'supervised-ready') === 1)
+    expect(manager.exitCode).toBeNull()
+    expect(eventCount(trace, 'external')).toBe(1)
+    manager.kill('SIGTERM')
+    await waitExit(manager)
+    expect(manager.exitCode).toBe(0)
+  }, 20_000)
+
   it('allows two real managers to start exactly one child', async () => {
     const directory = root()
     const trace = join(directory, 'trace.log')

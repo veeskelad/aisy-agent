@@ -2,7 +2,7 @@
 
 **Статус:** Принято
 **Дата:** 2026-07-29
-**Последнее уточнение:** 2026-08-25
+**Последнее уточнение:** 2026-08-28
 **Теги:** telegram, runtime, durability
 
 ## Контекст
@@ -96,6 +96,12 @@ checkpoint- и provider-работы.
     вывод модели и не исполняет инструменты; в child argv/env, IPC и manager
     state он не передаёт и не сохраняет Telegram token, тексты сообщений,
     session id, turn id, байты checkpoint и credentials.
+    Между unexpected exit и replacement child backoff-таймер остаётся
+    referenced handle родительского Node-процесса. Supervisor не полагается на
+    stdout, IPC, диагностический interval или service-manager restart для
+    собственного времени ожидания: даже при отсутствии иных handles он обязан
+    дождаться backoff и запустить ровно один replacement внутри того же manager
+    epoch.
 15. Каждая lease DB содержит единственную exact-schema строку
     `lease_meta.database_id` — 64 lowercase hex. Её identity закрепляет
     неизменяемый private anchor `<lease-db>.identity.json` с exact shape
@@ -156,6 +162,9 @@ checkpoint- и provider-работы.
 - timeout ACK захвата и освобождения, malformed и oversized кадр не раскрывают
   подробностей;
 - restart storm останавливается по backoff и бюджету;
+- real-process parent без stdout/IPC/diagnostic handles переживает unexpected
+  child exit, дожидается code-owned backoff без `unsettled top-level await` и
+  запускает один replacement без рестарта service manager;
 - снятие restart-budget quarantine требует exact acknowledgement и двух
   kernel-owned lease; busy manager/runtime, corrupt/missing state и другой код
   quarantine сохраняют state без изменения;

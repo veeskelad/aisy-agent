@@ -4,6 +4,7 @@ import { appendFileSync } from 'node:fs'
 
 import {
   makeExecutionParentSupervisor,
+  sleepExecutionSupervisorDelay,
   type ExecutionSupervisorChildProcess,
   type ExecutionSupervisorChildSpawn,
   type ExecutionSupervisorSpawnPort,
@@ -93,26 +94,22 @@ const supervisor = makeExecutionParentSupervisor({
   nowMs: () => Date.now(),
   newId: opaque,
   randomNonce: opaque,
-  sleep: async (_ms, signal) => {
-    await new Promise<void>((resolve) => {
-      if (signal.aborted) return resolve()
-      const timer = setTimeout(resolve, 10)
-      signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
-    })
-  },
+  sleep: sleepExecutionSupervisorDelay,
   handshakeTimeoutMs: 15_000,
   stopTimeoutMs: 2_000,
 })
 
 trace('manager-start')
-const statusTimer = setInterval(() => {
-  const status = supervisor.status()
-  if (status.phase === 'running') trace('manager-running')
-  if (status.phase === 'quarantined') trace(`manager-quarantined-${status.quarantineCode ?? 'unknown'}`)
-}, 25)
+const statusTimer = process.env['AISY_SUPERVISOR_FIXTURE_NO_STATUS_TIMER'] === '1'
+  ? null
+  : setInterval(() => {
+      const status = supervisor.status()
+      if (status.phase === 'running') trace('manager-running')
+      if (status.phase === 'quarantined') trace(`manager-quarantined-${status.quarantineCode ?? 'unknown'}`)
+    }, 25)
 try {
   const result = await supervisor.run(controller.signal)
   trace(`manager-result-${result.kind}`)
 } finally {
-  clearInterval(statusTimer)
+  if (statusTimer !== null) clearInterval(statusTimer)
 }

@@ -343,6 +343,7 @@ import {
   AISY_PLANNED_RESTART_EXIT_CODE,
   makeExecutionParentSupervisor,
   makeNodeExecutionSupervisorSpawnPort,
+  sleepExecutionSupervisorDelay,
 } from '../execution-parent-supervisor.js'
 import { openLinuxVoiceBrokerNativePort, type VoiceBrokerNativePort } from '../voice-broker-native.js'
 import {
@@ -483,19 +484,6 @@ if (argv[0] === 'supervise') {
   const stop = (): void => { abort.abort() }
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
-  const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
-    if (signal.aborted) return
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(done, ms)
-      timer.unref?.()
-      function done(): void {
-        signal.removeEventListener('abort', done)
-        clearTimeout(timer)
-        resolve()
-      }
-      signal.addEventListener('abort', done, { once: true })
-    })
-  }
   try {
     if (voiceFilesPresent !== 0) {
       if (voiceFilesPresent !== 3) {
@@ -533,7 +521,7 @@ if (argv[0] === 'supervise') {
       nowMs: () => Date.now(),
       newId: () => randomBytes(32).toString('base64url'),
       randomNonce: () => randomBytes(32).toString('base64url'),
-      sleep,
+      sleep: sleepExecutionSupervisorDelay,
       ...(ownedDockerManager === null ? {} : { ownedDockerManager }),
       ...(voiceBridge === null
         ? {}

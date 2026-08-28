@@ -123,6 +123,16 @@ if (mode === 'planned-once') {
     if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
   }
 }
+if (mode === 'crash-once') {
+  const marker = process.env['AISY_SUPERVISOR_FIXTURE_MARKER']
+  if (typeof marker !== 'string' || marker === '') closeAndExit(94)
+  try {
+    writeFileSync(marker, 'crashed\n', { flag: 'wx', mode: 0o600 })
+    closeAndExit(1)
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
+  }
+}
 if (mode === 'crash') closeAndExit(1)
 
 external()

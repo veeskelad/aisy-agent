@@ -1446,6 +1446,11 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     существующую карточку технически
     нельзя переиспользовать, fallback-сообщение содержит только «Не получилось
     ответить · Попробуй ещё раз.» и ту же кнопку, без внутренней detail.
+103. **AC-02-103** — После unexpected exit дочернего runtime code-owned backoff
+    удерживает referenced timer родительского процесса. Real-process parent без
+    вспомогательных interval/stdout/IPC handles не завершается с Node exit 13
+    (`unsettled top-level await`), не перекладывает обычный child restart на
+    service manager и после задержки запускает ровно один replacement child.
 
 ## 10. Open questions
 

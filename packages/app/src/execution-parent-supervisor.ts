@@ -56,6 +56,29 @@ const MAX_VOICE_DISPATCH_DEADLINE_MS = 120_000
 const PLANNED_RESTART_DELAY_MS = 250
 const IDLE_CHANNEL_WAIT_MS = 2_147_000_000
 
+/**
+ * Backoff is part of the parent supervisor's liveness contract. The timer must
+ * stay referenced: between children it can be the process's only active handle.
+ */
+export async function sleepExecutionSupervisorDelay(
+  ms: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => {
+    const done = (): void => {
+      signal.removeEventListener('abort', done)
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+    // Close the narrow race where abort happens after the first check but
+    // before the listener is registered.
+    if (signal.aborted) done()
+  })
+}
+
 export interface ExecutionSupervisorChildSpawn {
   execPath: string
   binPath: string
