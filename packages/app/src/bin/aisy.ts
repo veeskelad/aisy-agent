@@ -1912,7 +1912,13 @@ const operatorProfile = makeOperatorProfileWriter({
   path: join(memoryRoot, 'USER.md'),
   onError: (detail) => journal.append('onboarding', 'onboarding.profile_write_failed', { detail }),
 })
-const onboardingBrief = makeOnboardingBrief({ missing: () => onboardingProgress.missing() })
+const firstContactPath = join(base, 'first-contact.json')
+const onboardingBrief = makeOnboardingBrief({
+  missing: () => onboardingProgress.missing(),
+  // The full brief is for the first proactive greeting only. Durable bounded
+  // nudges below carry their own prompt; ordinary chat must stay ordinary.
+  active: () => !existsSync(firstContactPath),
+})
 const frozenPrefix = makeFrozenPrefixSource({
   memoryRoot,
   files: GLOBAL_DNA_PREFIX_FILES,
@@ -1923,7 +1929,6 @@ const frozenPrefix = makeFrozenPrefixSource({
       const catalogue = knowledgeZone.catalogue()
       return catalogue.entries.length === 0 ? null : catalogue.markdown
     },
-    onboardingBrief,
   ],
 })
 
@@ -4798,7 +4803,7 @@ orchestrator = makeGoalOrchestrator({
 // is sent once per home, and an unanswered acquaintance is picked up again at
 // most three times, a day apart. Bounded on purpose — an agent that keeps asking
 // the same question is worse company than one that lets it go.
-const greetedPath = join(base, 'first-contact.json')
+const greetedPath = firstContactPath
 const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000
 const MAX_NUDGES = 3
 interface FirstContactRecord { greetedAt?: string; nudges?: string[]; tourAt?: string }
@@ -4999,10 +5004,13 @@ if (readFirstContact() === null && onboardingBrief() !== null) {
   setTimeout(() => {
     void (async () => {
       try {
+        const brief = onboardingBrief()
+        if (brief === null) return
         // The menu rides on the greeting itself, so the first message the
         // operator ever gets already has the keyboard under it.
         armMainMenu()
         await runProactiveTurn(
+          brief + '\n\n' +
           'Ты только что подключён и пишешь первым. Поздоровайся, назовись, ' +
           'в двух-трёх предложениях скажи, что умеешь и как тобой пользоваться ' +
           '(меню внизу, голосом тоже можно), и начни знакомство с одного вопроса: ' +

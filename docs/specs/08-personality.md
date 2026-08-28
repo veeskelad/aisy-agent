@@ -547,6 +547,12 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     только gender overlay; остальные preference families остаются активными.
 24. **AC-08-24** — Повреждённый snapshot `grammatical-gender` suppress'ит только
     эту family и не выключает остальные typed preferences.
+25. **AC-08-25** — CLI-envelope описывает `learned_procedure` как применимое
+    code-generated руководство более низкого приоритета, не выдаёт ему
+    operator authority и не смешивает его с `untrusted_input`.
+26. **AC-08-26** — Обычный ответ не раскрывает source tags, provenance,
+    prompt-injection checks или внутреннюю policy без явного вопроса оператора;
+    активный `masculine-russian` при этом продолжает действовать.
 
 ## 10. Open questions
 
@@ -571,6 +577,7 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
   - [ADR-0018 — Model Router with Hysteresis Fallback](../decisions/2026-06-11-model-router-hysteresis-fallback.md)
   - [ADR-0014 — Narrow-Waist Tool Set](../decisions/2026-06-11-narrow-waist-tool-set.md)
   - [ADR-0004 — TypeScript for Core](../decisions/2026-06-11-typescript-for-core.md)
+  - [ADR-0111 — Выученный контекст применяется молча, знакомство не захватывает обычный диалог](../decisions/2026-08-28-silent-learned-context-and-bounded-onboarding.md)
 - Concept docs:
   - [`docs/concepts/safety-layer.md`](../concepts/safety-layer.md)
   - [`docs/concepts/memory-system.md`](../concepts/memory-system.md)

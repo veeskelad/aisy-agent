@@ -14,6 +14,27 @@ describe('onboarding brief', () => {
     expect(makeOnboardingBrief({ missing: () => [] })()).toBeNull()
   })
 
+  it('does not inject unfinished acquaintance into ordinary turns after first contact', () => {
+    const brief = makeOnboardingBrief({
+      missing: () => ['name', 'work'],
+      active: () => false,
+    })
+
+    expect(brief()).toBeNull()
+  })
+
+  it('can become inactive after the initial contact without closing missing topics', () => {
+    let active = true
+    const brief = makeOnboardingBrief({
+      missing: () => ['autonomy'],
+      active: () => active,
+    })
+
+    expect(brief()).toContain('Первое знакомство')
+    active = false
+    expect(brief()).toBeNull()
+  })
+
   it('follows the progress it is given, turn by turn', () => {
     let missing: OnboardingTopic[] = [...ONBOARDING_TOPICS]
     const brief = makeOnboardingBrief({ missing: () => missing })

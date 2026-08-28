@@ -465,6 +465,12 @@ workspace typecheck/build и `git diff --check` зелёные. Python sidecars 
 64. **AC-16-64** — Capability thread сохраняется с отдельным pinned profile,
     read-only/capability profile нельзя взаимозаменить после restart; model
     `default` означает account default и не отправляется как выдуманный id.
+65. **AC-16-65** — Полный onboarding-бриф входит только в code-owned prompt
+    первого проактивного контакта и не входит в frozen prefix Session. После
+    отправленного приветствия незакрытые темы не добавляют анкету в обычный ход;
+    bounded follow-up scheduler сохраняется.
+66. **AC-16-66** — Restart после первого контакта не возвращает onboarding-бриф
+    в обычный диалог, даже если часть тем всё ещё не закрыта.
 
 Трассировка AC-16-51…54:
 `runtime/codex-app-server-driver.spec.ts` и
@@ -510,6 +516,7 @@ integration-тестов для него пока нет.
 - [ADR-0049](../decisions/2026-06-16-interactive-onboarding-and-telegram-pairing.md)
 - [ADR-0057](../decisions/2026-07-26-aisy-control-plane-supervised-brain-runtimes.md)
 - [ADR-0058](../decisions/2026-07-26-telegram-first-bootstrap-brain-connections.md)
+- [ADR-0111](../decisions/2026-08-28-silent-learned-context-and-bounded-onboarding.md)
 - [ADR-0087](../decisions/2026-07-29-opaque-secret-broker-backend-proxy.md)
 - [ADR-0088](../decisions/2026-07-29-durable-semantic-egress-consent.md)
 - [OpenAI Models API](https://developers.openai.com/api/docs/models)

@@ -51,11 +51,15 @@ export function renderOnboardingBrief(missing: readonly OnboardingTopic[]): stri
 export interface OnboardingBriefDeps {
   /** Topics still unanswered, newest state each call. */
   missing: () => readonly OnboardingTopic[]
+  /** The brief belongs only to the initial contact turn. Later follow-ups have
+   * their own bounded code-owned prompts and must not hijack ordinary chat. */
+  active?: () => boolean
 }
 
 /** Returns the brief while topics remain, `null` once the operator is known. */
 export function makeOnboardingBrief(deps: OnboardingBriefDeps): () => string | null {
   return () => {
+    if (deps.active?.() === false) return null
     const missing = deps.missing()
     return missing.length === 0 ? null : renderOnboardingBrief(missing)
   }
