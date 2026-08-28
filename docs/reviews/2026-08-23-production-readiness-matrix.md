@@ -4,15 +4,15 @@
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
-**Current verified code head:** `b125e73e2ee085ee0e7f195546126be1b1c63f1b`
+**Current verified code head:** `c3268dee5b789824e8d175fa0d8fd38f5a321eca`
 
 **Production runtime release из public `master`:**
-`b125e73e2ee085ee0e7f195546126be1b1c63f1b`
+`c3268dee5b789824e8d175fa0d8fd38f5a321eca`
 
-**Managed production current:** `b125e73e2ee085ee0e7f195546126be1b1c63f1b`
-**Managed production previous:** `1df48515b55cd2d9dff2e8046ad18179ad30573e`
+**Managed production current:** `c3268dee5b789824e8d175fa0d8fd38f5a321eca`
+**Managed production previous:** `cae9c826ce6d0fed27ae046d246f06d9741879da`
 
-**Развёрнутый adaptive-agent slice:** commits `0843142..b125e73`;
+**Развёрнутый adaptive-agent slice:** commits `0843142..c3268de`;
 managed update, rollback, roll-forward и recovery restart-budget выполнены на
 целевом host. Остаточные внешние E2E не выданы ниже за уже принятые.
 
@@ -58,7 +58,13 @@ spans и промежуточные provider attempts не попадают в �
 Session rotation и `/resume`, ежедневный model-backed consolidation вместо
 воскресного, неестественный memory acknowledgement, повтор Tier-2 карточки
 после уже данного разрешения и отсутствие typed overlay для явных поправок
-стиля. Corrupt rotation-state теперь останавливает startup, а не маскируется
+стиля и grammatical gender. Первый live-ход после активации typed preference
+выявил старый transcript-контракт, который отвергал turn-local provenance
+`learned-procedure` до provider call. Release `c3268de` оставляет актуальный
+typed overlay в provider request, но не дублирует его в dialog transcript:
+старые revisions не накапливаются в history, persisted enum не расширяется и
+rollback-бинарник продолжает читать журнал. Corrupt rotation-state теперь
+останавливает startup, а не маскируется
 под отсутствие state. Расширенный multi-Project weekly cohort, отдельный
 approval WAL, per-step plan grants и forget-safe повторная фильтрация старого
 transcript честно остаются **ОТЛОЖЕНО ADR**: они не нужны для заявленного
@@ -71,9 +77,9 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
 |---|---|---|---|
-| Telegram text, streaming, attachments и forwarded batches | **LIVE; новый slice развёрнут** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в production composition. Typed nightly notice различает `complete-zero`, `complete-n`, `partial-failure` и session-only; bare `Покажи` одноразовый и deterministic, конкретное `Покажи файл` остаётся обычным запросом. Target Doctor подтверждает token/allowlist, сервис стабилен | Подтвердить обычный post-update text reply и следующий живой nightly shortcut |
+| Telegram text, streaming, attachments и forwarded batches | **LIVE; transcript P0 исправлен и развёрнут** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в production composition. Typed nightly notice различает `complete-zero`, `complete-n`, `partial-failure` и session-only; bare `Покажи` одноразовый и deterministic, конкретное `Покажи файл` остаётся обычным запросом. Release `c3268de` устраняет pre-provider отказ следующего хода с активным learned overlay; Target Doctor подтверждает token/allowlist, сервис стабилен | Повторный живой `эй` после `c3268de` и следующий nightly shortcut |
 | Workspace, Projects, Sessions и files | **LIVE; новый slice развёрнут** | Registry v2, ProjectService, отдельная one-use SessionRotationAuthority, deterministic create id, crash recovery и `/resume [prefix]` подключены. Corrupt rotation record fail-closed; старая Session и transcript не удаляются | Forced daily rotation/restart и `/resume` E2E на target; forget-safe transcript reprojection отдельно отложена ADR |
-| Transcript v2 и compaction | **LIVE в коде** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; raw audit остаётся неизменным. Provider-facing projection удаляет code-owned recovery/action spans и промежуточные model attempts, сохраняя user ingress, значимые tool spans и terminal reply | Target-FS self-test и long-session Telegram acceptance; day-log/activity pipeline DORMANT |
+| Transcript v2 и compaction | **LIVE; rollback-compatible learned overlay fix развёрнут** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; raw audit остаётся неизменным. Provider-facing projection удаляет code-owned recovery/action spans и промежуточные model attempts. `learned-procedure` является актуальной turn-local проекцией typed store и не записывается как диалоговая строка; user ingress и terminal reply остаются в прежнем hash-chained schema | Повторный живой Telegram turn; target-FS self-test и long-session acceptance; day-log/activity pipeline DORMANT |
 | Keyword/scoped memory и forgetting | **LIVE; новый slice развёрнут** | Protected global/Project stores и `makeScopedMemoryLiveView` остаются единственным live path. `remember` публикует факт сразу и code-owned acknowledgement нормализует bounded preference prefixes в естественное «Запомнил, что ты…»; operational facts не перефразируются. Три известные test facts удалены через deletion service, ledger/projection после restart содержат 0 test markers | Target natural remember→restart→recall без служебного текста |
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
 | Tools и exact-domain HTTPS | **LIVE; новый grant slice развёрнут с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; первое обычное Tier-2 подтверждение в `auto` атомарно сохраняет scoped similar grant, `/grants` отзывает его. Tier-3, HARD_DENY, narrowing и `confirm` не обходятся | Target: подтвердить одну безопасную Tier-2 операцию и повторить без второй карточки; explicit destructive по-прежнему должен спросить |
@@ -90,22 +96,35 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
 | Telegram/YouTube/GitHub monitoring collectors и feedback learning | **DORMANT / ОТСУТСТВУЕТ по подтипу** | Core collector/ranking pieces существуют не для всех platform flows | Отдельные normalized collectors, UI и deterministic cursor/feedback corpus |
-| Onboarding, профиль и персонализация | **LIVE; новый slice развёрнут** | First-contact и профиль остаются LIVE. Отдельный private typed preference store немедленно применяет явные поправки `concise`, `hide-internals`, `natural-russian`, `second-person-memory-ack`; inferred descriptor требует две разные Sessions. В prompt попадает только fixed text с provenance `learned-procedure`, не raw dialogue | Target correction→next reply→restart; rollback/forget доступны программно, Telegram UI для них ОТСУТСТВУЕТ |
+| Onboarding, профиль и персонализация | **LIVE; мужской grammatical gender активирован** | First-contact и профиль остаются LIVE. Отдельный private typed preference store немедленно применяет явные поправки `concise`, `hide-internals`, `natural-russian`, `second-person-memory-ack`, `masculine-russian`; inferred descriptor требует две разные Sessions. В prompt попадает только fixed text с provenance `learned-procedure`, не raw dialogue; release `c3268de` доказанно пропускает этот overlay в provider и не пишет его в transcript | Живой ответ мужского рода после `c3268de`; rollback/forget доступны программно, Telegram UI для них ОТСУТСТВУЕТ |
 | Daily Session reset / Sunday memory cadence | **LIVE; расширенный cohort ОТЛОЖЕН ADR** | Daily runner не вызывает generator/judge; Sunday cursor даёт missed-Sunday catch-up, manual run не двигает cursor. Rotation/restart/at-most-once startup notice детерминированы; код развёрнут на target | Target forced-date run и следующий Sunday. Multi-Project member cursors, cross-cohort artifact reuse и late-result outbox не активированы |
 | Напоминания, расписания и цели | **LIVE** | Trigger store/engine, scheduler, goal store/orchestrator, approval и restart resume подключены в `bin/aisy.ts` | Target reminder + scheduled goal + restart trace |
 | Ограниченный доступ к серверу | **LIVE при explicit config + approval** | `makeServerAccess` импортирован production binary; argv выполняется без shell, restart требует held supervisor authority, временный доступ истекает scheduler-ом | Target open/expire/restart audit для operator-owned config |
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
-| Supervisor restart/rollback | **LIVE для managed release; destructive drill принят с recovery** | Target unit использует managed `active/current`. Цикл `b125e73→1df4851→b125e73` сохранил previous slot. Auto-skill rollback barrier fail-closed остановил writer; после exact resume supervisor штатно снял только `RESTART_BUDGET_EXHAUSTED` (recovery revision 142). Финальный service `active/running`, `ExecMainStatus=0`, `NRestarts=0`, Doctor healthy | В обычном release gate фиксировать exact quarantine/recovery и отсутствие дальнейшего роста рестартов |
-| Managed Git install/update/rollback | **LIVE: target cutover, rollback и roll-forward приняты** | current=`b125e73`, previous=`1df4851`; managed update, официальный rollback и roll-forward завершены. Неверно адресованный промежуточный launcher был byte-identical каноническому, удалён точечно; retained previous остаётся rollback-слотом. Финальный Doctor **19 pass / 7 optional warn** | Следующий update обязан запускаться только каноническим `/home/iam/aisy-managed-bin/aisy` |
+| Supervisor restart/rollback | **LIVE для managed release; destructive drill принят с recovery** | Target unit использует managed `active/current`. Цикл `b125e73→1df4851→b125e73` сохранил previous slot. Current=`c3268de`, previous=`cae9c82`; новый fix не расширяет persisted transcript enum, поэтому retained previous остаётся совместимым. Финальный service `active/running`, `ExecMainStatus=0`, `NRestarts=0`, Doctor healthy | В обычном release gate фиксировать exact quarantine/recovery и отсутствие дальнейшего роста рестартов |
+| Managed Git install/update/rollback | **LIVE: target cutover, rollback и roll-forward приняты** | current=`c3268de`, previous=`cae9c82`; managed update, официальный исторический rollback и roll-forward завершены. Неверно адресованный промежуточный launcher был byte-identical каноническому, удалён точечно; retained previous остаётся rollback-слотом. Финальный Doctor **19 pass / 7 optional warn** | Следующий update обязан запускаться только каноническим `/home/iam/aisy-managed-bin/aisy` с pinned Node 22 PATH |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один head `master`; code-bearing release `b125e73` прошёл Gitleaks с 0 findings, tree/history marker scans дали 0 совпадений. Локальные legacy refs не являются publish authority | После status commit повторить public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
+| Public history/privacy boundary | **LIVE по ADR-0107** | Публичный remote содержит один head `master` на `c3268de` и ноль tags; Gitleaks по 47 reachable commits дал 0 findings, tree/history marker scans — 0 совпадений. Локальные legacy refs не являются publish authority и повторно не содержат независимого missing-candidate по завершённому content-аудиту | После status commit повторить public refs/reachable-history/tree scans; локальные legacy refs не push'ить |
 
 ## Проверки текущего среза
+
+- production P0 2026-08-28: активный typed preference добавлял
+  `learned-procedure` span, а ADR-0064 recorder принимал только persisted
+  `operator | untrusted`; метаданные показали две успешные записи и отказ до
+  `prompt.assembled`. Release `c3268de` делает overlay turn-local и сохраняет
+  rollback schema. Targeted regressions — **140 Core + 4 App passed**; полный
+  corpus — Core **2419 passed / 1 skipped**, App **2664 passed / 2 skipped**;
+  workspace typecheck/build и `git diff --check` green. Public fast-forward
+  `cae9c82→c3268de`, managed current=`c3268de`, previous=`cae9c82`, service
+  `active/running`, `NRestarts=0`, Doctor **19 pass / 7 optional warn**.
+  Gitleaks по 47 public commits — 0 findings; forbidden marker tree/history —
+  0. @monday_aibot отправил bounded smoke request `message_id=4142`; ответный
+  live turn ещё не поступил и не выдан за принятую проверку;
 
 - public fast-forward `0178acd→b125e73` опубликован и развёрнут. Managed
   `update→rollback→roll-forward` завершён с current=`b125e73`,
