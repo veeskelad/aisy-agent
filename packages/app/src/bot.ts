@@ -744,6 +744,7 @@ export interface TelegramBotDeps {
 }
 
 export type TelegramNightlyNotice =
+  | { kind: 'session-only'; sessionReset: true }
   | { kind: 'complete-zero'; sessionReset: boolean }
   | { kind: 'complete-n'; sessionReset: boolean; pending: number }
   | {
@@ -4521,6 +4522,14 @@ let pendingFormUntilMs = 0
     },
     sendNightlyNotice: async (notice: TelegramNightlyNotice): Promise<void> => {
       const reset = notice.sessionReset ? '🌅 Начала новую сессию. ' : ''
+      if (notice.kind === 'session-only') {
+        await sendReply(
+          '🌅 Начала новую сессию. Память и незавершённая работа сохранены. ' +
+          '/resume — вернуться к прошлому разговору.',
+        )
+        nightlyShortcut = 'none'
+        return
+      }
       if (notice.kind === 'complete-zero') {
         await sendReply(`${reset}Память проверена: новых правок нет.` +
           (notice.sessionReset ? ' /resume — вернуться к прошлому разговору.' : ''))

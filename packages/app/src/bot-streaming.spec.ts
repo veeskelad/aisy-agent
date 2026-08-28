@@ -707,6 +707,16 @@ describe('Telegram structured reply streaming', () => {
     expect(status).not.toContain('999')
   })
 
+  it('announces an ordinary daily Session reset without claiming a memory review', async () => {
+    const h = harness({ handle: vi.fn<AgentRunner['handle']>() })
+
+    await h.sendNightlyNotice({ kind: 'session-only', sessionReset: true })
+
+    expect(h.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === '🌅 Начала новую сессию. Память и незавершённая работа сохранены. ' +
+        '/resume — вернуться к прошлому разговору.')).toBe(true)
+  })
+
   it('opens available staged memory edits for a bare natural «Покажи» without running the agent', async () => {
     const handle = vi.fn<AgentRunner['handle']>()
     const h = harness(

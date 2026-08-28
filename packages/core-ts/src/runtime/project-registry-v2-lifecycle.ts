@@ -61,6 +61,8 @@ export interface ProjectRegistryV2 {
     projectId: string
     name?: string
     expectedGeneration?: number
+    sessionId?: string
+    createKeyHash?: string
   }): ProjectSessionRecord
   renameSession(input: ProjectRegistryV2Owner & {
     projectId: string
@@ -178,11 +180,25 @@ export function makeProjectRegistryV2(deps: {
     candidate: ProjectRegistryStateV2,
     projectId: string,
     name: string | undefined,
+    options?: Readonly<{ sessionId?: string; createKeyHash?: string }>,
   ): ProjectSessionRecord => {
     const now = deps.nowIso()
+    const id = options?.sessionId === undefined
+      ? allocateId(candidate)
+      : (() => {
+          const requested = options.sessionId.trim()
+          if (requested.length === 0 || candidate.projects.some((item) => item.id === requested) ||
+            candidate.sessions.some((item) => item.id === requested)) {
+            throw new ProjectRegistryV2Error('DUPLICATE_ID')
+          }
+          return requested
+        })()
     const record: ProjectSessionRecord = {
-      id: allocateId(candidate),
+      id,
       projectId,
+      ...(options?.createKeyHash === undefined
+        ? {}
+        : { createKeyHash: options.createKeyHash }),
       name: cleanName(name ?? '', 'New session'),
       status: 'active',
       createdAt: now,
@@ -373,7 +389,23 @@ export function makeProjectRegistryV2(deps: {
           throw new ProjectRegistryV2Error('STALE_GENERATION')
         }
         project(candidate, owner, input.projectId)
-        const created = createSession(candidate, input.projectId, input.name)
+        if ((input.sessionId === undefined) !== (input.createKeyHash === undefined) ||
+          (input.createKeyHash !== undefined && !/^[a-f0-9]{64}$/u.test(input.createKeyHash))) {
+          throw new ProjectRegistryV2Error('CORRUPT_STATE')
+        }
+        const existing = input.createKeyHash === undefined
+          ? undefined
+          : candidate.sessions.find((item) => item.createKeyHash === input.createKeyHash)
+        if (existing !== undefined) {
+          if (existing.projectId !== input.projectId || existing.id !== input.sessionId) {
+            throw new ProjectRegistryV2Error('CORRUPT_STATE')
+          }
+          return { result: { ...existing }, events: [] }
+        }
+        const created = createSession(candidate, input.projectId, input.name, {
+          ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+          ...(input.createKeyHash === undefined ? {} : { createKeyHash: input.createKeyHash }),
+        })
         return {
           result: { ...created },
           events: [{ kind: 'session.created', projectId: input.projectId, sessionId: created.id }],

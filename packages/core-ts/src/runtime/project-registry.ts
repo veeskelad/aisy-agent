@@ -17,6 +17,8 @@ export interface ProjectRecord {
 export interface ProjectSessionRecord {
   id: ProjectSessionId
   projectId: ProjectId
+  /** Durable idempotency key for code-owned lifecycle creation. */
+  createKeyHash?: string
   name: string
   status: 'active' | 'archived'
   createdAt: string

@@ -3,6 +3,7 @@ import {
   makeConfinementPort,
   makeProjectRegistryV2,
   makeProjectService,
+  makeSessionRotationAuthority,
   makeSwitchAuthority,
   type ContextLeaseCoordinator,
   type ConfinementEvent,
@@ -11,9 +12,11 @@ import {
   type ProjectRegistryV2Policy,
   type ProjectService,
   type ProjectServiceEvent,
+  type SessionRotationAuthority,
   type ProjectServiceLifecycleDeps,
   type SwitchAuthority,
 } from '@aisy/core'
+import { createHash } from 'node:crypto'
 import { makeNodeConfinementProcessPort } from './confinement-sidecar.js'
 import { makeConfinementTreeScanner } from './confinement-tree-scanner.js'
 import { makeNodeProjectRegistryV2Store } from './project-registry-v2-store.js'
@@ -38,6 +41,7 @@ import {
 export interface NodeProjectServiceRuntime {
   registry: ProjectRegistryV2
   authority: SwitchAuthority
+  rotationAuthority?: SessionRotationAuthority
   leases: ContextLeaseCoordinator
   service: ProjectService
 }
@@ -138,6 +142,7 @@ export function makeNodeProjectServiceRuntime(input: {
   registry: ProjectRegistryV2
   authoritySecret: Uint8Array
   noncePath: string
+  rotationNoncePath?: string
   nowMs?: () => number
   newReceiptId: () => string
   newLeaseId: () => string
@@ -152,16 +157,37 @@ export function makeNodeProjectServiceRuntime(input: {
     newId: input.newReceiptId,
     nonces: makeNodeSwitchAuthorityNonceStore({ path: input.noncePath, nowMs }),
   })
+  const rotationAuthority = input.rotationNoncePath === undefined
+    ? undefined
+    : makeSessionRotationAuthority({
+        secret: createHash('sha256')
+          .update(Buffer.from(input.authoritySecret))
+          .update('\0aisy-session-rotation-v1')
+          .digest(),
+        nowMs,
+        newId: input.newReceiptId,
+        nonces: makeNodeSwitchAuthorityNonceStore({
+          path: input.rotationNoncePath,
+          nowMs,
+        }),
+      })
   const leases = makeContextLeaseCoordinator({ newId: input.newLeaseId })
   const service = makeProjectService({
     registry: input.registry,
     leases,
     authority,
+    ...(rotationAuthority === undefined ? {} : { rotationAuthority }),
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
     ...(input.beforeArchive === undefined ? {} : { beforeArchive: input.beforeArchive }),
     ...(input.emit === undefined ? {} : { emit: input.emit }),
   })
-  return { registry: input.registry, authority, leases, service }
+  return {
+    registry: input.registry,
+    authority,
+    ...(rotationAuthority === undefined ? {} : { rotationAuthority }),
+    leases,
+    service,
+  }
 }
 
 export function makeNodeProjectServiceRuntimeFromRegistry(input: {
@@ -169,6 +195,7 @@ export function makeNodeProjectServiceRuntimeFromRegistry(input: {
   registryPolicy: ProjectRegistryV2Policy
   authoritySecret: Uint8Array
   noncePath: string
+  rotationNoncePath?: string
   nowMs?: () => number
   nowIso: () => string
   newRegistryId: () => string
@@ -193,6 +220,9 @@ export function makeNodeProjectServiceRuntimeFromRegistry(input: {
     registry,
     authoritySecret: input.authoritySecret,
     noncePath: input.noncePath,
+    ...(input.rotationNoncePath === undefined
+      ? {}
+      : { rotationNoncePath: input.rotationNoncePath }),
     ...(input.nowMs === undefined ? {} : { nowMs: input.nowMs }),
     newReceiptId: input.newReceiptId,
     newLeaseId: input.newLeaseId,

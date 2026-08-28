@@ -284,6 +284,10 @@ import {
 import { makeNodeAutonomyEvidenceStore } from '../autonomy-evidence-store.js'
 import { makeNodeLearnedGrantStore } from '../learned-grant-store.js'
 import { makeNodeProjectServiceRuntime } from '../project-service-runtime.js'
+import {
+  makeDailySessionRotation,
+  makeNodeDailySessionRotationStore,
+} from '../daily-session-rotation.js'
 import { makeTelegramProjectControls } from '../telegram-project-controls.js'
 import { makeTelegramSessionControls } from '../telegram-session-controls.js'
 import { makeTelegramSkillControls } from '../telegram-skill-controls.js'
@@ -1523,6 +1527,7 @@ const projectRuntime = makeNodeProjectServiceRuntime({
   registry: registryPair.registry,
   authoritySecret: switchAuthoritySecret,
   noncePath: join(base, 'switch-authority-nonces.json'),
+  rotationNoncePath: join(base, 'session-rotation-nonces.json'),
   newReceiptId: () => randomUUID(),
   newLeaseId: () => randomUUID(),
   lifecycle: lifecycleRuntime.lifecycle,
@@ -1537,6 +1542,17 @@ const projectRuntime = makeNodeProjectServiceRuntime({
   // Каскад забывания (спека 24 §7, AC-24-10). Объявление поднято, а журнал
   // автономности создаётся ниже: к моменту первой архивации он уже есть.
   emit: (event) => { forgetAutonomyOn(event) },
+})
+if (projectRuntime.rotationAuthority === undefined) {
+  throw new Error('SESSION_ROTATION_AUTHORITY_UNAVAILABLE')
+}
+const dailySessionRotation = makeDailySessionRotation({
+  botId: activeBot?.id ?? 'telegram-primary',
+  ...registryOwner,
+  registry: registryPair.registry,
+  service: projectRuntime.service,
+  authority: projectRuntime.rotationAuthority,
+  store: makeNodeDailySessionRotationStore(join(base, 'daily-session-rotation.json')),
 })
 const contextLeases = projectRuntime.leases
 const newSessionRunner = makeNewSessionRunner({
@@ -3961,7 +3977,10 @@ async function runNightly(
   if (cadence === 'scheduled' && weeklyDue && result.modelStages === 'complete') {
     weeklyConsolidationCadence.markSuccessful(localDate)
   }
-  if (!weeklyDue) return
+  if (!weeklyDue) {
+    await dailySessionRotation.rotate(localDate, { kind: 'session-only' })
+    return
+  }
   const pending = result.card.memoryEdits.length
   if (pending > 0) {
     await gateway.issueCard({
@@ -3971,14 +3990,18 @@ async function runNightly(
       requiresStepUp: false,
       summary: `Ночная консолидация ${result.runDate}: ${pending} правок памяти на одобрение.`,
     })
-    await sendNightlyNoticeRef?.(result.modelStages === 'complete'
-      ? { kind: 'complete-n', sessionReset: false, pending }
-      : { kind: 'partial-failure', sessionReset: false, pending, failedProjects: 1 })
+    const notice = result.modelStages === 'complete'
+      ? { kind: 'complete-n' as const, pending }
+      : { kind: 'partial-failure' as const, pending, failedProjects: 1 }
+    if (cadence === 'scheduled') await dailySessionRotation.rotate(localDate, notice)
+    else await sendNightlyNoticeRef?.({ ...notice, sessionReset: false })
     return
   }
-  await sendNightlyNoticeRef?.(result.modelStages === 'complete'
-    ? { kind: 'complete-zero', sessionReset: false }
-    : { kind: 'partial-failure', sessionReset: false, pending: 0, failedProjects: 1 })
+  const notice = result.modelStages === 'complete'
+    ? { kind: 'complete-zero' as const }
+    : { kind: 'partial-failure' as const, pending: 0, failedProjects: 1 }
+  if (cadence === 'scheduled') await dailySessionRotation.rotate(localDate, notice)
+  else await sendNightlyNoticeRef?.({ ...notice, sessionReset: false })
 }
 
 const buildMainRunner = (
@@ -4517,6 +4540,7 @@ const {
 })
 sendProactiveRef = sendProactive
 sendNightlyNoticeRef = sendNightlyNotice
+await dailySessionRotation.recoverNotification(sendNightlyNotice)
 // Resume durable candidate phases and ambiguous-notification accounting after
 // the Telegram send closure exists. This is background work; startup polling
 // and the first operator reply do not wait on model I/O.
@@ -4796,6 +4820,18 @@ const scheduler = makeScheduler({
     } catch { /* non-fatal */ }
   },
   runNightly,
+  afterNightlyRun: async (date) => {
+    dailySessionRotation.markRestartRequested(date)
+  },
+  tickNightlyRecovery: async () => {
+    if (dailySessionRotation.current()?.phase !== 'restart_requested') return
+    const intent = runtimeRestart.prepare('daily session rotation')
+    if (typeof intent === 'string') throw new Error(`DAILY_SESSION_RESTART_${intent}`)
+    const committed = await runtimeRestart.commitExit(intent)
+    if (committed !== 'committed' && committed !== 'already-committed') {
+      throw new Error(`DAILY_SESSION_RESTART_${committed}`)
+    }
+  },
   tickTriggers: async () => {
     await triggerEngine.tick()
     // Closing an expired door is the runtime's own call and needs no approval.

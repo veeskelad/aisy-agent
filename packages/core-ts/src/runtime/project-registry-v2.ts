@@ -276,14 +276,18 @@ export function validateProjectRegistryStateV2(
   }
 
   const sessionById = new Map<string, ProjectSessionRecord>()
+  const sessionCreateKeys = new Set<string>()
   for (const item of state.sessions) {
     if (typeof item !== 'object' || item === null ||
       !nonEmpty(item.id) || !nonEmpty(item.projectId) || !nonEmpty(item.name) ||
       (item.status !== 'active' && item.status !== 'archived') ||
       !nonEmpty(item.createdAt) || !nonEmpty(item.updatedAt) ||
-      ids.has(item.id) || !projectById.has(item.projectId)) {
+      ids.has(item.id) || !projectById.has(item.projectId) ||
+      (item.createKeyHash !== undefined && !SHA256_PATTERN.test(item.createKeyHash)) ||
+      (item.createKeyHash !== undefined && sessionCreateKeys.has(item.createKeyHash))) {
       throw new ProjectRegistryV2Error('CORRUPT_STATE')
     }
+    if (item.createKeyHash !== undefined) sessionCreateKeys.add(item.createKeyHash)
     ids.add(item.id)
     sessionById.set(item.id, item)
   }

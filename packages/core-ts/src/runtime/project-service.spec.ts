@@ -10,6 +10,7 @@ import {
   makeSwitchAuthority,
   type SwitchAuthorityNonceRecord,
 } from './switch-authority.js'
+import { makeSessionRotationAuthority } from './session-rotation-authority.js'
 import {
   makeProjectService,
   type ProjectLifecycleAction,
@@ -87,6 +88,22 @@ function setup(options: {
       },
     },
   })
+  let rotationReceiptId = 0
+  const rotationNonces = new Map<string, SwitchAuthorityNonceRecord>()
+  const rotationAuthority = makeSessionRotationAuthority({
+    secret: Buffer.alloc(32, 10),
+    nowMs: () => Date.parse('2026-07-26T21:00:00.000Z'),
+    newId: () => `rotation-${++rotationReceiptId}`,
+    nonces: {
+      issue: record => { rotationNonces.set(record.receiptId, record) },
+      has: (receiptId, mac) => rotationNonces.get(receiptId)?.mac === mac,
+      consume: (receiptId, mac) => {
+        if (rotationNonces.get(receiptId)?.mac !== mac) return false
+        rotationNonces.delete(receiptId)
+        return true
+      },
+    },
+  })
   const events: ProjectServiceEvent[] = []
   const beforeArchiveEvents: ProjectServiceEvent[] = []
   const lifecycleReceipts = new Map<string, ProjectLifecycleAuthorityBinding>()
@@ -108,6 +125,7 @@ function setup(options: {
     registry,
     leases,
     authority,
+    rotationAuthority,
     lifecycle: {
       authority: lifecycleAuthority,
       validateRestorableRoot: (project) => {
@@ -166,12 +184,43 @@ function setup(options: {
     receipt,
     registry,
     rootChecks,
+    rotationAuthority,
     service,
     target,
   }
 }
 
 describe('ProjectService switch barrier', () => {
+  it('rotates to one exact idempotent Session under separate authority', async () => {
+    const { registry, rotationAuthority, service, events } = setup()
+    const current = registry.getActive(OWNER)
+    const binding = {
+      ...OWNER,
+      projectId: current.projectId,
+      sourceSessionId: current.sessionId,
+      newSessionId: 'daily-session-2026-08-28',
+      expectedGeneration: current.generation,
+      localDate: '2026-08-28',
+      createKeyHash: 'e'.repeat(64),
+    }
+    const receipt = rotationAuthority.issue(binding, 30_000)
+
+    const result = await service.rotateSession({ ...binding, receipt, name: '28 августа 2026' })
+
+    expect(result.selection).toMatchObject({
+      projectId: current.projectId,
+      sessionId: binding.newSessionId,
+      generation: current.generation + 1,
+    })
+    expect(result.session.createKeyHash).toBe(binding.createKeyHash)
+    expect(events.at(-1)?.kind).toBe('session.rotated')
+    await expect(service.rotateSession({ ...binding, receipt }))
+      .rejects.toMatchObject({ code: 'STALE_GENERATION' })
+    expect(registry.snapshot().sessions.filter(
+      item => item.createKeyHash === binding.createKeyHash,
+    )).toHaveLength(1)
+  })
+
   it('acquires a lease from the exact persisted context selection', () => {
     const { registry, service } = setup()
 

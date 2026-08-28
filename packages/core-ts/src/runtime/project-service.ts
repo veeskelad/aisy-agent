@@ -18,6 +18,10 @@ import type {
   SwitchAuthorityBinding,
   SwitchAuthorityReceipt,
 } from './switch-authority.js'
+import type {
+  SessionRotationAuthority,
+  SessionRotationAuthorityReceipt,
+} from './session-rotation-authority.js'
 import {
   assertLeaseMatchesBinding,
   parseWorkBinding,
@@ -39,6 +43,7 @@ export interface ProjectServiceEvent {
     | 'session.renamed'
     | 'session.archived'
     | 'session.restored'
+    | 'session.rotated'
     | 'job.binding_created'
     | 'job.binding_resolved'
     | 'job.paused_context_archived'
@@ -59,6 +64,11 @@ export interface ProjectServiceSwitchResult {
 export interface ProjectServiceContextResult {
   selection: ProjectSelectionV2
   lease: TurnContextLease
+}
+
+export interface ProjectServiceRotationResult extends ProjectServiceContextResult {
+  session: ProjectSessionRecord
+  nonceAudit: 'consumed'
 }
 
 export type ProjectLifecycleAction = 'project.archive' | 'session.archive'
@@ -126,6 +136,16 @@ export interface ProjectService {
     receipt: SwitchAuthorityReceipt
     sourceMessageHash: string
   }): Promise<ProjectServiceSwitchResult>
+  rotateSession(input: ProjectRegistryV2Owner & {
+    projectId: string
+    sourceSessionId: string
+    newSessionId: string
+    expectedGeneration: number
+    localDate: string
+    createKeyHash: string
+    name?: string
+    receipt: SessionRotationAuthorityReceipt
+  }): Promise<ProjectServiceRotationResult>
   archiveProject(input: ProjectRegistryV2Owner & {
     projectId: string
     receipt: ProjectLifecycleAuthorityReceipt
@@ -185,6 +205,7 @@ export function makeProjectService(deps: {
   registry: ProjectRegistryV2
   leases: ContextLeaseCoordinator
   authority: SwitchAuthority
+  rotationAuthority?: SessionRotationAuthority
   lifecycle?: ProjectServiceLifecycleDeps
   beforeArchive?: (event: ProjectServiceEvent) => void | Promise<void>
   emit?: (event: ProjectServiceEvent) => void
@@ -591,6 +612,63 @@ export function makeProjectService(deps: {
           generation: selection.generation,
         })
         return { selection, lease, nonceAudit: 'consumed' }
+      } finally {
+        endTransition()
+      }
+    },
+
+    async rotateSession(input) {
+      if (deps.rotationAuthority === undefined) {
+        throw new ProjectServiceError('PROJECT_LIFECYCLE_DISABLED')
+      }
+      const owner = { operatorId: input.operatorId, profileId: input.profileId }
+      const endTransition = beginTransition(owner, { blockInteractive: true })
+      try {
+        const current = deps.registry.getActive(owner)
+        if (current.projectId !== input.projectId ||
+          current.sessionId !== input.sourceSessionId ||
+          current.generation !== input.expectedGeneration) {
+          throw new ProjectRegistryV2Error('STALE_GENERATION')
+        }
+        const expected = {
+          ...owner,
+          projectId: input.projectId,
+          sourceSessionId: input.sourceSessionId,
+          newSessionId: input.newSessionId,
+          expectedGeneration: input.expectedGeneration,
+          localDate: input.localDate,
+          createKeyHash: input.createKeyHash,
+        }
+        deps.rotationAuthority.consume(input.receipt, expected)
+        await closeOwnerLeases(owner, 'interactive')
+        let session: ProjectSessionRecord
+        try {
+          session = deps.registry.createSession({
+            ...owner,
+            projectId: input.projectId,
+            expectedGeneration: input.expectedGeneration,
+            sessionId: input.newSessionId,
+            createKeyHash: input.createKeyHash,
+            ...(input.name === undefined ? {} : { name: input.name }),
+          })
+          const selection = deps.registry.switchContext({
+            ...owner,
+            projectId: input.projectId,
+            sessionId: session.id,
+            expectedGeneration: input.expectedGeneration,
+          })
+          const lease = acquire(owner)
+          deps.emit?.({
+            kind: 'session.rotated',
+            projectId: selection.projectId,
+            sessionId: selection.sessionId,
+            generation: selection.generation,
+          })
+          return { selection, lease, session, nonceAudit: 'consumed' }
+        } catch (error) {
+          acquire(owner)
+          throw error
+        }
       } finally {
         endTransition()
       }

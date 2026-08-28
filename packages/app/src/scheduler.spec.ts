@@ -60,6 +60,33 @@ describe('makeScheduler', () => {
     expect(calls.ticks).toBe(2)
   })
 
+  it('publishes the daily high-water before post-nightly recovery and retries recovery', async () => {
+    const order: string[] = []
+    let recoveryCalls = 0
+    let last: string | null = null
+    const { d } = deps({
+      lastNightlyRun: () => last,
+      markNightlyRun: (date: string) => { last = date; order.push(`mark:${date}`) },
+      afterNightlyRun: async (date: string) => { order.push(`after:${date}`) },
+      tickNightlyRecovery: async () => {
+        recoveryCalls++
+        order.push('recover')
+        if (recoveryCalls === 1) throw new Error('supervisor busy')
+      },
+    })
+    const scheduler = makeScheduler(d)
+
+    await scheduler.pump()
+    await scheduler.pump()
+
+    expect(order.slice(0, 3)).toEqual([
+      'mark:2026-06-22',
+      'after:2026-06-22',
+      'recover',
+    ])
+    expect(recoveryCalls).toBe(2)
+  })
+
   it('does not run or mark nightly when the persisted binding is quarantined', async () => {
     const { calls, d } = deps({ resolveNightlyBinding: () => null })
     const s = makeScheduler(d)

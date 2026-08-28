@@ -676,6 +676,15 @@ export type {
   SwitchAuthorityReceipt,
 } from './runtime/switch-authority.js'
 export {
+  makeSessionRotationAuthority,
+  SessionRotationAuthorityError,
+} from './runtime/session-rotation-authority.js'
+export type {
+  SessionRotationAuthority,
+  SessionRotationAuthorityBinding,
+  SessionRotationAuthorityReceipt,
+} from './runtime/session-rotation-authority.js'
+export {
   makeProjectLifecycleAuthority,
   ProjectLifecycleAuthorityError,
 } from './runtime/project-lifecycle-authority.js'

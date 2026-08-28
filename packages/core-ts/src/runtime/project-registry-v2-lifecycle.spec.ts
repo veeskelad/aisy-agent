@@ -53,6 +53,46 @@ function setup(initial?: ProjectRegistryStateV2) {
 }
 
 describe('ProjectRegistry v2 lifecycle', () => {
+  it('creates a lifecycle Session once for the same durable key', () => {
+    const { registry, events, saves } = setup()
+    const active = registry.getActive(OWNER)
+    const input = {
+      ...OWNER,
+      projectId: active.projectId,
+      name: '28 августа 2026',
+      expectedGeneration: active.generation,
+      sessionId: 'daily-session-2026-08-28',
+      createKeyHash: 'c'.repeat(64),
+    }
+
+    const first = registry.createSession(input)
+    const savedAfterFirst = saves()
+    const second = registry.createSession(input)
+
+    expect(second).toEqual(first)
+    expect(second.createKeyHash).toBe(input.createKeyHash)
+    expect(saves()).toBe(savedAfterFirst + 1)
+    expect(events.filter((event) => event.kind === 'session.created')).toHaveLength(1)
+  })
+
+  it('rejects a reused lifecycle key with another Session id', () => {
+    const { registry } = setup()
+    const active = registry.getActive(OWNER)
+    registry.createSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: 'daily-session-a',
+      createKeyHash: 'd'.repeat(64),
+    })
+
+    expect(() => registry.createSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: 'daily-session-b',
+      createKeyHash: 'd'.repeat(64),
+    })).toThrowError(expect.objectContaining({ code: 'CORRUPT_STATE' }))
+  })
+
   it('persists monotonic generation across switches and restart', () => {
     const first = setup()
     const selected = first.registry.createProject({

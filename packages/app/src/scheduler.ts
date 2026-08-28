@@ -25,6 +25,10 @@ export interface SchedulerDeps {
   resolveNightlyBinding: () => Promise<ResolvedWorkBinding | null> | ResolvedWorkBinding | null
   /** Run the nightly pipeline (idempotent per day; the scheduler gates the call). */
   runNightly: (binding: ResolvedWorkBinding) => Promise<void>
+  /** Runs only after the daily high-water has been durably published. */
+  afterNightlyRun?: (date: string) => Promise<void>
+  /** Retries post-mark lifecycle work, such as a supervised restart. */
+  tickNightlyRecovery?: () => Promise<void>
   /** One trigger scan. */
   tickTriggers: () => Promise<void>
   /** One goal tick (every-mode scheduler dispatch); optional. */
@@ -66,8 +70,10 @@ export function makeScheduler(deps: SchedulerDeps): Scheduler {
         if (binding === null) return
         await deps.runNightly(binding)
         deps.markNightlyRun(today)
+        await deps.afterNightlyRun?.(today)
       }
     } catch { /* swallow */ }
+    try { await deps.tickNightlyRecovery?.() } catch { /* retry on the next pump */ }
   }
 
   return {
