@@ -98,12 +98,28 @@ describe('renderExecution', () => {
   it.each([
     ['completed', '✅ Готово'],
     ['stopped', '⏹ Остановлено'],
-    ['failed', '❌ Прервано ошибкой'],
+    ['failed', '❌ Не получилось ответить'],
     ['awaiting', '⏸ Жду решения'],
     ['interrupted', '⚠️ Прервано перезапуском'],
   ] as const)('renders terminal status %s', (status, expected) => {
     expect(renderExecution(state({ status, thinking: true })).html).toContain(expected)
     expect(renderExecution(state({ status, thinking: true })).html).not.toContain('Агент работает')
+  })
+
+  it('AC-02-102 keeps a failed non-debug card free of runtime internals', () => {
+    const html = renderExecution(state({
+      status: 'failed',
+      elapsedMs: 120,
+      scope: 'общая папка',
+      tool: { name: 'bash', status: 'failed', arg: 'private command' },
+      action: { kind: 'inspect-required', status: 'recovering', missing: 'observation' },
+    })).html
+
+    expect(html).toBe('❌ Не получилось ответить')
+    expect(html).not.toContain('0,1 с')
+    expect(html).not.toContain('общая папка')
+    expect(html).not.toContain('private command')
+    expect(html).not.toContain('провер')
   })
 
   it('renders the steer acknowledgement note', () => {

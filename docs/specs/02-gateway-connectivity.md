@@ -1438,6 +1438,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     exact видимый post-rename результат, связанный checksum/revision, закрепляется
     следующей ревизией. Уже очищенный state, missing/corrupt state, busy
     manager/runtime и любой другой quarantine дают zero-mutation code-only отказ.
+102. **AC-02-102** — Необработанная runtime-ошибка оставляет в обычном Telegram
+    ровно одну execution-card «Не получилось ответить» с рабочей одноразовой
+    кнопкой «Повторить». В ней нет exception message/class/schema, таймера,
+    workspace, tool history или verification/recovery wording; server-side
+    checkpoint сохраняет content-redacted фазу для диагностики. Если
+    существующую карточку технически
+    нельзя переиспользовать, fallback-сообщение содержит только «Не получилось
+    ответить · Попробуй ещё раз.» и ту же кнопку, без внутренней detail.
 
 ## 10. Open questions
 

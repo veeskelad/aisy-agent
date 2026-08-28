@@ -38,7 +38,7 @@ function tap(data: string, messageId: number, id = 90): Update {
   }
 }
 
-function harness(failures: number) {
+function harness(failures: number, emitProgressBeforeFailure = false) {
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = []
   const seen: string[] = []
   let remaining = failures
@@ -47,6 +47,7 @@ function harness(failures: number) {
       seen.push(...input.spans.map((span) => span.text))
       if (remaining > 0) {
         remaining -= 1
+        if (emitProgressBeforeFailure) await input.onProgress?.({ type: 'turn-started' })
         throw new Error('провайдер вернул 502')
       }
       return { state: 'ok', reply: 'готово', narrowed: false }
@@ -91,9 +92,8 @@ function harness(failures: number) {
     }
     return { ok: true, result: true } as never
   })
-  /** Message id of the nth (0-based) error card Telegram was told to send. */
-  const errorCardId = (index = 0): number =>
-    sentIds.filter((sent) => sent.text.includes('Ход прерван'))[index]!.id
+  /** Every failed turn reuses its single execution card as the retry card. */
+  const errorCardId = (index = 0): number => sentIds[index]!.id
   return { bot, calls, seen, errorCardId }
 }
 
@@ -108,10 +108,26 @@ function sentTexts(calls: Array<{ method: string; payload: Record<string, unknow
 
 function errorCard(calls: Array<{ method: string; payload: Record<string, unknown> }>) {
   return calls.find((call) =>
-    call.method === 'sendMessage' && String(call.payload['text'] ?? '').includes('Ход прерван'))
+    JSON.stringify(call.payload['reply_markup'] ?? '').includes('error:retry'))
 }
 
 describe('retrying a failed turn', () => {
+  it('AC-02-102 reuses one existing execution card and hides internal detail', async () => {
+    const h = harness(1, true)
+
+    await h.bot.handleUpdate(textUpdate('ответь'))
+    await settle()
+
+    const sent = h.calls.filter((call) => call.method === 'sendMessage')
+    const terminalEdit = [...h.calls].reverse()
+      .find((call) => call.method === 'editMessageText')
+    const retryMarkup = errorCard(h.calls)
+    expect(sent).toHaveLength(1)
+    expect(terminalEdit?.payload['text']).toBe('❌ Не получилось ответить')
+    expect(JSON.stringify(retryMarkup?.payload['reply_markup'])).toContain('error:retry')
+    expect(JSON.stringify(h.calls)).not.toContain('провайдер вернул 502')
+  })
+
   it('replays the same message and answers on the second attempt', async () => {
     const h = harness(1)
 
@@ -120,6 +136,10 @@ describe('retrying a failed turn', () => {
 
     const card = errorCard(h.calls)!
     expect(JSON.stringify(card.payload['reply_markup'])).toContain('error:retry')
+    const visible = String(card.payload['text'] ?? '')
+    expect(visible).toBe('❌ Не получилось ответить · Попробуй ещё раз.')
+    expect(visible).not.toContain('провайдер вернул 502')
+    expect(visible).not.toContain('общая папка')
 
     await h.bot.handleUpdate(tap('error:retry', h.errorCardId()))
     await settle()
@@ -175,7 +195,7 @@ describe('retrying a failed turn', () => {
 
     // The retry produced its own error card — with its own live button.
     const cards = h.calls.filter((call) =>
-      call.method === 'sendMessage' && String(call.payload['text'] ?? '').includes('Ход прерван'))
+      JSON.stringify(call.payload['reply_markup'] ?? '').includes('error:retry'))
     expect(cards).toHaveLength(2)
     expect(JSON.stringify(cards[1]?.payload['reply_markup'])).toContain('error:retry')
   })

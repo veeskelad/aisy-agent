@@ -39,7 +39,13 @@ Skill мог бы получить prompt-authority. Нужна отдельна
 4. Verification mutation/delegation остаётся обязательной внутри harness, но
    transport показывает один terminal result. Recovery instructions, receipt/
    delegation ids, provider attempts и неподтверждённые объяснения не входят в
-   пользовательский ответ или следующую provider-facing историю.
+   пользовательский ответ или следующую provider-facing историю. Обычная
+   runtime-ошибка также не публикует exception message, class, schema, таймер,
+   workspace или внутренние шаги: server-side checkpoint сохраняет
+   content-redacted диагностическую фазу, а одна существующая execution-card
+   превращается в короткое «Не получилось
+   ответить» с кнопкой повторения. Отдельная вторая error-card отправляется
+   только как fallback, если первую технически нельзя переиспользовать.
 5. `SOUL.md` остаётся стабильным операторски управляемым ядром. Явная поправка
    общения создаёт versioned typed preference и действует со следующего turn.
    Грамматический род — самостоятельная mutually-exclusive family

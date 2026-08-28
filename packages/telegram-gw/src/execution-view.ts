@@ -62,7 +62,7 @@ const TITLE: Record<ExecutionStatus, string> = {
   running: '⚙️ Работаю',
   completed: '✅ Готово',
   stopped: '⏹ Остановлено',
-  failed: '❌ Прервано ошибкой',
+  failed: '❌ Не получилось ответить',
   awaiting: '⏸ Жду решения',
   interrupted: '⚠️ Прервано перезапуском',
 }
@@ -146,6 +146,11 @@ export function renderExecution(
   opts?: { debug?: boolean; debugTail?: string },
 ): BotMessage {
   const debug = opts?.debug === true
+  const status = state.status ?? 'running'
+  // Ошибка в недебажном чате — не повод показывать пользователю таймер,
+  // workspace, внутренние шаги и tool history. Server-side checkpoint остаётся
+  // доступен диагностике, а Telegram хранит только человеческий исход.
+  if (status === 'failed' && !debug) return { html: TITLE.failed }
   const lines: string[] = []
 
   // A session uuid told the operator nothing. Where the work happens does.
@@ -153,7 +158,7 @@ export function renderExecution(
     ? 'общая папка'
     : state.scope
   const clock = typeof state.elapsedMs === 'number' ? ` · ${seconds(state.elapsedMs)}` : ''
-  lines.push(`${TITLE[state.status ?? 'running']}${clock} · ${escapeHtml(scope)}` +
+  lines.push(`${TITLE[status]}${clock} · ${escapeHtml(scope)}` +
     (debug ? '  [отладка]' : ''))
   lines.push('')
 

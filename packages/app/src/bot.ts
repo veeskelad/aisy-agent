@@ -2127,27 +2127,50 @@ let pendingFormUntilMs = 0
       if (propagateErrors) throw err
       // A turn that throws — an executor/provider error not mapped to a loop
       // Halt — must not become an unhandled rejection (silent hang / crash).
-      // Surface it so the operator can retry; the finally still resets state.
-      const detail = (err instanceof Error ? err.message : String(err)).slice(0, 200)
-      const msg = renderEvent({ kind: 'error', what: 'Ход прерван ошибкой', detail })
+      // Server-side checkpoint metadata already identifies the failed phase.
+      // Telegram gets one terse retry surface and never an exception/class/
+      // schema string.
+      const msg = renderEvent({
+        kind: 'error',
+        what: 'Не получилось ответить',
+        detail: 'Попробуй ещё раз.',
+      })
       if (msg) {
         // Copy the spans: the caller's array must not be able to change what a
         // later tap replays.
         const replayable = Array.isArray(spanSource)
           ? spanSource.map((span) => ({ ...span }))
           : null
-        const sent = await bot.api
-          .sendMessage(deps.allowedChatId, msg.html, {
-            parse_mode: 'HTML',
-            // No button when there is nothing to replay — an offer that cannot
-            // be honoured is the bug this card was supposed to report.
-            ...(msg.buttons && replayable !== null
-              ? { reply_markup: toInlineKeyboard(msg.buttons) }
-              : {}),
-          })
-          .catch(() => null)
-        pendingRetry = sent !== null && replayable !== null
-          ? { spans: replayable, messageId: sent.message_id }
+        let retryMessageId: number | null = null
+        if (executionCardId !== null && msg.buttons && replayable !== null) {
+          const existingMessageId = executionCardId
+          const attached = await bot.api.editMessageReplyMarkup(
+            deps.allowedChatId,
+            existingMessageId,
+            { reply_markup: toInlineKeyboard(msg.buttons) },
+          ).then(() => true).catch(() => false)
+          if (attached) {
+            retryMessageId = existingMessageId
+            // The card now intentionally outlives the turn with its retry
+            // button; finally must not strip that markup.
+            executionCardId = null
+          }
+        }
+        if (retryMessageId === null) {
+          const sent = await bot.api
+            .sendMessage(deps.allowedChatId, msg.html, {
+              parse_mode: 'HTML',
+              // No button when there is nothing to replay — an offer that cannot
+              // be honoured is the bug this card was supposed to report.
+              ...(msg.buttons && replayable !== null
+                ? { reply_markup: toInlineKeyboard(msg.buttons) }
+                : {}),
+            })
+            .catch(() => null)
+          retryMessageId = sent?.message_id ?? null
+        }
+        pendingRetry = retryMessageId !== null && replayable !== null
+          ? { spans: replayable, messageId: retryMessageId }
           : null
       }
       return false
