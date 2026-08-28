@@ -100,7 +100,7 @@ describe('renderExecution', () => {
     ['stopped', '⏹ Остановлено'],
     ['failed', '❌ Не получилось ответить'],
     ['awaiting', '⏸ Жду решения'],
-    ['interrupted', '↻ Снова на связи. Напиши ещё раз.'],
+    ['interrupted', '↻ Gateway перезапущен. Продолжаю.'],
   ] as const)('renders terminal status %s', (status, expected) => {
     expect(renderExecution(state({ status, thinking: true })).html).toContain(expected)
     expect(renderExecution(state({ status, thinking: true })).html).not.toContain('Агент работает')
@@ -130,11 +130,11 @@ describe('renderExecution', () => {
       tool: { name: 'bash', status: 'running', arg: 'private command' },
     })).html
 
-    expect(html).toBe('↻ Снова на связи. Напиши ещё раз.')
+    expect(html).toBe('↻ Gateway перезапущен. Продолжаю.')
     expect(html).not.toContain('0,1 с')
     expect(html).not.toContain('общая папка')
     expect(html).not.toContain('private command')
-    expect(html).not.toContain('перезапуск')
+    expect(html).not.toContain('Напиши ещё раз')
   })
 
   it('renders the steer acknowledgement note', () => {

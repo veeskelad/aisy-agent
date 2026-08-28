@@ -1292,6 +1292,38 @@ describe('Telegram structured reply streaming', () => {
     expect(order).toEqual(['capture', 'bind', 'provider', 'release'])
   })
 
+  it('AC-19-44 retires a non-ambiguous failed parent turn before releasing authority', async () => {
+    const order: string[] = []
+    const control: NonNullable<TelegramBotDeps['durableTurnControl']> = {
+      isRecoverableInterruption: () => false,
+      pendingCard: () => null,
+      markCardDelivered: () => undefined,
+      recordCardDecision: () => ({ kind: 'recorded' }),
+      retireTurn: () => undefined,
+      retireFailedTurn: () => { order.push('retire-failed') },
+      requestStop: () => null,
+      requestResume: () => undefined,
+    }
+    const h = harness({
+      async handle() {
+        throw new Error('legacy-must-not-run')
+      },
+    }, true, genuineAuthorityPublisher(order), undefined, () => ({
+      async handle() {
+        order.push('provider')
+        throw new Error('provider failed')
+      },
+    }), control)
+
+    await h.bot.handleUpdate(textUpdate(1, 'эй'))
+    await waitFor(() => order.includes('release'))
+
+    expect(order).toEqual(['capture', 'bind', 'provider', 'retire-failed', 'release'])
+    expect(h.checkpointStore.load()).toMatchObject({
+      status: 'ready', checkpoint: { phase: 'terminal', delivery: 'delivered' },
+    })
+  })
+
   it('does no corrective Telegram I/O when authority release fails', async () => {
     let h!: ReturnType<typeof harness>
     let releaseAttempted = false

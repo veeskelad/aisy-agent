@@ -64,7 +64,7 @@ const TITLE: Record<ExecutionStatus, string> = {
   stopped: '⏹ Остановлено',
   failed: '❌ Не получилось ответить',
   awaiting: '⏸ Жду решения',
-  interrupted: '↻ Снова на связи. Напиши ещё раз.',
+  interrupted: '↻ Gateway перезапущен. Продолжаю.',
 }
 const ACTION_KIND: Record<ActionView['kind'], string> = {
   'inspect-required': 'Проверка',

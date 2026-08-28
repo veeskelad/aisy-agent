@@ -317,6 +317,8 @@ export interface TelegramDurableTurnControlV1 {
     stepUpVerified: boolean
   }>): Readonly<{ kind: string }>
   retireTurn(receiptHash: string): unknown
+  /** Close an active turn that failed before a durable ambiguity existed. */
+  retireFailedTurn?(): unknown
   requestStop(): Readonly<{ kind: 'cancelled' | 'replayed'; receiptHash: string }> |
     null | Promise<Readonly<{ kind: 'cancelled' | 'replayed'; receiptHash: string }> | null>
   requestResume(): void | Promise<void>
@@ -1651,6 +1653,7 @@ let pendingFormUntilMs = 0
     let executionAuthorityReleaseFailed = false
     let executionAuthorityCaptureFailed = false
     let executionAuthorityFatal = false
+    let executionRunnerBuilt = false
     let typingTimer: ReturnType<typeof setInterval> | null = null
     const startTyping = (): void => {
       if (typingTimer !== null) return
@@ -1886,6 +1889,7 @@ let pendingFormUntilMs = 0
               lease.failClosed()
             }
             effectiveRuntime = Object.freeze({ ...runtime, runner })
+            executionRunnerBuilt = true
             // Composition can schedule loss notification in the same tick.
             // Yield once, then prove the exact lease immediately before the
             // provider-facing runner is entered.
@@ -2113,6 +2117,7 @@ let pendingFormUntilMs = 0
       if (!executionAuthorityReleased) {
         try {
           await execution.current?.fail()
+          if (executionRunnerBuilt) deps.durableTurnControl?.retireFailedTurn?.()
           if (executionAuthority.lease !== null) {
             await executionAuthority.lease.release()
             executionAuthorityReleased = true

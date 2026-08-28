@@ -78,10 +78,22 @@ checkpoint- и provider-работы.
 12. IPC имеет exact versioned schema, длину кадра, request id, deadline и
    allowlist типов; raw-ошибки менеджера и child не попадают в Telegram, журнал
    и checkpoint.
-13. Запланированный `/restart` получает отдельный одноразовый permit, связанный с
+13. Ошибка обычного provider-turn без durable ambiguity не оставляет вечный
+   `active` parent continuation. До освобождения held lease runtime переводит
+   такую запись в `terminal` с domain-separated code-owned receipt, но только
+   если actor отсутствует и registry не содержит ни одного run точного прежнего
+   supervisor binding. Если child уже погиб между capture и этим переходом,
+   следующий fresh turn под новым genuine lease может выполнить тот же exact
+   CAS-recovery перед admission. `paused`, `cancelling`, запись с ambiguity,
+   живой actor/run, corrupt state и terminal replay не очищаются автоматически
+   и остаются fail-closed.
+   Replacement сообщает «Gateway перезапущен. Продолжаю.», а не просит повторить
+   уже принятый update: transport оставляет незавершённый update неподтверждённым,
+   и после recovery он снова проходит обычный handler.
+14. Запланированный `/restart` получает отдельный одноразовый permit, связанный с
    текущими session, deadline и hash устойчивого intent. `exit(75)` без permit,
    с просроченным permit или после replay считается аварийным.
-14. Restart loop имеет code-owned backoff и бюджет. Durable quarantine по
+15. Restart loop имеет code-owned backoff и бюджет. Durable quarantine по
     исчерпанию бюджета, повреждённому state или недоказуемой authority сохраняет
     ноль child и не снимается автоматически. Только quarantine
     `RESTART_BUDGET_EXHAUSTED` может снять явная локальная operator-команда с
@@ -102,29 +114,29 @@ checkpoint- и provider-работы.
     собственного времени ожидания: даже при отсутствии иных handles он обязан
     дождаться backoff и запустить ровно один replacement внутри того же manager
     epoch.
-15. Каждая lease DB содержит единственную exact-schema строку
+16. Каждая lease DB содержит единственную exact-schema строку
     `lease_meta.database_id` — 64 lowercase hex. Её identity закрепляет
     неизменяемый private anchor `<lease-db>.identity.json` с exact shape
     `{version:1,role,databaseId,dev,ino}`. Anchor, DB schema/role/databaseId и
     фактические device/inode должны совпадать; symlink и подмена закрывают запуск.
-16. Первичная DB сначала полностью инициализируется в private `O_EXCL` temp,
+17. Первичная DB сначала полностью инициализируется в private `O_EXCL` temp,
     fsync-ится и публикуется atomic hardlink + directory fsync. Допустимое
     crash-состояние `nlink=2` завершается удалением только exact matching temp и
     повторным fsync. Уже валидная DB без anchor может восстановить anchor только
     как это ограниченное bootstrap crash-window recovery. Anchor при
     missing/empty/mismatch/corrupt DB всегда даёт fail-closed без reinit.
-17. Private rollback `-journal` может быть восстановлен только после exact
+18. Private rollback `-journal` может быть восстановлен только после exact
     validation; WAL/SHM и любые unsafe companion-файлы закрывают запуск без
     mutation. Lease поддерживаются только на локальной файловой системе. NFS,
     SMB и иные сетевые/multi-host FS не поддерживаются; перед активацией
     обязателен process-level self-test взаимного исключения и crash-release на
     фактическом filesystem.
-18. Rollback сохраняется структурно: прямой `aisy run` остаётся unsupervised
+19. Rollback сохраняется структурно: прямой `aisy run` остаётся unsupervised
     rollback-путём без IPC recovery authority; supervisor-dependent
     `executionCheckpoint` в нём default-off. При этом direct обязан получить
     общий runtime-liveness fence и доказать отсутствие manager через probe.
     Этот ADR не является разрешением live-активации.
-19. Одна установка имеет ровно один **верхнеуровневый durable execution lease**.
+20. Одна установка имеет ровно один **верхнеуровневый durable execution lease**.
     Его identity включает exact `ResolvedWorkBinding`, session и turn; модель и
     Telegram payload не могут выбрать или заменить эти поля. Состояния
     `running`, `paused-awaiting-approval`, `resume-ready` и `cancelling`
@@ -132,7 +144,7 @@ checkpoint- и provider-работы.
     session не запускает второй parent turn и получает bounded busy-ответ.
     Bounded child scheduler внутри текущего turn сохраняет разрешённую
     параллельность write-disjoint делегаций.
-20. **Единый startup recovery coordinator** получает один parent recovery lease
+21. **Единый startup recovery coordinator** получает один parent recovery lease
     после manager lease, runtime-liveness fence, protocol-v2 hello и capture
     exact binding. Этот lease охватывает весь envelope: Telegram terminal
     delivery, durable approval/stop state и delegation recovery. Coordinator не
@@ -140,13 +152,13 @@ checkpoint- и provider-работы.
     пока обе стороны envelope не пришли к согласованному terminal/no-state или
     fail-closed состоянию. Порядок recovery фиксирован кодом, а не наличием
     отдельных файлов.
-21. Direct `aisy run` не сканирует, не читает payload, не repair’ит и не
+22. Direct `aisy run` не сканирует, не читает payload, не repair’ит и не
     возобновляет durable delegation. Единственное исключение — существующая
     legacy read-only проверка execution-card: direct может прочитать только
     минимальные метаданные, необходимые для стабильного отказа и указания
     запустить supervised service. Проверка не выдаёт lease, actor claim, approval
     authority или право продолжения и не изменяет state.
-22. Успешные unit/in-process тесты supervisor или dormant adapter не дают права
+23. Успешные unit/in-process тесты supervisor или dormant adapter не дают права
     на статус LIVE. Активация разрешена только когда production import graph
     запускает durable adapter под `aisy supervise`, Linux/macOS service artifacts
     задают restart/stop policy, а real-process corpus проходит общий Telegram +
@@ -238,7 +250,8 @@ PGID не является generation-bound handle, а вышедший чере
 - **Положительные:** восстановление опирается на доказанную quiescence, а не на
   эвристики по PID и времени; authority переживает падение runtime и manager;
   появляется единый протокол для Linux и macOS; crash manager не оставляет
-  неразрешимый stale manager lock.
+  неразрешимый stale manager lock; обычная ошибка модели не превращает private
+  continuation в постоянный отказ всех последующих Telegram-реплик.
 - **Нейтральные:** в системе появляются отдельный локальный процесс-менеджер,
   две SQLite lease DB и версионированный IPC-протокол; service unit меняет цель
   запуска; прямой `aisy run` остаётся без recovery authority, но участвует в

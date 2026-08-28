@@ -116,6 +116,14 @@ exact owner/revision/hash CAS и receipt. Symlink, hardlink, чужой owner,
 неприватные permissions, замена каталога и checksum drift закрывают чтение и
 новый admission.
 
+Non-recoverable ошибка обычного provider-turn закрывает его active continuation
+до release supervisor lease, если actor отсутствует и exact registry пуст.
+Crash между capture и этим закрытием не создаёт бесконечный recovery-loop:
+следующий fresh turn под genuine held lease может CAS-закрыть только такую же
+non-ambiguous orphan-запись и повторить admission. Наличие ambiguity, actor или
+любого exact durable run запрещает автоматическое закрытие; payload и текст
+диалога не входят в terminal receipt или observability.
+
 ### 3.2. Журнал внешних операций
 
 Provider и tool не вызываются напрямую из восстановленного child state. Каждый
@@ -544,6 +552,11 @@ real-process corpus: kill после `prepared`, после фактическо
 43. **AC-19-43** — общий real-process corpus с genuine supervisor lease проходит
     девять границ card/callback/claim/applied-resolution/stop, включая
     `SIGSTOP`/`SIGKILL`, без blind retry, позднего I/O и второй доставки callback.
+44. **AC-19-44** — non-recoverable provider failure при active continuation без
+    actor/ambiguity/exact run публикует terminal receipt до release lease, а
+    fresh admission после crash CAS-закрывает доказанную orphan-запись и
+    запускает следующий turn. `paused|cancelling`, ambiguity, actor/run или
+    отказ runtime-proof сохраняют busy/fail-closed без второго provider/tool I/O.
 
 ## 7. Трассировка тестов нового additive-контракта
 
@@ -602,6 +615,9 @@ real-process corpus: kill после `prepared`, после фактическо
   CAS/receipt, bounded spans, checksum drift, symlink refusal, one-shot card,
   callback-only decision, claim reconciliation и startup exact-span replay в
   production wiring.
+- `durable-parent-continuation-admission.spec.ts`, `bot-streaming.spec.ts`:
+  AC-19-44, exact CAS retirement доказанной non-ambiguous orphan-записи,
+  retirement provider failure до release и отказ без runtime-proof.
 - `durable-delegation-live-adapter.spec.ts` и
   `durable-delegation-production.integration.spec.ts`: module-issued one-shot
   retry authority для exact provider ambiguity и запрет повторного mutation

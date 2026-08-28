@@ -220,7 +220,12 @@ import {
   durableParentContinuationWorkBindingHash,
   makeNodeDurableParentContinuationStore,
   type DurableParentAmbiguityV1,
+  type DurableParentContinuationRecordV1,
 } from '../durable-parent-continuation.js'
+import {
+  captureDurableParentContinuationWithOrphanRecovery,
+  retireDurableParentFailedTurn,
+} from '../durable-parent-continuation-admission.js'
 import {
   makeDurableTurnActorProductionPortsV1,
 } from '../durable-turn-actor-production-ports.js'
@@ -1270,6 +1275,7 @@ const durableTurnState = executionSupervisorSession === null || durableDelegatio
       })
       let currentLease: ExecutionSupervisorLease | null = startupRecoveryLease
       let coordinator: DurableDelegationTurnCoordinatorV1 | null = null
+      let currentParentContinuation: DurableParentContinuationRecordV1 | null = null
       const activeRun = (ambiguity: Readonly<DurableParentAmbiguityV1>) => {
         if (currentLease === null || !currentLease.isHeld()) return null
         for (const record of durableDelegationRegistry.listExact(currentLease.bindingHash)) {
@@ -1441,7 +1447,7 @@ const durableTurnState = executionSupervisorSession === null || durableDelegatio
         ensureCoordinator: () => (coordinator ??= makeCoordinator()),
         capture(turn: TelegramExecutionTurnV1, lease: ExecutionSupervisorLease) {
           currentLease = lease
-          const captured = continuation.capture({
+          const capture = {
             ownerId: randomUUID(),
             identity: {
               binding: staticWorkBinding,
@@ -1453,12 +1459,39 @@ const durableTurnState = executionSupervisorSession === null || durableDelegatio
               policyRevision: 'durable-parent-continuation-v1',
               spans: turn.spans,
             },
+          }
+          const captured = captureDurableParentContinuationWithOrphanRecovery({
+            store: continuation,
+            capture,
+            canRetireOrphan: (record) =>
+              record.ambiguity === undefined &&
+              actor.manager.recover().kind === 'none' &&
+              durableDelegationRegistry.listExact(
+                record.identity.supervisorBindingHash,
+              ).length === 0,
           })
           if (captured.kind === 'busy' || captured.kind === 'terminal-replay') {
             throw new Error('DURABLE_PARENT_CONTINUATION_UNAVAILABLE')
           }
+          currentParentContinuation = captured.record
           coordinator = makeCoordinator()
           return coordinator
+        },
+        retireFailedTurn() {
+          if (currentParentContinuation === null) {
+            throw new Error('DURABLE_PARENT_CONTINUATION_FAILURE_RETIRE_DENIED')
+          }
+          const retired = retireDurableParentFailedTurn({
+            store: continuation,
+            expected: currentParentContinuation,
+            canRetire: (record) =>
+              actor.manager.recover().kind === 'none' &&
+              durableDelegationRegistry.listExact(
+                record.identity.supervisorBindingHash,
+              ).length === 0,
+          })
+          currentParentContinuation = null
+          return retired
         },
         setLease(lease: ExecutionSupervisorLease | null) { currentLease = lease },
       }
@@ -4149,6 +4182,7 @@ const {
           >[0]) => durableTurnState.ensureCoordinator().recordCardDecision(input),
           retireTurn: (receiptHash: string) =>
             durableTurnState.ensureCoordinator().retireParent(receiptHash),
+          retireFailedTurn: () => durableTurnState.retireFailedTurn(),
           requestStop() {
             const loaded = durableTurnState.continuation.load()
             if (loaded.status !== 'ready' || loaded.record.ambiguity === undefined ||
