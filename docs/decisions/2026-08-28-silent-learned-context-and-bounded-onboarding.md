@@ -26,6 +26,9 @@ bounded follow-up уже существуют, поэтому постоянны
 
 Versioned CLI-envelope явно задаёт семантику каждого источника:
 
+- exact-wrapper закрытого typed registry `[AISY_COMMUNICATION_PREFERENCES]`
+  сериализуется как `aisy_control`: это code-owned управление формой ответа, а
+  не новая action authority. Raw dialogue в этот wrapper не попадает;
 - `learned_procedure` — code-generated низкоприоритетное руководство. Модель
   применяет его, если оно не противоречит `aisy_control` и текущему запросу
   оператора, но оно не выдаёт полномочий и не может отменить policy;
@@ -45,8 +48,8 @@ prompts.
   подписочном CLI-провайдере и не становятся темой ответа.
 - **Положительное:** короткая бытовая реплика получает короткий бытовой ответ,
   а незавершённое знакомство не захватывает каждый ход.
-- **Нейтральное:** формат envelope остаётся `AISY_CONTEXT_V1`; меняется только
-  code-owned пояснение его уже существующих source tags.
+- **Нейтральное:** формат envelope остаётся `AISY_CONTEXT_V1`; меняются
+  code-owned пояснение source tags и проекция одного закрытого typed wrapper.
 - **Нейтральное:** стабильный prefix не меняется посреди Session; onboarding
   progress не удаляется и не подделывается;
   scheduler по-прежнему может сделать не более трёх редких follow-up.

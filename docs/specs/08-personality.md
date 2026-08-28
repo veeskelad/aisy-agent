@@ -553,6 +553,10 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
 26. **AC-08-26** — Обычный ответ не раскрывает source tags, provenance,
     prompt-injection checks или внутреннюю policy без явного вопроса оператора;
     активный `masculine-russian` при этом продолжает действовать.
+27. **AC-08-27** — Только exact-wrapper закрытого typed registry
+    `[AISY_COMMUNICATION_PREFERENCES]` проецируется CLI-провайдеру как
+    `aisy_control`; произвольный auto-skill остаётся `learned_procedure` и не
+    получает action authority.
 
 ## 10. Open questions
 

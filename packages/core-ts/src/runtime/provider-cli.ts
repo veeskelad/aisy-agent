@@ -45,10 +45,19 @@ type CliContextSource =
   | 'assistant_history'
   | 'tool_result'
 
+const COMMUNICATION_PREFERENCES_PREFIX = '[AISY_COMMUNICATION_PREFERENCES]\n'
+
 function cliContextSource(span: ContextSpan): CliContextSource {
   if (span.role === 'assistant') return 'assistant_history'
   if (span.role === 'tool') return 'tool_result'
-  if (span.provenance === 'learned-procedure') return 'learned_procedure'
+  if (span.provenance === 'learned-procedure') {
+    // This exact wrapper is emitted only by the closed typed-preference
+    // registry. It is code-owned control over wording, while arbitrary learned
+    // procedures remain lower-priority guidance without action authority.
+    return span.role === 'system' && span.text.startsWith(COMMUNICATION_PREFERENCES_PREFIX)
+      ? 'aisy_control'
+      : 'learned_procedure'
+  }
   if (span.provenance === 'untrusted') return 'untrusted_input'
   return span.role === 'system' ? 'aisy_control' : 'operator'
 }
