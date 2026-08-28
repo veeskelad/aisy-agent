@@ -71,6 +71,7 @@ function runner(
   responses: ModelResponse[],
   candidateFrozen: FrozenSnapshot = frozen,
   candidateExtension: Uint8Array = extension,
+  augmentationProvenance: 'operator' | 'learned-procedure' = 'operator',
 ) {
   const provider = scriptedProvider(responses)
   let leaseId = 0
@@ -118,7 +119,7 @@ function runner(
       prefixExtension: () => candidateExtension.slice(),
       augmentTurn: async () => [{
         role: 'system',
-        provenance: 'operator',
+        provenance: augmentationProvenance,
         text: 'triggered-skill',
       }],
       clock: { now: () => '2026-07-27T01:00:00.000Z' },
@@ -241,5 +242,33 @@ describe('AgentRunner session transcript runtime', () => {
     ])
     expect(manifest.nextSessionSeq).toBe(9)
     expect(manifest.hashHead).toBe(rows.at(-1)!.rowHash)
+  })
+
+  it('AC-01-66 runs a Telegram turn with a non-transcript learned-procedure overlay', async () => {
+    const dir = root()
+    const active = runner(
+      dir,
+      [{ reply: 'done' }],
+      frozen,
+      extension,
+      'learned-procedure',
+    )
+
+    await expect(active.runner.handle({
+      sessionId: binding.sessionId,
+      turnId: 'telegram-update-learned',
+      turnTs: '2026-07-27T01:02:03.000Z',
+      spans: [{ role: 'user', provenance: 'operator', text: 'hey' }],
+    })).resolves.toMatchObject({ state: 'ok', reply: 'done' })
+
+    expect(active.provider.requests[0]!.spans).toContainEqual({
+      role: 'system',
+      provenance: 'learned-procedure',
+      text: 'triggered-skill',
+    })
+    await expect(transcript(dir).read(binding)).resolves.toMatchObject([
+      { role: 'user', provenance: 'operator', content: 'hey' },
+      { role: 'assistant', provenance: 'untrusted', content: 'done' },
+    ])
   })
 })

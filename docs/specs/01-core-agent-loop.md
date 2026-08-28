@@ -86,11 +86,11 @@ narrow waist ([ADR-0014](../decisions/2026-06-11-narrow-waist-tool-set.md)): a s
 ```ts
 // illustrative, not binding
 
-export type Provenance = "operator" | "untrusted"
+export type Provenance = "operator" | "learned-procedure" | "untrusted"
 
 export interface ContextSpan {
   role: "system" | "user" | "assistant" | "tool"
-  provenance: Provenance      // set by code at ingestion, never by the model
+  provenance: Provenance      // code-owned; learned procedure has no operator authority
   text: string
 }
 
@@ -766,6 +766,12 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     injection-сигнал разрешает предупреждение; общее security-объяснение без
     заявления о фактически обнаруженной вставке, включая `embedded` /
     `встроенное`, не удаляется.
+66. **AC-01-66** — Активный typed overlay с provenance `learned-procedure`
+    входит в provider request текущего хода, но не записывается как реплика в
+    ADR-0064 transcript. Пользовательский span и terminal assistant reply
+    сохраняются в прежнем `operator | untrusted` формате, следующий ход снова
+    получает актуальную revision из typed store, а rollback-бинарник с прежней
+    transcript schema продолжает читать журнал.
 
 ## 10. Open questions
 

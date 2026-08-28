@@ -453,6 +453,13 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
       let toolInvocationOrdinal = 0
       const recordSpan = async (span: ContextSpan): Promise<void> => {
         if (transcriptRecorder === undefined) return
+        // A learned procedure is a current projection of its typed durable
+        // store, not dialogue. Recording it would replay stale revisions on
+        // every later turn and would extend ADR-0064's persisted enum in a way
+        // an older rollback binary cannot read. The active projection still
+        // enters this provider request below; only the transcript copy is
+        // omitted.
+        if (span.provenance === 'learned-procedure') return
         transcriptOrdinal += 1
         await transcriptRecorder.record({
           sessionId: input.sessionId,

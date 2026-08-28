@@ -50,6 +50,19 @@ The context engine projects/compacts this journal at read time and never mutates
 it. Telemetry remains content-redacted, while the private transcript retains
 the content required for exact resume.
 
+### Поправка 2026-08-28: typed learned context
+
+После появления типизированных навыков и предпочтений Core получил turn-local
+уровень происхождения `learned-procedure`: это проекция отдельного durable
+typed store, а не новая реплика диалога. Agent loop передаёт такую проекцию
+provider в текущем ходе, но не дублирует её в ADR-0064 transcript.
+
+Это сохраняет прежний persisted enum и безопасный rollback на предыдущий
+бинарник, не накапливает устаревшие revisions в conversational history и не
+повышает обученную процедуру до `operator`. Пользовательский ввод, ответы и
+tool spans продолжают записываться без пропусков; следующий ход снова получает
+актуальную typed-проекцию из её канонического store.
+
 Полнота журнала не означает дословный replay каждого внутреннего span модели.
 Provider-facing проекция сохраняет пользовательскую семантику завершённого
 хода, но исключает turn-local action/recovery instructions и промежуточные
