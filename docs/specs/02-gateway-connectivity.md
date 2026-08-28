@@ -1451,6 +1451,11 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     вспомогательных interval/stdout/IPC handles не завершается с Node exit 13
     (`unsettled top-level await`), не перекладывает обычный child restart на
     service manager и после задержки запускает ровно один replacement child.
+104. **AC-02-104** — Terminal `interrupted` после restart в обычном Telegram
+    рендерит ровно «↻ Снова на связи. Напиши ещё раз.». Карточка
+    не содержит таймер, workspace, plan/tool history и служебные слова
+    `restart`, `recovery` или «прервано»; debug-проекция может сохранять
+    content-redacted диагностику.
 
 ## 10. Open questions
 

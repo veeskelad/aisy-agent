@@ -64,7 +64,7 @@ const TITLE: Record<ExecutionStatus, string> = {
   stopped: '⏹ Остановлено',
   failed: '❌ Не получилось ответить',
   awaiting: '⏸ Жду решения',
-  interrupted: '⚠️ Прервано перезапуском',
+  interrupted: '↻ Снова на связи. Напиши ещё раз.',
 }
 const ACTION_KIND: Record<ActionView['kind'], string> = {
   'inspect-required': 'Проверка',
@@ -150,7 +150,9 @@ export function renderExecution(
   // Ошибка в недебажном чате — не повод показывать пользователю таймер,
   // workspace, внутренние шаги и tool history. Server-side checkpoint остаётся
   // доступен диагностике, а Telegram хранит только человеческий исход.
-  if (status === 'failed' && !debug) return { html: TITLE.failed }
+  if ((status === 'failed' || status === 'interrupted') && !debug) {
+    return { html: TITLE[status] }
+  }
   const lines: string[] = []
 
   // A session uuid told the operator nothing. Where the work happens does.

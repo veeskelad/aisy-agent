@@ -604,7 +604,7 @@ describe('Telegram execution checkpoint recovery', () => {
 
     expect(output.editText).toHaveBeenCalledWith(
       9,
-      expect.stringContaining('⚠️ Прервано перезапуском'),
+      '↻ Снова на связи. Напиши ещё раз.',
     )
     expect(output.editText.mock.calls[0]?.[1]).not.toContain('diagnostic')
     expect(h.store.load()).toMatchObject({
@@ -670,7 +670,7 @@ describe('Telegram execution checkpoint recovery', () => {
       messageId: 17,
     })
     expect(output.sendText).toHaveBeenCalledWith(
-      expect.stringContaining('⚠️ Прервано перезапуском'),
+      '↻ Снова на связи. Напиши ещё раз.',
     )
     expect(output.editText).not.toHaveBeenCalled()
   })
