@@ -342,6 +342,51 @@ describe('makeToolExecutor — remember tool', () => {
     )
   })
 
+  it('normalizes first- and third-person preference facts before storing them', async () => {
+    const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
+
+    const thirdPerson = await e(
+      call('remember', { fact: 'любит получать деньги' }),
+      context,
+    )
+    const firstPerson = await e(
+      call('remember', { fact: 'я предпочитаю короткие ответы' }),
+      { ...context, ordinal: 2 },
+    )
+
+    expect(thirdPerson.output).toBe('Запомнил, что ты любишь получать деньги')
+    expect(thirdPerson.mutationReceipt?.fact).toBe('ты любишь получать деньги')
+    expect(firstPerson.output).toBe('Запомнил, что ты предпочитаешь короткие ответы')
+    expect(commit).toHaveBeenNthCalledWith(
+      1,
+      { op: 'ADD', text: 'ты любишь получать деньги' },
+      expect.objectContaining({ withinSession: true }),
+    )
+    expect(commit).toHaveBeenNthCalledWith(
+      2,
+      { op: 'ADD', text: 'ты предпочитаешь короткие ответы' },
+      expect.objectContaining({ withinSession: true }),
+    )
+  })
+
+  it('keeps already-addressed and operational facts unchanged', async () => {
+    const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
+    const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })
+
+    const addressed = await e(
+      call('remember', { fact: 'ты любишь получать деньги' }),
+      context,
+    )
+    const operational = await e(
+      call('remember', { fact: 'production receipt gate подтверждён' }),
+      { ...context, ordinal: 2 },
+    )
+
+    expect(addressed.output).toBe('Запомнил, что ты любишь получать деньги')
+    expect(operational.output).toBe('Запомнил, что production receipt gate подтверждён')
+  })
+
   it('keeps punctuation byte-exact and accepts legacy text for one release', async () => {
     const commit = vi.fn(async (): Promise<CommitResult> => ({ status: 'COMMITTED' }))
     const e = exec({ memory: { ...fakeMemory({ status: 'COMMITTED' }), commit } })

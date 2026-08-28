@@ -23,6 +23,36 @@ export type RememberFactInput = Readonly<{
   topic?: string
 }>
 
+const FACT_VOICE_PREFIXES: ReadonlyArray<readonly [RegExp, string]> = Object.freeze([
+  [/^(?:я|пользователь)\s+люблю(?=\s|[.,!?;:]|$)/iu, 'ты любишь'],
+  [/^(?:пользователь\s+)?любит(?=\s|[.,!?;:]|$)/iu, 'ты любишь'],
+  [/^(?:я|пользователь)\s+предпочитаю(?=\s|[.,!?;:]|$)/iu, 'ты предпочитаешь'],
+  [/^(?:пользователь\s+)?предпочитает(?=\s|[.,!?;:]|$)/iu, 'ты предпочитаешь'],
+  [/^(?:я|пользователь)\s+хочу(?=\s|[.,!?;:]|$)/iu, 'ты хочешь'],
+  [/^(?:пользователь\s+)?хочет(?=\s|[.,!?;:]|$)/iu, 'ты хочешь'],
+  [/^мне\s+(нрав(?:ится|ятся))(?=\s|[.,!?;:]|$)/iu, 'тебе $1'],
+  [/^у\s+меня(?=\s|[.,!?;:]|$)/iu, 'у тебя'],
+  [/^мо(й|я|ё|и)(?=\s|[.,!?;:]|$)/iu, 'тво$1'],
+])
+
+/**
+ * Converts a small, explicit set of first/third-person preference prefixes to
+ * the second person used by Aisy when addressing the conversation owner.
+ * Everything else, including operational facts, remains byte-exact.
+ */
+export function normalizeRememberFactVoice(fact: string): string {
+  for (const [pattern, replacement] of FACT_VOICE_PREFIXES) {
+    if (pattern.test(fact)) return fact.replace(pattern, replacement)
+  }
+  return fact
+}
+
+function validRememberFact(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim() &&
+    Buffer.byteLength(value, 'utf8') <= MAX_FACT_BYTES && !CONTROL_CHAR.test(value) &&
+    !RESERVED_PREFIX.test(value)
+}
+
 function digest(domain: string, fields: readonly string[]): string {
   const hash = createHash('sha256')
   hash.update(domain)
@@ -36,14 +66,13 @@ RememberFactInput | null {
   const hasText = Object.hasOwn(args, 'text')
   if (hasFact === hasText) return null
   const value = hasFact ? args['fact'] : args['text']
-  if (typeof value !== 'string' || value.length === 0 || value !== value.trim() ||
-    Buffer.byteLength(value, 'utf8') > MAX_FACT_BYTES || CONTROL_CHAR.test(value) ||
-    RESERVED_PREFIX.test(value)) return null
+  if (!validRememberFact(value)) return null
+  const fact = normalizeRememberFactVoice(value)
   const topic = args['topic']
   if (topic !== undefined && (typeof topic !== 'string' || topic.length === 0 ||
     topic !== topic.trim() || Buffer.byteLength(topic, 'utf8') > 128 ||
     CONTROL_CHAR.test(topic))) return null
-  return Object.freeze({ fact: value, ...(topic === undefined ? {} : { topic }) })
+  return Object.freeze({ fact, ...(topic === undefined ? {} : { topic }) })
 }
 
 export function makeMemoryRememberReceipt(
@@ -94,11 +123,10 @@ export function parseMemoryRememberReceipt(value: unknown): MemoryRememberReceip
     typeof raw['receiptId'] !== 'string' || !/^[a-f0-9]{64}$/u.test(raw['receiptId']) ||
     typeof raw['turnId'] !== 'string' || raw['turnId'].length === 0 ||
     typeof raw['fact'] !== 'string') return null
-  const parsed = parseRememberFactArgs({ fact: raw['fact'] })
-  if (parsed === null) return null
+  if (!validRememberFact(raw['fact'])) return null
   const expectedReceiptId = digest('aisy-memory-remember-receipt/v1', [
     raw['operationId'],
-    parsed.fact,
+    raw['fact'],
   ])
   if (raw['receiptId'] !== expectedReceiptId) return null
   return Object.freeze({
@@ -106,7 +134,7 @@ export function parseMemoryRememberReceipt(value: unknown): MemoryRememberReceip
     operationId: raw['operationId'],
     receiptId: raw['receiptId'],
     turnId: raw['turnId'],
-    fact: parsed.fact,
+    fact: raw['fact'],
     committed: true,
   })
 }
