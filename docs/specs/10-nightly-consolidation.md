@@ -1,7 +1,7 @@
 # Component 10: Nightly Consolidation — Specification
 
-**Status:** Accepted; daily deterministic maintenance LIVE, weekly model-backed
-consolidation contract уточнён ADR-0109 и ждёт production activation
+**Status:** Daily deterministic maintenance и Sunday cadence LIVE; расширенный
+multi-Project weekly cohort ниже — ОТЛОЖЕН ADR-0109
 **Component:** 10 / 17
 **Related ADRs:** ADR-0016, ADR-0017, ADR-0023, ADR-0029, ADR-0030, ADR-0108
 **Depends on:** Memory (03), Provider Routing (09), Safety (05), Observability & Verification (12)
@@ -100,7 +100,13 @@ memory approval card. Weekly model stages become due for each local week after
 Sunday's configured slot. If Sunday was missed, the same week remains due on
 Monday/startup until a terminal weekly result is durable.
 
-The weekly source is a durable cohort with one frozen cutoff and exact Project
+Production cutover 2026-08-28 хранит один durable successful-Sunday cursor и
+запускает существующий generator/judge pipeline по exact Workspace maintenance
+binding. Manual `/consolidate` запускает тот же pipeline, но не двигает Sunday
+cursor. Это LIVE-граница текущего среза.
+
+Следующий расширенный контракт **ОТЛОЖЕН ADR** и не должен считаться LIVE по
+наличию этого текста. The weekly source is a durable cohort with one frozen cutoff and exact Project
 members. Each member is keyed by
 `bot + operator + profile + contextKind + projectId`, owns its own `(cursor,
 cutoff]` range and terminal state, and reads completed normalized
@@ -614,7 +620,7 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     successful artifacts, а при `N = 0` отвечает `Доступных правок нет; часть
     проектов не проверена.` без provider. Конкретное `Покажи <объект>` не
     считается shortcut.
-45. **AC-10-45** — Sunday cohort фиксирует общий cutoff и отдельный cursor/state
+45. **AC-10-45 — ОТЛОЖЕНО ADR** — Sunday cohort фиксирует общий cutoff и отдельный cursor/state
     для каждого exact Project member. Каждый `(cursor, cutoff]` включает все
     завершённые records Monday–Sunday ровно один раз; provider failure Project B
     не продвигает B и не повторяет успешный provider call Project A. Missed
@@ -624,7 +630,7 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     отдельным durable at-most-once outbox и вооружает shortcut только после
     `delivered`. A-success/B-quarantined даёт `partial-failure`, никогда не
     `complete-zero`, и открывает только A artifacts.
-46. **AC-10-46** — daily deterministic stages не вызывают generator/judge и не
+46. **AC-10-46 — ЧАСТИЧНО LIVE / cohort ОТЛОЖЕН ADR** — daily deterministic stages не вызывают generator/judge и не
     создают staging; manual ad-hoc consolidation идемпотентен и не подменяет
     scheduled weekly member cursors. Manual-success→Sunday с exact одинаковым
     artifact key переиспользует terminal artifact без второго provider call/card

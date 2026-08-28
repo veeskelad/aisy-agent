@@ -40,8 +40,12 @@ scheduled lifecycle.
    bot/operator/profile.
 4. Memory generator/judge, conflict/dedup и free-form skill drafts выполняются
    только по воскресеньям либо вручную. Ежедневные archival/day-log, retention,
-   disk hygiene и backup сохраняются. Weekly cohort фиксирует общий cutoff и
-   exact Project members; каждый member имеет собственный cursor range после
+   disk hygiene и backup сохраняются. Текущий production-срез использует один
+   durable Sunday high-water и существующий exact Workspace maintenance
+   binding. Расширенный multi-Project cohort ниже **отложен ADR** и не является
+   условием ежедневного reset или воскресного запуска. В полном варианте cohort
+   фиксирует общий cutoff и exact Project members; каждый member имеет
+   собственный cursor range после
    прошлого успешного cutoff и terminal state. Успех одного Project не
    продвигает cursor другого, failure оставляет pending только его, а missed
    Sunday catch-up выполняется после следующего startup. Aggregate result

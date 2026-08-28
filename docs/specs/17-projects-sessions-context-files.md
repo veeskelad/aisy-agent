@@ -116,14 +116,15 @@ ADR-0109 вводит отдельный автоматический `SessionRo
 Project/Session switch. Receipt существует только при включённой daily policy,
 purpose-bound к exact bot/operator/profile/project, source/new Session,
 expected generation, local date и deterministic create key, имеет durable
-one-use nonce. Coordinator поднимает общий transition barrier до проверки
-interactive activity и до snapshot/intent/create; новый lease после barrier не
-выдаётся, а старые drain-ятся. Под barrier coordinator повторно сверяет expected
-generation. Forged/replayed/stale/wrong-date receipt и concurrent turn после
-barrier не могут изменить selection.
+one-use nonce. Coordinator сначала сохраняет deterministic intent без внешнего
+эффекта, затем `ProjectService` поднимает общий transition barrier, повторно
+сверяет active selection/generation, запрещает новые leases и drain'ит старые.
+Forged/replayed/stale/wrong-date receipt и concurrent turn после barrier не
+могут изменить selection.
 
-После barrier write-ahead rotation intent заранее фиксирует `newSessionId`;
-registry `createSessionOnce` идемпотентен по exact create key. Поэтому crash
+До barrier write-ahead rotation intent заранее фиксирует `newSessionId` без
+изменения registry; после revalidation registry `createSessionOnce`
+идемпотентен по exact create key. Поэтому crash
 между create и phase persist не оставляет неидентифицируемую Session и не
 создаёт duplicate. Если generation успела измениться, record становится
 `cancelled-stale`, barrier освобождается, а идентифицируемая неактивная Session

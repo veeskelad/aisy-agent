@@ -188,14 +188,15 @@ Immutable revisions contain only a closed-registry descriptor, source kind
 `explicit|inferred`, policy revision, timestamps and hashed evidence refs; raw
 dialogue is not a prompt artifact.
 
-Store transitions `queued → validated → prepared → active` through write-ahead
-state and atomic CAS active/previous pointers per key. Pre-CAS failure preserves
-the previous active revision; post-CAS ambiguity recovers from WAL/readback.
-Proven corruption suppresses only that family until repair, retains immutable
-revisions and leaves unrelated families active; a family without a valid active
-revision degrades to byte-stable `SOUL.md`. Forget first removes the active
-pointer, then purges evidence and leaves an anti-resurrection tombstone.
-Rollback may select only the previous revision of the same key.
+Each family is one private atomically replaced snapshot containing immutable
+revisions and active/previous pointers. Save completes before the in-process
+view changes; a failed save therefore preserves the previous active revision,
+while restart sees either the complete old or complete new file. Proven
+corruption suppresses only that family until repair and leaves unrelated
+families active; a family without a valid active revision degrades to
+byte-stable `SOUL.md`. Forget removes the active pointer and leaves a revision
+tombstone; raw dialogue is never stored. Rollback may select only the previous
+revision of the same key. A multi-writer WAL/repair UI is deferred.
 
 Prompt precedence is:
 

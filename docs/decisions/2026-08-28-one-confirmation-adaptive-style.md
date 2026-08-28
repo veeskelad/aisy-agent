@@ -23,12 +23,13 @@ Skill мог бы получить prompt-authority. Нужна отдельна
 1. Первое подтверждение обычной Tier-2 операции автоматически создаёт durable
    code-derived similar grant ADR-0093. Отдельная кнопка «навсегда» не нужна;
    карточка заранее показывает exact scope правила и `/grants` для отзыва.
-   Exact card/action/matcher связывает code-owned `approvalOperationId`.
-   Private WAL проходит `approval_consumed → grant_persisted|grant_failed →
-   call_released`: duplicate callback/restart не создаёт второй grant или call.
-   До доказанного grant write вызов не выпускается; доказанный persist failure
-   один раз выполняет уже подтверждённый exact call без правила и сообщает
-   одной строкой, что постоянное разрешение не сохранилось.
+   Одноразовый callback уже связывает tap с exact card/action; после него
+   `GrantStore` атомарно публикует code-derived matcher. Если запись правила
+   доказанно не удалась, уже подтверждённый exact вызов не превращается в
+   ложный отказ, но следующий похожий вызов снова спросит. Отдельный WAL между
+   tap, grant и dispatch не вводится в этом срезе: повтор внешнего эффекта
+   предотвращает существующий durable turn envelope, а grant не является
+   журналом выполнения.
 2. Matcher остаётся scoped по tool, operation, resource hash, WorkBinding,
    risk ceiling и policy revision. Grant подавляет только последующий `ask` и
    никогда не обходит HARD_DENY, narrowing, sandbox, egress или budget.
@@ -59,12 +60,11 @@ Skill мог бы получить prompt-authority. Нужна отдельна
 | `confirm` | не применяется | не применяется |
 
 `confirm` остаётся явным ask-every-time override. Production default — `auto`.
-Для plan approval карточка до tap показывает bounded code-owned список
-`planStepId/ordinal → plannedCallHash → matcherHash → savedScopeLabel`,
-включённый в `planHash`; identity уникальна для каждого occurrence.
-Каждый фактически admitted exact step получает deterministic child
-`approvalOperationId` и проходит тот же WAL; пропущенный, непоказанный,
-reordered или drifted step не получает grant.
+В режиме plan действует существующее одобрение exact `planHash`. Автоматическая
+публикация отдельных persistent grants для каждого plan-step **отложена**:
+текущий срез не создаёт заранее разрешения для пропущенных или невыполненных
+шагов. Если такой UX понадобится, он требует отдельного ADR с disclosure и
+restart-контрактом, а не скрытого расширения этой карточки.
 Эта ADR заменяет пункт 7 ADR-0093 только для `auto/plan` и уточняет пункт 2
 ADR-0103: inferred autonomy не действует в `confirm/plan`; direct operator grant
 не является inferred autonomy.
@@ -72,15 +72,17 @@ ADR-0103: inferred autonomy не действует в `confirm/plan`; direct op
 Typed preference имеет exact `PreferenceScope = botId + operatorId + profileId`
 и `PreferenceKey = PreferenceScope + descriptorFamily`. Immutable revision
 хранит registry descriptor, source kind, hashed evidence refs и policy revision.
-Write-ahead lifecycle и CAS active/previous pointer переживают crash. Pre-CAS
-failure оставляет прежний active этой family; post-CAS ambiguity читается из
-WAL/store. Corruption suppress'ит только повреждённую family до repair, не
-удаляя revisions и не выключая независимые families; при отсутствии валидного
-active она деградирует к стабильному `SOUL.md`. Precedence равно `current
+Каждая family хранится отдельным атомарно заменяемым private snapshot с
+`active/previous`: write failure оставляет прежний active в текущем процессе,
+а restart читает полностью старую либо полностью новую ревизию. Corruption
+suppress'ит только повреждённую family до repair, не выключая независимые
+families; при отсутствии валидного active она деградирует к стабильному
+`SOUL.md`. Precedence равно `current
 authenticated turn > explicit preference > inferred preference > SOUL
 defaults`; constitution/code policy всегда выше. Forget сначала снимает overlay,
-затем очищает evidence с anti-resurrection tombstone. Rollback возвращает
-только previous revision того же key.
+оставляет tombstone ревизии и не сохраняет raw dialogue. Rollback возвращает
+только previous revision того же key. Многофазный preference WAL с repair UI
+**отложен** до появления внешнего concurrent writer.
 
 Это решение заменяет отдельный выбор persistent scope ADR-0093 для обычной
 успешно подтверждённой Tier-2 карточки в `auto/plan`. Granularity, deny

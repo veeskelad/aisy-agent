@@ -115,10 +115,8 @@ interface EgressGuard {
 interface ApprovalHandler {
   // The ONLY setter of is_human_confirmed / permanence flags.
   confirmPermanence(input: ExactApprovalInput, secondFactor: string): ApprovalResult
-  // Ordinary Tier-2 confirmation is linearized through a private WAL before dispatch.
-  confirmTier2(input: Tier2ApprovalInput): Promise<Tier2ApprovalResult>
-  // Each disclosed plan step uses a deterministic child operation when actually admitted.
-  admitApprovedPlanStep(input: PlannedStepApprovalInput): Promise<Tier2ApprovalResult>
+  // Ordinary Tier-2 uses the existing one-use callback and atomic similar-grant store.
+  confirmTier2(input: ExactApprovalInput): ApprovalResult
 }
 
 interface SecretRedactor {
@@ -128,8 +126,7 @@ interface SecretRedactor {
 
 Events emitted: `safety.denied`, `safety.narrowed.enter`, `safety.narrowed.exit`,
 `safety.tier3.held`, `safety.egress.blocked`, `safety.approval.bound`,
-`safety.approval.rejected`, `safety.grant.persisted`,
-`safety.grant.persist_failed`, `safety.approved_call.released`. Events consumed:
+`safety.approval.rejected`. Events consumed:
 `tool.proposed` (from 04), `context.assembled`
 (from 01), `mcp.descriptor.changed` (from 07), `nightly.maintenance.requested` (from 10).
 
@@ -160,22 +157,11 @@ Events emitted: `safety.denied`, `safety.narrowed.enter`, `safety.narrowed.exit`
   stagedHashAtAccept, stagedHashAtPromote }`. Append-only audit binding of tap to action
   (ADR-0029).
 
-- **Ordinary Tier-2 approval operation** — `{ approvalOperationId, nonce,
-  actionHash, matcherHash, policyRevision, mode, planHash?, planStepId?,
-  plannedCallHash?,
-  state: approval_consumed | grant_persisted | grant_failed | call_released,
-  callDispatchId }`. `approvalOperationId` is code-derived from the exact card;
-  a planned step uses a deterministic child id derived from plan approval id,
-  code-owned `planStepId` and `plannedCallHash`. WAL contains hashes/bindings, not raw operands. Only this
-  state machine owns automatic ADR-0110 grant publication and exact call release.
-
-- **Plan grant disclosure** — bounded, code-normalized list
-  `{ planStepId, ordinal, plannedCallHash, matcherHash, savedScopeLabel }[]`
-  included in the approved `planHash` and rendered before tap. `planStepId` is
-  unique per occurrence, so two byte-identical calls at different positions do
-  not share a WAL. A step absent from this list, skipped,
-  reordered outside the approved plan contract or drifted cannot receive a
-  persistent grant.
+- **Ordinary Tier-2 similar grant** — существующий one-use approval callback
+  разрешает exact call, после чего атомарный `GrantStore` сохраняет только
+  code-derived matcher, binding, risk ceiling и policy revision. Persist failure
+  откатывает in-memory candidate; уже подтверждённый call продолжается, а
+  следующий похожий call снова спрашивает. Grant не является operation journal.
 
 - **Nightly Tier-3 carve-out allowlist** — the bounded, parameterized set of irreversible
   maintenance ops permitted unattended: `VACUUM`, `FTS5 optimize`, `WAL checkpoint(TRUNCATE)`,
@@ -257,32 +243,24 @@ ApprovalHandler.confirm(nonce, actionHash, secondFactor):
   set is_human_confirmed; append {tap -> action} audit binding
 ```
 
-Ordinary Tier-2 confirmation and approved plan steps use a separate ADR-0110
-path; it never sets permanence flags:
+Ordinary Tier-2 confirmation uses a separate ADR-0110 path and never sets
+permanence flags:
 
 ```
 ApprovalHandler.confirmTier2(exactCard):
-  validate nonce/action/matcher/policy/mode and consume the tap once
-  WAL.append(approval_consumed)
-  persist exact similar grant; prove by CAS/readback
-    success -> WAL.append(grant_persisted)
-    proven failure -> WAL.append(grant_failed)
-    ambiguous -> recover before continuing
-  release exact call once by callDispatchId
-  WAL.append(call_released)
-
-ApprovalHandler.admitApprovedPlanStep(plan, step):
-  require approved planHash and exact disclosed planStepId/ordinal/call/matcher/scope
-  derive child approvalOperationId(planApprovalId, planStepId, plannedCallHash)
-  run the same WAL only when that step is actually admitted
+  validate and consume the exact one-use callback
+  if mode == auto and tier == 2 and matcher is eligible:
+    atomically persist the scoped similar grant
+    on proven persist failure, roll back the candidate and continue this exact call
+  release the already confirmed exact call through the normal durable turn path
 ```
 
-Duplicate tap, retry and restart resume the same WAL. A pre-WAL or ambiguous
-grant write does not dispatch. Proven grant failure may release the already
-confirmed exact call once without a durable grant and reports that narrow
-failure; a later similar call asks again. Skipped plan steps are never pre-granted.
-`confirm`, Tier-3/extreme, permanence and HARD_DENY stay on their existing
-ask/deny paths and never enter this WAL.
+Duplicate taps remain rejected by the existing callback/turn machinery. A
+later similar call is suppressed only when the atomic grant is readable.
+`confirm`, Tier-3/extreme, permanence and HARD_DENY never create or consume this
+rule. Per-step persistent plan grants and a dedicated approval→grant→dispatch
+WAL are deferred to a separate ADR; this slice does not pre-grant skipped plan
+steps.
 
 Nightly Tier-3 carve-out (Eng-13). The nightly job (10) requests maintenance ops; Safety
 only permits those on the bounded carve-out allowlist, each gated by its precondition and
@@ -327,8 +305,7 @@ stays active at night.
 | **Approval replay / stale tap** (ADR-0029) | Nonce already used or expired | **Reject**: no flag set | New card with fresh nonce issued |
 | **Staging-area swap between judge-accept and promote (TOCTOU)** (ADR-0029) | `stagedHashAtPromote != stagedHashAtAccept` | **Abort**: route to human review; no promotion | Re-stage and re-approve |
 | **Second factor missing on permanence/Tier-3 approval** (ADR-0029) | Handler step-up check | **Reject**: flag not set | Re-approve with valid second factor; lost factor -> documented out-of-band operator reset |
-| **Ordinary Tier-2 grant persist fails before dispatch** (ADR-0110) | WAL write/CAS/readback | Ambiguous state blocks call until recovery; proven failure records `grant_failed` and releases the exact confirmed call at most once without a rule | User sees one narrow warning; next similar call asks again |
-| **Plan step is not in exact disclosed list, is reordered/drifted or its matcher changed** (ADR-0110) | `planHash`, `plannedCallHash`, matcher and order check | **Reject**: no child WAL, grant or call | Re-plan and disclose the new bounded scope list |
+| **Ordinary Tier-2 grant persistence fails** (ADR-0110) | Atomic store throws and rolls back its in-memory candidate | The already confirmed exact call proceeds through the normal durable turn; no rule is published | Next similar call asks again |
 | **Nightly op not on carve-out allowlist or precondition fails** (Eng-13) | Carve-out predicate check | **Fail-closed**: op skipped, reported on morning card; HARD_DENY active | Operator runs it under explicit live-session approval |
 | **HARD_DENY rule-set load corrupt** | Self-check on load fails | **Fail-closed**: deny all non-Tier-0 until a valid set loads | Reload last-known-good rule set |
 
@@ -475,14 +452,11 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
 33. **AC-05-33** — Similar grant проверяется только после всех deny-границ и
     подавляет только Tier-2 ask. Tier-3/extreme, forged Proxy/accessor call,
     invalid binding и corrupt matcher дают ask/deny без grant mutation.
-    Первое обычное Tier-2 approval в `auto` и exact approved plan step связывает
-    card/action/matcher через code-owned `approvalOperationId` и durable WAL
-    `approval_consumed → grant_persisted|grant_failed → call_released`.
-    Crash/restart/duplicate callback на любой фазе не создаёт второй grant или
-    dispatch. До доказанного write call не выпускается; доказанный persist
-    failure один раз выполняет уже подтверждённый exact call без grant, поэтому
-    следующий similar call снова спрашивает. `confirm`, Tier-3/extreme и
-    HARD_DENY не создают и не читают такое правило (ADR-0110).
+    Первое обычное Tier-2 approval в `auto` после one-use callback атомарно
+    сохраняет code-derived similar grant. Persist failure откатывает candidate,
+    не превращает уже подтверждённый exact call в отказ и заставляет следующий
+    similar call спросить снова. `confirm`, Tier-3/extreme и HARD_DENY не
+    создают и не читают такое правило (ADR-0110).
 34. **AC-05-34** — В режиме «сначала план» показанный план не даёт права ни на
     один шаг: `preflightPlannedCall`/`admitPlannedCall` в фазе `submitted`
     отвечают `PLAN_EXECUTION_APPROVAL_REQUIRED`. Исполнение начинается только из
@@ -490,15 +464,8 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     чужой хэш даёт plan drift. Одобрение идемпотентно, переживает рестарт и
     относится к плану целиком: следующий шаг того же плана не спрашивают заново
 (ADR-0100).
-    Для Tier-2 persistent scopes карточка до tap содержит bounded список
-    `planStepId/ordinal → plannedCallHash → matcherHash → savedScopeLabel`,
-    включённый в `planHash`.
-    Grant создаётся не при одобрении всего плана, а идемпотентно при фактическом
-    admit каждого exact disclosed step через child `approvalOperationId`.
-    Multi-step, reordered, skipped и drifted-step tests доказывают, что
-    непоказанный или невыполненный step не получает grant и не расширяет scope;
-    два одинаковых calls в разных позициях выполняются через разные child WAL,
-    а replay одного occurrence не поглощает и не дублирует другой.
+    Автоматические persistent grants для отдельных plan-step в этом срезе не
+    публикуются; их disclosure/restart-контракт отложен отдельным ADR.
 35. **AC-05-35** — `submit_plan` блокируется до ответа оператора. Отказ
     возвращает задачу к исследованию и забывает план; недоступная карточка,
     исключение транспорта и любое значение, кроме `approved`, считаются отказом

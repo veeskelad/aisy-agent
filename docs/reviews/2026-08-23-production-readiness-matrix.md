@@ -1,6 +1,6 @@
 # Матрица production-готовности Aisy
 
-**Дата среза:** 2026-08-27
+**Дата среза:** 2026-08-28
 **Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
 audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
@@ -11,6 +11,11 @@ audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
 
 **Managed production current:** `1df48515b55cd2d9dff2e8046ad18179ad30573e`
 **Managed production previous:** `2a98797fffbec630f81d8897874d437f35ec0c27`
+
+**Новый проверяемый code candidate:**
+`520ab9d78c446b2c902f21de53f60fe800c5b31f` плюс последующий docs-only
+evidence commit. До managed update строки target acceptance ниже не называют
+этот candidate развёрнутым.
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -49,7 +54,16 @@ mutation receipt в общем Plan protocol и отсутствие LIVE-ком
 независимый диалоговый разрыв: краткое «Покажи» после code-owned утреннего
 уведомления больше не превращается в action verification, а служебные action
 spans и промежуточные provider attempts не попадают в следующий модельный
-контекст. Остальные
+контекст. Срез 2026-08-28 дополнительно выявил и закрыл независимые разрывы:
+неоднозначное nightly-уведомление при нулевых правках, отсутствие ежедневной
+Session rotation и `/resume`, ежедневный model-backed consolidation вместо
+воскресного, неестественный memory acknowledgement, повтор Tier-2 карточки
+после уже данного разрешения и отсутствие typed overlay для явных поправок
+стиля. Corrupt rotation-state теперь останавливает startup, а не маскируется
+под отсутствие state. Расширенный multi-Project weekly cohort, отдельный
+approval WAL, per-step plan grants и forget-safe повторная фильтрация старого
+transcript честно остаются **ОТЛОЖЕНО ADR**: они не нужны для заявленного
+диалогового cutover и не выданы за LIVE. Остальные
 не-LIVE строки ниже либо уже имеют явный target gate, либо являются dormant,
 отсутствующим новым продуктовым срезом или отложенной ADR-границей; их нельзя
 активировать попутным wiring без отдельного решения.
@@ -58,14 +72,14 @@ spans и промежуточные provider attempts не попадают в �
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
 |---|---|---|---|
-| Telegram text, streaming, attachments и forwarded batches | **LIVE** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в `packages/app/src/bin/aisy.ts`. Release `1df4851` добавляет одноразовый code-owned переход из точного утреннего уведомления в staging-card: краткое «Покажи» не запускает provider/action loop, а конкретное «Покажи файл» сохраняет inspect-path | После следующего утреннего уведомления от нового процесса подтвердить живой shortcut; старое уведомление до restart доказательством не считается |
-| Workspace, Projects, Sessions и files | **LIVE** | Registry v2, ProjectService, session lease, scoped files и Telegram lifecycle controls находятся в production composition | Project create/switch/resume и restart E2E на целевом host |
+| Telegram text, streaming, attachments и forwarded batches | **LIVE в candidate; target update не выполнен** | `makeTelegramBot`, streaming checkpoints, durable media inbox и batching создаются в production composition. Typed nightly notice различает `complete-zero`, `complete-n`, `partial-failure` и session-only; bare `Покажи` одноразовый и deterministic, конкретное `Покажи файл` остаётся обычным запросом | После managed update подтвердить обычный text reply и следующий живой nightly shortcut |
+| Workspace, Projects, Sessions и files | **LIVE в candidate; target update не выполнен** | Registry v2, ProjectService, отдельная one-use SessionRotationAuthority, deterministic create id, crash recovery и `/resume [prefix]` подключены. Corrupt rotation record fail-closed; старая Session и transcript не удаляются | Managed update, forced daily rotation/restart и `/resume` E2E на target; forget-safe transcript reprojection отдельно отложена ADR |
 | Transcript v2 и compaction | **LIVE в коде** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; raw audit остаётся неизменным. Provider-facing projection удаляет code-owned recovery/action spans и промежуточные model attempts, сохраняя user ingress, значимые tool spans и terminal reply | Target-FS self-test и long-session Telegram acceptance; day-log/activity pipeline DORMANT |
-| Keyword/scoped memory и forgetting | **LIVE** | Protected global/Project stores и `makeScopedMemoryLiveView` — единственный live path; nightly проходит shared forget filter. Release `2a98797` закрепляет ровно одно code-owned естественное подтверждение typed receipt и удаляет model-owned пустые/дублирующие статусы памяти | Composite receipt, restart, recall, correction и human-confirmed forget E2E |
+| Keyword/scoped memory и forgetting | **LIVE в candidate; target update не выполнен** | Protected global/Project stores и `makeScopedMemoryLiveView` остаются единственным live path. `remember` публикует факт сразу и code-owned acknowledgement нормализует bounded preference prefixes в естественное «Запомнил, что ты…»; operational facts не перефразируются | Target remember→restart→recall и точечная очистка test facts |
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
-| Tools и exact-domain HTTPS | **LIVE с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; Tier-3 и HARD_DENY остаются code-owned | Target approval/Plan Mode E2E; unrestricted `bash` только в explicit bypass |
+| Tools и exact-domain HTTPS | **LIVE в candidate с принятым host risk** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url`; первое обычное Tier-2 подтверждение в `auto` атомарно сохраняет scoped similar grant, `/grants` отзывает его. Tier-3, HARD_DENY, narrowing и `confirm` не обходятся | Target: подтвердить одну безопасную Tier-2 операцию и повторить без второй карточки; explicit destructive по-прежнему должен спросить |
 | Active Skills | **LIVE для use/install/remove** | Hash-pinned catalog, prompt menu/body-on-trigger, AgentCard filtering, CLI и Telegram controls подключены | Установка, trigger и disable/reload на целевом host |
-| Typed auto-skills | **LIVE на target при explicit canary; behavioural acceptance не завершён** | Target `2a98797`: `AISY_AUTO_SKILLS=1`, generator `claude-subscription/sonnet`, отдельный judge `claude-subscription/opus`; Doctor загружает private v2 state и даёт `pass`, `active=0`, очереди и quarantine пусты. Два supervised delivery-confirmed terminal success разных sessions проходят typed receipt seam; exact memory recipe имеет code-owned planner; call/session/turn/global ordinal mismatch, failed provider attempt/failover и turn-wide effect-stream fail-closed; scoped overlay, canary-on/off restart recovery, source-confirmed forgetting, poisoned stale store, marker-v2 exact-temporary cleanup только при global quiescence, read-only Doctor, persistent rollback barrier и explicit v2 roll-forward resume покрыты deterministic tests | Нужны два реальных чистых `memory.remember` turn в разных выделенных Telegram sessions, activation/planner smoke и точная cleanup-проверка; составной turn намеренно не считается evidence |
+| Typed auto-skills | **LIVE при explicit canary; registry ограничен** | `AISY_AUTO_SKILLS=1` включает generator/judge/store/worker и code-owned planner. Два delivery-confirmed terminal success разных Sessions активируют только descriptor из закрытого registry; текущий production registry содержит `memory.remember`. Raw dialogue, tool authority и свободный executable Skill не публикуются | После update: два чистых remember-turn в разных test Sessions, activation/planner smoke, затем удалить созданные test facts/skill evidence. Новые procedure families требуют отдельного descriptor/code release |
 | Skill promotion runtime | **DORMANT** | Promotion/store/doctor modules и tests существуют отдельно от production composition | Verification probes и human promotion composition |
 | Nightly Skill drafting | **ОТСУТСТВУЕТ** | Nightly loop не имеет реального `draftSkills` seam | Generator output, staged artifact и negative one-off-failure corpus |
 | stdio MCP | **LIVE** | Startup connect gauntlet, human-owned allowlist/policy, bounded menu, `call_mcp` через HookGate и Telegram controls подключены | Один реальный target stdio connect/call/remove E2E |
@@ -77,7 +91,8 @@ spans и промежуточные provider attempts не попадают в �
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
 | Telegram/YouTube/GitHub monitoring collectors и feedback learning | **DORMANT / ОТСУТСТВУЕТ по подтипу** | Core collector/ranking pieces существуют не для всех platform flows | Отдельные normalized collectors, UI и deterministic cursor/feedback corpus |
-| Onboarding, профиль и персонализация | **LIVE** | First-contact, resumable onboarding progress, operator profile projection и frozen-prefix brief создаются production composition | Завершить один target onboarding/перезапуск без потери прогресса |
+| Onboarding, профиль и персонализация | **LIVE в candidate** | First-contact и профиль остаются LIVE. Отдельный private typed preference store немедленно применяет явные поправки `concise`, `hide-internals`, `natural-russian`, `second-person-memory-ack`; inferred descriptor требует две разные Sessions. В prompt попадает только fixed text с provenance `learned-procedure`, не raw dialogue | Target correction→next reply→restart; rollback/forget доступны программно, Telegram UI для них ОТСУТСТВУЕТ |
+| Daily Session reset / Sunday memory cadence | **LIVE в candidate; расширенный cohort ОТЛОЖЕН ADR** | Daily runner не вызывает generator/judge; Sunday cursor даёт missed-Sunday catch-up, manual run не двигает cursor. Rotation/restart/at-most-once startup notice детерминированы | Target forced-date run и следующий Sunday. Multi-Project member cursors, cross-cohort artifact reuse и late-result outbox не активированы |
 | Напоминания, расписания и цели | **LIVE** | Trigger store/engine, scheduler, goal store/orchestrator, approval и restart resume подключены в `bin/aisy.ts` | Target reminder + scheduled goal + restart trace |
 | Ограниченный доступ к серверу | **LIVE при explicit config + approval** | `makeServerAccess` импортирован production binary; argv выполняется без shell, restart требует held supervisor authority, временный доступ истекает scheduler-ом | Target open/expire/restart audit для operator-owned config |
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
@@ -93,6 +108,16 @@ spans и промежуточные provider attempts не попадают в �
 
 ## Проверки текущего среза
 
+- candidate through code head `520ab9d`: Core **2419 passed / 1 skipped**,
+  Telegram Gateway **256 passed**, финальный App real-socket corpus **2659
+  passed / 2 skipped** (255 файлов pass, 1 штатно skipped), Python sidecars
+  **215 passed / 39 platform-or-optional skipped**, Ruff green; workspace
+  typecheck/build и `git diff --check` — green. Targeted daily rotation,
+  `/resume`, weekly cadence, natural memory receipt, communication preferences,
+  learned grants и typed auto-skill suites — green. Независимый review нашёл и
+  закрыл stale test fixture, fail-open corrupt rotation record и слишком сильный
+  provenance learned overlay; повторный review отделил неактивированные
+  WAL/cohort guarantees в **ОТЛОЖЕНО ADR**;
 - exact release `1df4851`: Core **2410 passed / 1 skipped** (139 файлов pass,
   1 штатно skipped), App **2638 passed / 2 skipped** (252 файла pass, 1
   штатно skipped); workspace typecheck/build и `git diff --check` — green.
