@@ -2930,7 +2930,7 @@ const augmentTurnWithHooks = async (
     ? []
     : [{
         role: 'system' as const,
-        provenance: 'operator' as const,
+        provenance: 'learned-procedure' as const,
         text: `[AISY_COMMUNICATION_PREFERENCES]\n${preferenceOverlay}`,
       }]
   // Today's journal is pulled per turn, never frozen into the prefix: the file

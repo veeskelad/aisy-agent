@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   makeContextLeaseCoordinator,
   makeFreshProjectRegistryV2,
@@ -12,9 +15,15 @@ import {
 
 import {
   makeDailySessionRotation,
+  makeNodeDailySessionRotationStore,
   type DailySessionRotationRecord,
   type DailySessionRotationStore,
 } from './daily-session-rotation.js'
+
+const roots: string[] = []
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 const OWNER = { operatorId: 'telegram:42', profileId: 'default' }
 const POLICY = {
@@ -158,5 +167,15 @@ describe('daily Session rotation', () => {
     expect(await afterCrash.recoverNotification(send)).toBe('ambiguous')
     expect(send).toHaveBeenCalledOnce()
     expect(afterCrash.current()?.phase).toBe('ambiguous')
+  })
+
+  it('fails closed on a corrupt durable record instead of rotating again', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-daily-session-state-'))
+    roots.push(root)
+    const path = join(root, 'rotation.json')
+    writeFileSync(path, '{"schemaVersion":1,"phase":"switched"}\n', { mode: 0o600 })
+
+    expect(() => makeNodeDailySessionRotationStore(path).load())
+      .toThrow('DAILY_SESSION_ROTATION_STATE_CORRUPT')
   })
 })

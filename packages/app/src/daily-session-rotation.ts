@@ -243,7 +243,16 @@ export function makeNodeDailySessionRotationStore(path: string): DailySessionRot
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   return {
     load: () => {
-      try { return existsSync(path) ? decode(readFileSync(path, 'utf8')) : null } catch { return null }
+      if (!existsSync(path)) return null
+      let raw: string
+      try {
+        raw = readFileSync(path, 'utf8')
+      } catch {
+        throw new Error('DAILY_SESSION_ROTATION_STATE_UNREADABLE')
+      }
+      const record = decode(raw)
+      if (record === null) throw new Error('DAILY_SESSION_ROTATION_STATE_CORRUPT')
+      return record
     },
     save: (record) => {
       const temporary = `${path}.tmp`
