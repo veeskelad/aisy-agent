@@ -59,7 +59,9 @@ Session не удаляется и доступен через `/resume`. Кон
 
 ### 4.1 Раздельные расписания
 
-Scheduler хранит два независимых durable high-water:
+Scheduler хранит два независимых durable high-water. Оба scoped по exact
+`botId + operatorId + profileId`; rotation record дополнительно связывает
+Project, source Session и selection generation:
 
 - `lastSessionResetDate`: каждый локальный календарный день после
   `AISY_NIGHTLY_AT`;
@@ -75,25 +77,54 @@ Scheduler хранит два независимых durable high-water:
 
 Ротация имеет monotonic phases:
 
-`due → prepared → switched → restart_requested → notified`.
+`due → preparing → prepared → switched → restart_requested →
+notification_pending → dispatching → delivered|ambiguous`.
+
+Coordinator сначала атомарно поднимает transition barrier и фиксирует exact
+selection generation. Если operator switch уже начался или snapshot успел
+измениться, rotation остаётся `due`: intent и новая Session не создаются. Только
+после barrier code-owned coordinator атомарно пишет `preparing` с
+deterministic create key и заранее выбранным `newSessionId`:
+
+`bot + operator + profile + project + sourceSession + generation + localDate`.
+
+Registry получает idempotent `createSessionOnce(createKey, newSessionId)`,
+поэтому crash до/после create и до/после публикации `prepared` не оставляет
+неидентифицируемую Session и не создаёт вторую.
 
 Durable record содержит local date, исходный/новый session id, project id,
 selection generation и bounded notification kind без текста переписки. Он не
 хранит memory facts, raw transcript или Telegram token/chat id.
 
+- `preparing`: durable intent и exact будущий Session id записаны до create;
 - `prepared`: создана новая Session, но selection ещё старая;
-- `switched`: существующий `SwitchAuthority` атомарно выбрал новую Session;
+- `switched`: отдельный rotation authority атомарно выбрал новую Session;
 - `restart_requested`: внешний supervisor получил запрос restart;
-- `notified`: новый процесс отправил единственное startup-уведомление.
+- `dispatching`: outbox начал единственную попытку Telegram send;
+- `delivered|ambiguous`: response доказан либо повтор запрещён из-за
+  недоказуемого результата send.
 
 Restart на любой фазе продолжает её идемпотентно. Если process видит selection
 на новой Session, он не создаёт вторую. Если switch не доказан, прежняя Session
 остаётся активной. Marked date не публикуется раньше `switched`.
 
-Ротация не обрывает активный Telegram turn и не отбирает lease у выполняемого
-действия. При `agentState=running` она остаётся `due` и повторяется ближайшим
-scheduler tick после освобождения. Durable goals, triggers, monitoring и
-subagent runs сохраняют исходный binding и не перенацеливаются на новую Session.
+Автоматический switch не подделывает operator receipt. Для него вводится
+отдельный `SessionRotationAuthority`, разрешённый только включённой оператором
+daily policy. Receipt purpose-bound к exact owner/profile/bot/project,
+source/new Session, expected generation, local date и create key, имеет durable
+one-use nonce и не принимается обычным interactive switch path.
+
+Новый interactive lease после barrier не выдаётся; уже выданный drain-ится до
+switch. Поэтому turn, стартующий одновременно с reset, либо получает старый
+lease раньше barrier и завершается, либо ждёт новую Session. Forged, replayed,
+stale, wrong-date и wrong-generation rotation receipts ничего не меняют.
+Crash до `preparing` освобождает barrier и оставляет `due`; после `preparing`
+recovery повторно получает barrier только для записанной generation. Stale
+generation завершает record как `cancelled-stale`, освобождает barrier и
+сохраняет уже идентифицируемую, но неактивную Session для обычного lifecycle
+archive; новый intent строится только из актуальной selection.
+Durable goals, triggers, monitoring и subagent runs сохраняют исходный binding
+и не перенацеливаются на новую Session.
 
 ### 4.3 Уведомление после restart
 
@@ -103,13 +134,39 @@ prefix. Это исключает потерю одноразового transpor
 - Обычный день: `🌅 Начала новую сессию. Память и незавершённая работа
   сохранены. /resume — вернуться к прошлому разговору.`
 - Воскресенье, `0` правок: `🌅 Начала новую сессию. Память проверена: новых
-  правок нет. /resume — вернуться к прошлому разговору.`
+  правок нет. /resume — вернуться к прошлому разговору.` После этого notice
+  transport хранит одноразовый `zero-staging` context: следующий bare `Покажи`
+  отвечает `Новых правок нет.` без card и provider, затем context снимается.
 - Воскресенье, `N > 0`: `🌅 Начала новую сессию. N правок памяти ждут решения.
   Покажи — открою карточку. /resume — вернуться к прошлому разговору.`
+- Частичный результат: `🌅 Начала новую сессию. Память проверена частично:
+  N правок доступны, K проектов требуют повторной проверки. /resume — вернуться
+  к прошлому разговору.` При `N > 0` добавляется `Покажи — открою доступные
+  правки.`
 
-Bare `Покажи` получает transport shortcut только в последнем случае. Empty,
-stale, already-consumed и post-restart payload без staged ids не вооружают
-shortcut. Конкретное `Покажи файл` остаётся обычным inspect request.
+Bare `Покажи` получает transport `open-staging` shortcut только для доказанного
+`complete-n` либо `partial-failure` с `N > 0`; partial card содержит только
+успешные Project artifacts. `zero-staging` существует только для
+`complete-zero` и является отдельным no-provider handler, а не открытием карточки.
+`partial-failure` с `N = 0` получает одноразовый code-owned ответ `Доступных
+правок нет; часть проектов не проверена.` без provider и не называется нулевым
+успехом.
+Stale, already-consumed и post-restart payload без exact weekly result не
+вооружают ни один handler. Конкретное `Покажи файл` остаётся обычным inspect
+request.
+
+Перед send outbox публикует `dispatching`. Подтверждённый Telegram response даёт
+`delivered`; restart/ошибка после начала send без доказанного response даёт
+`ambiguous` и не повторяется. Гарантия — durable at-most-once dispatch, а не
+недоказуемая exactly-once delivery. Doctor видит phase/recovery code без текста
+уведомления.
+
+Если weekly catch-up завершился уже после daily reset, отдельный result outbox
+не повторяет фразу о начале Session. Он отправляет только соответствующий
+результат: `Память проверена: новых правок нет.`, `Память проверена: N правок
+ждут решения. Покажи — открою карточку.` либо `Память проверена частично: N
+правок доступны, K проектов требуют повторной проверки.` Transport contexts и
+at-most-once правила остаются теми же.
 
 ### 4.4 `/resume`
 
@@ -119,15 +176,63 @@ shortcut. Конкретное `Покажи файл` остаётся обыч
 restart. `/resume <id-prefix>` допускается только для единственного exact
 совпадения в активном Project; ambiguous/unknown prefix ничего не переключает.
 
-Возврат не копирует summary в новую Session: он загружает точный старый frozen
-prefix и transcript по ADR-0064. Повторный `/resume` текущей Session отвечает
-одной строкой без restart.
+Private audit сохраняет точный старый frozen prefix и transcript по ADR-0064,
+но provider-facing resume view каждый раз строится через текущий forget/
+tombstone и preference/skill-revocation filter. Если projection отличается от
+persisted provider binding, старый provider thread не resume-ится: создаётся
+новая linked generation той же Session с отдельным projection hash. Raw bytes и
+hash audit не меняются. Забытый факт нельзя процитировать, найти retrieval-ом,
+передать tool'у или вернуть из provider-local history. Повторный `/resume`
+текущей Session отвечает одной строкой без restart.
 
 ## 5. Воскресная консолидация памяти
 
-Daily Session reset не запускает generator/judge и не создаёт staging. Полный
-memory consolidation pipeline выполняется только по воскресеньям. Ручной
-`/consolidate` остаётся доступен в любой день и не меняет weekly high-water.
+Daily Session reset не запускает generator/judge и не создаёт staging.
+Низкозатратные archival/day-log, retention, disk hygiene и backup сохраняют
+свою ежедневную cadence. Воскресенье включает bounded model stages: memory
+generator/judge, conflict/dedup и free-form skill drafts.
+
+Weekly source — не один воскресный day log. Durable cohort фиксирует exact
+Workspace/Project bindings и общий cutoff, а каждый member имеет собственный
+key `bot + operator + profile + contextKind + projectId`, cursor range
+`(lastSuccessfulConsolidationCursor, cutoff]` и terminal state. Records читаются
+в code-owned stable order под exact maintenance lease и имеют durable consumed
+identity.
+
+Успешный Project сохраняет result и cursor в cohort, но не повторяет provider
+call при retry другого Project. Transient failure оставляет только этот member
+pending; permanent context corruption становится explicit quarantined member и
+не расширяет другие leases. Aggregate weekly result имеет code-owned variant
+`complete-zero | complete-n(n) | partial-failure(n, failedMemberCount,
+boundedCodes)` и публикуется после terminal state всех members, не смешивая
+content между Projects. Quarantined member всегда даёт `partial-failure`, даже
+если успешный staging пуст. Недоступный
+provider вызывает catch-up в понедельник или после следующего startup, не
+ожидая ещё неделю. Если catch-up завершился до ближайшего daily reset, результат
+входит в его startup notice; если reset уже был, отдельный durable weekly-result
+outbox отправляет тот же aggregate contract и вооружает transport только после
+`delivered`. Ручной `/consolidate` создаёт idempotent ad-hoc cohort и не
+подменяет scheduled cursors. Cross-cohort artifact registry индексируется по
+exact member scope, source consumed ids hash, input projection hash,
+live-memory/precondition snapshot hash, generator/judge config hashes и policy
+revision. Поэтому следующий scheduled
+member с тем же input присоединяет уже доказанный terminal artifact, продвигает
+только свой scheduled cursor и не повторяет provider call/card; любое отличие
+создаёт новый run.
+
+Переиспользование проходит code-owned lifecycle matrix:
+
+| Manual artifact state | Scheduled member |
+|---|---|
+| `pending` с валидными hashes/preconditions | присоединяет ту же pending card, считает её в `N`, второй card/provider call не создаёт |
+| `approved/applying/ambiguous` | сначала восстанавливает exact promotion WAL; aggregate ждёт terminal outcome |
+| `applied` | фиксирует `deduped-applied`, продвигает cursor, в `N` не считает |
+| `rejected` | фиксирует `deduped-rejected`, продвигает cursor, в `N` не считает |
+| `expired` | детерминированно revalidate; при успехе выпускает новый nonce для того же artifact без provider, при mismatch запускает новый keyed run |
+| `forgotten/revoked` | никогда не reuse; повторяет forget-filter/projection и строит новый key/run |
+| `corrupt` | quarantines member и даёт `partial-failure` |
+
+Restart сохраняет state и не вооружает shortcut для consumed artifact.
 
 Явное `remember` публикует защищённый факт в том же turn и отвечает естественно:
 `Запомнил, что ты любишь получать деньги.` Weekly job нужен для conflict/dedup,
@@ -155,10 +260,41 @@ Matcher остаётся из ADR-0093:
 
 `tool + operation + resourceHash + WorkBinding + riskCeiling + policyRevision`.
 
-Grant подавляет только последующие `ask` того же или меньшего риска. Другой
+Tap и grant связывает code-owned `approvalOperationId` из exact card id,
+action hash и matcher hash. Private WAL проходит
+`approval_consumed → grant_persisted|grant_failed → call_released`.
+Duplicate callback/restart продолжает ту же operation и не создаёт второе
+правило или второй dispatch. Pre-dispatch WAL failure блокирует call. Если exact
+grant persist доказанно не удался, WAL фиксирует `grant_failed`, однократно
+разрешает уже подтверждённый exact call и terminal result одной строкой
+сообщает, что постоянное правило не сохранилось; следующий similar call снова
+спросит. Post-write ambiguity восстанавливается readback/CAS до release call.
+
+Plan approval до tap показывает bounded code-owned список
+`planStepId/ordinal → plannedCallHash → matcherHash → savedScopeLabel`,
+включённый в `planHash`; два одинаковых calls в разных позициях имеют разные
+`planStepId`.
+Grant не публикуется авансом на весь план: при фактическом admit exact
+disclosed step создаётся deterministic child `approvalOperationId` и проходит
+тот же WAL. Skipped, undisclosed, reordered/drifted step не получает grant.
+
+Grant подавляет только последующие `ask` того же или меньшего риска. Обычная
+карточка один раз сообщает: подтверждение сохранит правило для показанного
+scope, отозвать его можно через `/grants`. Другой
 Project/resource/operation, выросший risk или новая policy revision спрашивают
 снова. `/grants` показывает и отзывает правило. Модель не создаёт matcher и не
 может расширить его текстом.
+
+Матрица режимов:
+
+| Режим | Direct similar grant | Inferred learned autonomy |
+|---|---|---|
+| `auto` | применяется | применяется |
+| `plan` | применяется только к exact approved plan step после plan approval | не применяется |
+| `confirm` | не применяется: оператор явно выбрал ask-every-time | не применяется |
+
+Production default для `@monday_aibot` — `auto`. Переключение в `confirm`
+является явным временным ужесточением и не удаляет grants.
 
 ### 6.3 Что спрашивает каждый раз
 
@@ -202,14 +338,37 @@ Agent-authored правка `SOUL.md` запрещена. Operator edit прим
 ### 7.2 Явные предпочтения применяются сразу
 
 Фразы оператора вида «говори короче», «не показывай служебные id», «пиши
-Запомнил, что ты…» создают typed communication preference в exact operator
+„Запомнил, что ты…“» создают typed communication preference в exact operator
 scope после одного authenticated turn. Source text хранится только в protected
 memory provenance; prompt overlay содержит bounded normalized descriptor,
 revision и rollback pointer.
 
+`PreferenceScope = botId + operatorId + profileId`;
+`PreferenceKey = PreferenceScope + descriptorFamily`. Взаимоисключающие values
+одной family заменяют только её pointer, независимые families (например,
+краткость и скрытие служебных id) активны одновременно. Immutable
+`PreferenceRevision` содержит registry descriptor, source kind
+`explicit|inferred`, policy revision, createdAt и hashed evidence refs без raw
+dialogue. Store использует write-ahead lifecycle
+`queued → validated → prepared → active`, atomic CAS active/previous pointers и
+private modes. Crash каждого transition восстанавливается идемпотентно.
+Pre-CAS failure новой revision оставляет прежний active неизменным;
+post-CAS ambiguity восстанавливается из WAL/readback. Доказанная corruption
+временно suppress'ит чтение повреждённой family до repair, не удаляя revisions
+и не выключая независимые families; при отсутствии валидного active эта family
+деградирует к стабильному `SOUL.md`.
+
 Первая явная коррекция действует со следующего turn. Новая Session включает её
 в обычный `PREFERENCES/LEARNED` snapshot. Повторное исправление создаёт новую
-revision и сохраняет previous.
+revision и сохраняет previous. Precedence:
+
+`текущий authenticated operator turn > explicit preference > inferred
+preference > SOUL defaults`.
+
+Ни один preference не может спорить с constitution или code policy. Forget
+сначала атомарно снимает overlay, затем удаляет evidence/artifact; reverse edge
+source→revision и tombstone запрещают resurrection после restart. Rollback
+возвращает только previous revision того же descriptor/scope.
 
 ### 7.3 Неявные привычки требуют повторения
 
@@ -239,7 +398,8 @@ recipe в прежнем vocabulary/scope активируется автома�
   завершает notice, а текущий process больше не принимает новый turn со старым
   binding.
 - Неоднозначная Telegram delivery не повторяется автоматически; outbox хранит
-  terminal delivery state и Doctor показывает ambiguity без текста сообщения.
+  terminal `delivered|ambiguous`, а Doctor показывает recovery code без текста
+  сообщения.
 - Повреждённый rotation record quarantines только auto-reset. Telegram, память,
   tools и ручной `/resume` продолжают работать; Doctor даёт точный repair code.
 - Managed rollback сохраняет старую Session активной, если новый binary не
@@ -252,19 +412,28 @@ recipe в прежнем vocabulary/scope активируется автома�
 
 1. Каждый local date после configured slot создаёт не более одной новой
    интерактивной Session и выполняет controlled restart.
-2. Sunday catch-up выполняет consolidation до reset; weekday catch-up не
-   вызывает generator/judge.
+2. Обычный weekday reset не вызывает model stages; catch-up exact пропущенного
+   weekly slot вызывает их перед ближайшим reset либо доставляет отдельным
+   durable weekly-result outbox после уже выполненного reset.
 3. Active turn откладывает reset; после завершения создаётся ровно одна Session.
-4. Crash на каждой phase восстанавливается без duplicate Session, switch или
-   notification.
+4. Concurrent operator switch в границах snapshot/barrier/intent/create и crash
+   до/после intent persist, create, prepared persist, switch и restart
+   восстанавливается без duplicate Session/switch; forged/replayed/stale
+   rotation authority и concurrent turn fail safely.
 5. `/resume` list и exact unique prefix возвращают старую Session через
    receipt-bound switch/restart; ambiguous/unknown/current не мутируют state.
-6. Weekly `0` отправляет no-changes text, не создаёт card, не вооружает
-   `Покажи` и не вызывает provider для этого follow-up.
-7. Weekly `N > 0` вооружает single-use `Покажи` только после startup delivery
-   нового process и открывает exact staging без provider call.
-8. Первое Tier-2 confirmation создаёт durable similar grant; второй exact
-   similar call после restart не спрашивает.
+6. Weekly `0` отправляет no-changes text, не создаёт card и даёт одноразовый
+   deterministic ответ `Новых правок нет.` на bare `Покажи` без provider только
+   для `complete-zero`; quarantined member никогда не превращается в этот state.
+7. Weekly `complete-n` и `partial-failure(N > 0)` вооружают single-use `Покажи`
+   только после `delivered` startup notice нового process либо отдельного
+   weekly-result outbox и открывают exact доступный staging без provider call.
+8. Первое Tier-2 confirmation раскрывает exact saved scope и создаёт durable
+   similar grant; второй exact similar call после restart не спрашивает в
+   `auto`/допустимом exact plan step, а explicit `confirm` спрашивает.
+   Crash/duplicate callback на каждой phase approval→grant→dispatch не создаёт
+   второй grant/call; proven persist failure выполняет exact call один раз без
+   сохранённого правила.
 9. Different resource/project/risk/policy и любой Tier-3 снова требуют точное
    подтверждение; HARD_DENY не становится grantable.
 10. Destructive card содержит target, consequence и rollback availability без
@@ -275,21 +444,52 @@ recipe в прежнем vocabulary/scope активируется автома�
     одно естественное подтверждение во втором лице.
 13. Явная communication correction активируется со следующего turn; два
     implicit совпадения разных Session активируют только registry descriptor.
-14. Communication preference и typed skill не расширяют tools/authority;
-    forgotten source или rollback снимает overlay.
+14. Communication preference store проходит crash/CAS/corruption/rollback и
+    forget-first tests; current turn/explicit/inferred/SOUL precedence точна,
+    две descriptor families независимы, failed update сохраняет прежний active,
+    rollback одной family не меняет другую; preference и typed skill не
+    расширяют tools/authority.
 15. Full Core/App tests, typecheck/build, restart/rollback faults,
     `git diff --check`, Gitleaks и public private-reference scans зелёные.
-16. Production acceptance в `@monday_aibot` подтверждает daily reset,
-    `/resume`, weekly `0`/`N`, память, повторный tool без карточки, destructive
-    warning и естественный диалог; тестовые memory facts после проверки удалены.
+16. Resume Session, созданной до forget/revoke, не раскрывает старый fact/
+    preference provider'у или tool, сохраняя byte-identical private audit.
+17. Weekly range/cursor обрабатывает Monday–Sunday ровно один раз; missed Sunday
+    catch-up и A-success/B-failure/restart не пропускают, не дублируют и не
+    смешивают Project evidence. A-success/B-quarantined даёт честный
+    `partial-failure`, открывает только A staging и не сообщает `complete-zero`.
+    Manual-success→Sunday с exact тем же artifact key не повторяет provider call
+    или card, но атомарно продвигает scheduled member cursor.
+18. Notification outbox доказывает at-most-once dispatch: `ambiguous` не
+    resend-ится и виден Doctor, `delivered` вооружает exact transport context.
+19. Production acceptance в `@monday_aibot` подтверждает daily reset,
+    `/resume`, weekly complete `0`/`N` и partial-failure, память, повторный tool
+    без карточки, destructive warning и естественный диалог; тестовые memory
+    facts после проверки удалены.
+20. Multi-step plan card hash включает все persistent scope disclosures; grants
+    появляются только у фактически admitted exact steps. Skipped, reordered,
+    undisclosed и drifted steps не получают grant и не вызывают call. Два
+    byte-identical calls в разных positions имеют разные `planStepId`/child WAL;
+    replay одного не поглощает и не дублирует другой.
 
 ## 10. Rollout
 
+Activation идёт по dependency matrix; наличие кода не считается LIVE:
+
+| Зависимость | Текущая граница | Gate этого rollout |
+|---|---|---|
+| Protected memory commit | preview/dormant по компоненту 03 | approved migration binding, live-compatible E2E и rollback rehearsal |
+| Session transport lifecycle | часть adapters dormant по компоненту 17 | live `/resume`, rotation authority и barrier integration |
+| Transcript recovery/projection | recorder частично LIVE, recovery coordinator dormant по компоненту 23 | forget-safe provider projection и target writer self-test |
+| Typed auto-skills | explicit canary по ADR-0108 | ADR-0110 является release decision только после clean two-session target evidence и rollback compatibility |
+| Typed preferences | новый private store | Doctor, crash corpus, forget/rollback и zero-overlay degradation |
+
 1. Feature flags включаются на target только после deterministic corpus и
-   rollback test.
+   rollback test каждого store.
 2. Сначала deploy с read-only Doctor probes и выключенной ротацией.
 3. Затем one-shot manual rotation rehearsal с сохранением previous release.
 4. После restart включаются daily reset и Sunday consolidation schedule.
 5. Typed communication learning и auto-skills включаются только при healthy
    private stores; failure деградирует к стабильному `SOUL.md`, а не ломает bot.
-6. Финальная матрица разделяет LIVE code, deployed и behavioural acceptance.
+6. Строка production acceptance остаётся pending, пока её dependency gate не
+   закрыт реальным trace. Финальная матрица разделяет LIVE code, deployed и
+   behavioural acceptance.

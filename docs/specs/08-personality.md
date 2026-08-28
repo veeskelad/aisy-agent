@@ -177,6 +177,36 @@ absent/empty), and the `ModeResult` / `VetoVerdict` rejection reasons above.
 `provider.failover` (from Provider Routing 09, triggers a re-seed integrity check),
 `session.start` (from Core 01, triggers `loadIdentity`).
 
+### 3.1 Typed communication preferences
+
+ADR-0110 keeps `SOUL.md` operator-owned and adds a separate private adaptive
+overlay. `PreferenceScope` is exact `botId + operatorId + profileId`.
+`PreferenceKey = PreferenceScope + descriptorFamily`: mutually exclusive values
+replace only the active revision of their family, while independent families
+remain active together.
+Immutable revisions contain only a closed-registry descriptor, source kind
+`explicit|inferred`, policy revision, timestamps and hashed evidence refs; raw
+dialogue is not a prompt artifact.
+
+Store transitions `queued → validated → prepared → active` through write-ahead
+state and atomic CAS active/previous pointers per key. Pre-CAS failure preserves
+the previous active revision; post-CAS ambiguity recovers from WAL/readback.
+Proven corruption suppresses only that family until repair, retains immutable
+revisions and leaves unrelated families active; a family without a valid active
+revision degrades to byte-stable `SOUL.md`. Forget first removes the active
+pointer, then purges evidence and leaves an anti-resurrection tombstone.
+Rollback may select only the previous revision of the same key.
+
+Prompt precedence is:
+
+`current authenticated operator turn > explicit preference > inferred
+preference > SOUL defaults`.
+
+Constitution and code-owned policy remain above every preference. Explicit
+correction applies next turn; an inferred descriptor requires two
+delivery-confirmed matches in different durable Sessions. Neither form can add
+a tool, scope, authority or external effect.
+
 ## 4. Data structures
 
 ### 4.1 `SOUL.md` (on-disk, byte-stable for the session)

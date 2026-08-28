@@ -246,6 +246,21 @@ Legacy `session-log.jsonl` не переписывается. Старая се�
 `metadata-only`; продолжение создаёт новую exact-v2 session и первую
 load-bearing migration-boundary row со ссылкой на id и hash источника.
 
+### 6.1 Forget-safe resume projection
+
+Exact private transcript, persisted frozen prefix и их hashes при `/resume` не
+изменяются. Но они не передаются provider напрямую: resume assembler каждый раз
+применяет текущие protected-memory tombstones, preference/skill revocations и
+source forget filters к provider-facing view. Если view отличается от
+persisted provider binding, server-side provider thread не resume-ится;
+создаётся linked provider generation с отдельным projection hash и code-owned
+control row. Raw audit остаётся byte-identical.
+
+Факт или learned preference, забытые после исходной Session, не могут попасть в
+provider prompt, retrieval, tool args или terminal quote при resume. Filter
+failure закрывает только provider resume и не уничтожает audit. Эта граница
+обязательна до LIVE `/resume` ADR-0109.
+
 До live activation recorder по-прежнему включается только явной production
 composition. После появления SQLite writer lease rollback текущего binary имеет
 ровно одну форму: exact `AISY_SESSION_JOURNAL=0`. В этом режиме runtime не

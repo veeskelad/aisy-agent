@@ -13,6 +13,8 @@ in this index so cross-references stay stable.
 
 | ID | Status | Date | Title | Tags |
 |----|--------|------|-------|------|
+| ADR-0110 | Принято | 2026-08-28 | [Одно подтверждение обучает разрешению, стиль — отдельный typed overlay](./2026-08-28-one-confirmation-adaptive-style.md) | approvals, personality, learning |
+| ADR-0109 | Принято | 2026-08-28 | [Ежедневная новая Session и воскресная консолидация памяти](./2026-08-28-daily-session-reset-weekly-memory.md) | sessions, memory, nightly |
 | ADR-0108 | Принято | 2026-08-25 | [Типизированные auto-skills активируются без выдачи полномочий](./2026-08-25-typed-auto-skills-without-authority.md) | skills, safety, learning |
 | ADR-0107 | Принято | 2026-08-23 | [Чистый публичный snapshot вместо раскрытия приватной истории](./2026-08-23-clean-public-snapshot.md) | security, publishing, git |
 | ADR-0106 | Принято | 2026-08-22 | [Managed Git и SSH-bundles вместо APT](./2026-08-22-managed-git-distribution-without-apt.md) | packaging, supply-chain, git, ssh |

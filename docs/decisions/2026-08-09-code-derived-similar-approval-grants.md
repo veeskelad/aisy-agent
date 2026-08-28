@@ -1,5 +1,12 @@
 # ADR-0093: Code-derived правила «похожие действия навсегда»
 
+> **Поправка от 2026-08-28.** [ADR-0110](./2026-08-28-one-confirmation-adaptive-style.md)
+> заменяет отдельный выбор persistent scope для обычной Tier-2 карточки:
+> подтверждение в `auto` и exact approved step в `plan` автоматически создают
+> описанный ниже durable matcher после явного disclosure scope. `confirm`
+> остаётся ask-every-time. Granularity, deny precedence и запрет Tier-3 grants
+> не изменены.
+
 **Статус:** Принято  
 **Дата:** 2026-08-09  
 **Теги:** safety, approvals, ux

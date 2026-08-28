@@ -1,22 +1,24 @@
 # Component 10: Nightly Consolidation — Specification
 
-**Status:** Accepted (wired live, ADR-0053)
+**Status:** Accepted; daily deterministic maintenance LIVE, weekly model-backed
+consolidation contract уточнён ADR-0109 и ждёт production activation
 **Component:** 10 / 17
 **Related ADRs:** ADR-0016, ADR-0017, ADR-0023, ADR-0029, ADR-0030, ADR-0108
 **Depends on:** Memory (03), Provider Routing (09), Safety (05), Observability & Verification (12)
 
-> The deterministic batch job that runs once a night to archive the day, distill memory,
-> prune skills, reclaim disk, and back up — proposing every nightly/free-form
+> The deterministic maintenance job that archives each day, plus a Sunday
+> model-backed window that distills memory and drafts skills — proposing every free-form
 > agent-authored change into staging behind a single human approval, and never
 > letting a forgotten fact crawl back.
 
 ## 1. Purpose
 
-Nightly Consolidation is the part of the harness that owns the night. During the day the
-model *proposes* (memory writes, skill drafts) and those writes are deliberately deferred
-so the frozen snapshot and KV-cache stay byte-stable (ADR-0007). At 03:30 local a
-cron-driven, code-driven pipeline *disposes*: it applies the deferred work once, atomically,
-while nothing is reading.
+Nightly Consolidation owns scheduled memory maintenance. At configured local
+time deterministic archival/day-log, retention, disk hygiene and backup run
+daily. Sunday additionally processes the closed range since the last successful
+weekly cursor through generator/judge, memory conflict/dedup and free-form skill
+drafting. Explicit protected `remember` remains a live turn operation and is not
+deferred until Sunday.
 
 This is almost entirely OS work, not CPU work. The model is a stateless probabilistic unit
 at ~70% adherence; the night is where the deterministic 100% layer earns its keep. The model
@@ -37,11 +39,13 @@ guard, at the index, and at the human gate.
 
 This component **owns**:
 
-- The **nightly job lifecycle**: cron trigger at 03:30 local, the exclusive run lock, the
-  least-privilege execution context, and the sequential, idempotent five-stage pipeline
-  (archival → memory consolidation → skill hygiene → DB/disk hygiene → git-push backup).
-- **Session archival**: content-addressed freezing of transcripts, rolling the daily file,
-  and minting the *normalized day log* that is the only input the generator reads — with the
+- The **scheduled lifecycle**: daily trigger at configured local time for
+  archival/day-log, retention, DB/disk hygiene and backup; Sunday (or missed-slot
+  catch-up) additionally runs memory consolidation and free-form skill drafting.
+  Both use least privilege, exclusive run ownership and idempotent stages.
+- **Session archival**: content-addressed freezing of transcripts and rolling daily files.
+  The weekly generator reads a stable ordered range
+  `(lastSuccessfulConsolidationCursor, cutoff]` of normalized logs, with the
   forget-list filter applied **at ingestion** (ADR-0023, ADR-0030).
 - **The generator/judge orchestration**: invoking the cheap generator to propose
   `ADD/UPDATE/DELETE/NOOP` ops and skill drafts, running the deterministic validators, then
@@ -56,9 +60,12 @@ This component **owns**:
   memory or free-form skill draft is promoted except by the human tapping
   Approve. ADR-0108's immediate typed-recipe path is outside this component and
   cannot consume `draftSkills()` output.
-- The **morning approval card**: the single artifact carrying memory edits, blocked
-  resurrections, skill changes, hygiene report, backup status, and cost; with each staged
-  patch hashed at judge-accept and re-verified at promotion (ADR-0029).
+- The **morning approval card when pending changes exist**: the single artifact
+  carrying memory edits, blocked resurrections and skill changes, with each
+  staged patch hashed at judge-accept and re-verified at promotion (ADR-0029).
+  Hygiene, backup, cost and degraded-stage evidence live in bounded `NightResult`
+  and Doctor; an existing non-empty card may mirror them, but operational status
+  never creates an empty approval card.
 - **Crash-recovery ordering** for the commit step: the defined order between
   (flip `invalid_at` + reindex, atomic) and (git commit/push), and how a crash between them
   recovers (Eng-7).
@@ -86,6 +93,52 @@ This component **does not**:
   path owns distinct strict-schema ports and exact provider/model/revision
   identities; the nightly memory-diff judge is not an acceptable substitute.
 
+### 2.1 Daily и weekly cadence
+
+Daily deterministic stages never invoke generator/judge and never create a
+memory approval card. Weekly model stages become due for each local week after
+Sunday's configured slot. If Sunday was missed, the same week remains due on
+Monday/startup until a terminal weekly result is durable.
+
+The weekly source is a durable cohort with one frozen cutoff and exact Project
+members. Each member is keyed by
+`bot + operator + profile + contextKind + projectId`, owns its own `(cursor,
+cutoff]` range and terminal state, and reads completed normalized
+Session/day-log records in stable code-owned order. Each record has a durable
+consumed id; retry and restart cannot skip or count it twice. Provider/judge
+failure leaves only that member pending and does not roll back or repeat a
+successful sibling. A member cursor advances atomically with its terminal
+staging result, not on job start. Aggregate result is code-owned
+`complete-zero | complete-n(n) | partial-failure(n, failedMemberCount,
+boundedCodes)` and becomes publishable only after all cohort members are
+terminal. Any quarantined member forces `partial-failure`, even when successful
+staging is empty. If catch-up finishes after daily reset, a
+separate durable at-most-once weekly-result outbox delivers the same contract
+without repeating a daily-reset claim and arms the transport shortcut only
+after `delivered`. Manual `/consolidate`
+receives an idempotent ad-hoc cohort id and does not silently advance scheduled
+member cursors. A cross-cohort artifact registry keyed by exact member scope,
+source consumed ids hash, input projection hash, live-memory/precondition
+snapshot hash, generator/judge config hashes and policy revision lets a
+scheduled member attach an already proven identical manual artifact without
+repeating provider calls/cards; it still advances only its own scheduled cursor.
+Any key difference runs normally.
+
+Artifact lifecycle is normative:
+
+| Manual artifact state | Scheduled behavior |
+|---|---|
+| `pending` with current hashes/preconditions | Attach the same pending card and count it in `N`; no second card/provider call |
+| `approved/applying/ambiguous` | Recover the exact promotion WAL before the cohort member can become terminal |
+| `applied` | Record `deduped-applied`, advance the scheduled member cursor, contribute zero pending changes |
+| `rejected` | Record `deduped-rejected`, advance the scheduled member cursor, contribute zero pending changes |
+| `expired` | Deterministically revalidate; on success issue a new nonce for the same artifact without provider, on mismatch start a new keyed run |
+| `forgotten/revoked` | Never reuse; re-run forget filtering/projection and derive a new key/run |
+| `corrupt` | Quarantine the member and publish `partial-failure` |
+
+Restart resumes this state machine. Consumed artifacts never arm a transport
+shortcut and only actually pending, currently valid artifacts contribute to `N`.
+
 ## 3. Interfaces
 
 Conceptual API surface; signatures are illustrative, not binding, and stay inside the
@@ -96,7 +149,7 @@ agent tools.
 // illustrative, not binding
 
 interface NightlyJob {
-  // Entry point invoked by cron at 03:30 local. Returns only after the morning card is staged.
+  // Entry point invoked by cron at 03:30 local. Returns after the aggregate result is durable.
   run(now: Date): Promise<NightResult>
 }
 
@@ -250,7 +303,7 @@ NIGHTLY PIPELINE (deterministic orchestration, 100%)
          missing neighbor edges (unresolvable supersedes/       -> staging/lint/broken-edges.*
            contradicts/extends fact_key references)
     -> proposals written to staging/ alongside Stage 2 output; NOT auto-promoted
-    -> if generator unavailable: SKIP Stage 2b entirely; morning card notes "lint pass skipped" + reason
+    -> if generator unavailable: SKIP Stage 2b entirely; NightResult records bounded reason code
 
   STAGE 3  Skill hygiene                                          [same generator->validators->judge discipline]
     -> validators add dry_run_ok + has_check_section             [code, 100%, BEFORE judge]
@@ -263,9 +316,9 @@ NIGHTLY PIPELINE (deterministic orchestration, 100%)
 
   STAGE 5  Git-push backup                                       [deterministic]
     -> commit promoted-on-approval changes; push fast-forward ONLY (never --force)
-    -> failure: retry, then report on card (non-fatal, never silent)
+    -> failure: retry, then report in NightResult/Doctor (non-fatal, never silent)
 
-  -> assemble MORNING CARD (staging only; nothing live changed)  [code]
+  -> publish aggregate result; create/reuse approval card only for valid pending staging
   -> RunLock.release()
 ```
 
@@ -276,8 +329,8 @@ After Stage 2 synthesis, a lint pass scans the working memory for structural hea
 - **Inputs:** cross-link references in `working/*.md` files, the fact_key neighbor index in SQLite, and annotation timestamps.
 - **Outputs:** orphan report (pages/facts with no inbound cross-links), stale annotation list (annotations with no update past the configured threshold), missing neighbor list (fact_keys referenced via `supersedes`/`contradicts`/`extends` edges that cannot be resolved).
 - **Behavior:** The generator proposes remediation for each finding (e.g., delete orphan, refresh stale annotation, flag unresolvable edge). Proposals are staged in `staging/` alongside Stage 2 output and promoted only on human approval — the same gate as all other consolidation output.
-- **Graceful degradation:** If the generator is unavailable, Stage 2b is skipped entirely. The morning card reports "lint pass skipped" with a reason. No error is raised; the nightly run completes normally.
-- **Cost budget:** Stage 2b adds approximately 10–30% more LLM tokens to the nightly batch compared to Stage 2 alone. The morning card includes a cost line for Stage 2b separately.
+- **Graceful degradation:** If the generator is unavailable, Stage 2b is skipped entirely. `NightResult`/Doctor records `lint_skipped` with a bounded reason code; no empty approval card is created. No error is raised; the deterministic nightly stages complete normally.
+- **Cost budget:** Stage 2b adds approximately 10–30% more LLM tokens to the nightly batch compared to Stage 2 alone. `NightResult` records Stage 2b cost separately; a non-empty approval card may mirror it.
 
 Promotion happens later, on the human tap, not during the night run:
 
@@ -318,7 +371,7 @@ contains a commit the live DB has not durably applied.
 
 **Backup read-back, restore, and manual trigger.** After the Stage-5 git-push backup, a
 read-back verification fetches the remote and confirms the pushed ref equals local `HEAD`;
-a mismatch or failure is reported on the morning card and never silently ignored. The
+a mismatch or failure is reported in `NightResult`/Doctor and never silently ignored. The
 documented restore path reconstructs the SQLite memory index from the backup remote and
 re-applies the full forget invariant on the way in, so a previously forgotten fact does not
 reappear post-restore (ADR-0030). A manual `/consolidate` trigger (from
@@ -371,25 +424,25 @@ deterministic code.
 
 | Failure | Detection | Behavior | Recovery |
 |---|---|---|---|
-| **Cold start** — first run, no prior lock / no snapshot / empty staging | Lock absent; `memory.snapshot.ready` consumed | **Proceed clean**: acquire lock, archive, consolidate off the current snapshot; empty staging produces an informational-only card | Normal run; next night has prior state |
+| **Cold start** — first run, no prior lock / no snapshot / empty staging | Lock absent; `memory.snapshot.ready` consumed | **Proceed clean**: acquire lock, archive, consolidate off the current snapshot; proven empty staging produces `complete-zero` notification without approval card/provider and arms `zero-staging` only after delivery | Normal run; next night has prior state |
 | **Prior run still alive** (overlap) | `RunLock.acquire` finds live `{pid,bootId,startTime}` triple | **Abort + alert**; never run two nights concurrently | Next cron tick; or operator clears after investigating |
 | **Stale lock from a crashed run / PID reuse** (CSO-H6) | Recorded triple does not resolve to a live job process | **Reclaim safely**: only the PID-reuse-safe triple mismatch reclaims; a recycled unrelated PID never satisfies the triple, so the lock is not blindly stolen | Lock reacquired; run proceeds |
 | **Lock held too long** (CSO-H6) | Held past `maxHeldMs` | **Alert (`held_too_long`)**, do not auto-steal | Operator inspects the hung run before any manual reset |
 | **Least-privilege context violated** — prod creds present or egress beyond backup remote (CSO-H6) | Startup assertion on env + egress allowlist | **Fail-closed**: abort the run before any stage | Fix the cron/job context to least-privilege; rerun |
 | **Memory / resurrection-guard unavailable** (03 down) | Guard/indexer call errors | **Fail-closed**: no commit, no reindex; consolidation candidates held in staging only | Retry next night; live brain unchanged |
-| **Provider Routing / generator unavailable** (09 down) | Batch endpoint error/timeout | **Degrade**: skip stages 2–3 (no drafts); stages 1, 4, 5 still run; card notes consolidation skipped | Next night when provider returns |
-| **Judge model unavailable** (different provider down) | Judge call error/timeout | **Degrade, fail-safe**: candidates that passed validators+guard are **held unjudged** in staging, never auto-accepted | Judge returns next night; nothing promoted unjudged |
-| **Input classifier / quarantine unavailable** (CSO-M5) | Classifier call errors before judge read | **Fail-closed for the judge step**: judge is not invoked on un-quarantined diff; candidates held | Classifier returns; judge runs next night |
+| **Provider Routing / generator unavailable** (09 down) | Batch endpoint error/timeout | **Degrade**: stages 1, 4, 5 complete; affected weekly member remains pending, no approval card/complete result is published, while daily reset may report only Session rotation | Catch-up resumes the same member when provider returns |
+| **Judge model unavailable** (different provider down) | Judge call error/timeout | **Degrade, fail-safe**: candidates that passed validators+guard are held unjudged, member remains pending and no approval card is issued | Catch-up resumes the exact judge stage; nothing promoted unjudged |
+| **Input classifier / quarantine unavailable** (CSO-M5) | Classifier call errors before judge read | **Fail-closed for the judge step**: judge is not invoked on un-quarantined diff; member remains pending and no approval card is issued | Classifier returns; catch-up resumes the exact stage |
 | **Generator emits `is_human_confirmed`** (CSO-C3) | Pre-staging strip pass | **Strip + log**: field removed; op kept as a plain proposal | None needed; flag can only be set by a human tap |
 | **Resurrection attempt at consolidation commit** (ADR-0023/0030) | Guard match (tombstone / forget-list / human-confirmed delete) on ADD/UPDATE | **Block**: op routed to "Tried to resurrect — review" card section, never silently passed to judge or committed | Human re-adds by hand if truly intended |
 | **Resurrection attempt at reindex/promotion** (ADR-0030) | Guard re-run before reindex on the promotion path | **Block this item**: no commit, no reindex; routed to human review | Human review; rest of batch proceeds |
 | **Staging swap between judge-accept and promotion (TOCTOU)** (CSO-H6, ADR-0029) | `hashAtPromote != hashAtAccept` | **Abort the item**: no promotion, route to human review | Re-stage, re-judge, re-approve |
 | **Crash after memory txn, before git push** (Eng-7) | Commit journal reads `reindexed`, no matching git commit | **Resume at git step**: re-run git add/commit/push (idempotent) | Automatic on restart |
 | **Crash during memory txn** (Eng-7) | SQLite rollback; journal stays `pending` | **Re-attempt item from start**: re-pass guard, re-do atomic txn | Automatic on restart |
-| **DB integrity check fails before VACUUM** | `PRAGMA integrity_check != ok` | **Fail-closed**: skip VACUUM/optimize; snapshot retained; report on card | Operator inspects DB from snapshot |
-| **Git push fails** (network / non-fast-forward) | Push returns error / rejected | **Non-fatal**: retry, then **always report** on card; never `--force` | Operator resolves; backup retried next night |
+| **DB integrity check fails before VACUUM** | `PRAGMA integrity_check != ok` | **Fail-closed**: skip VACUUM/optimize; snapshot retained; report in `NightResult`/Doctor | Operator inspects DB from snapshot |
+| **Git push fails** (network / non-fast-forward) | Push returns error / rejected | **Non-fatal**: retry, then **always report** in `NightResult`/Doctor; never `--force` | Operator resolves; backup retried next night |
 | **Human never opens the card** | No approval tap by next run | **Hold (safe default)**: no memory edit, no skill change applied; agent keeps yesterday's brain | Card persists; approve later |
-| **Verification miss** — claimed effect has no trace (ADR-0017) | Trace probe fails (file/row/size/ref) | **Report as a card line item**, do not paper over | Operator inspects; effect re-attempted next night |
+| **Verification miss** — claimed effect has no trace (ADR-0017) | Trace probe fails (file/row/size/ref) | **Report in bounded `NightResult`/Doctor evidence**, do not paper over | Operator inspects; effect re-attempted next night |
 
 ## 8. Security & threat model
 
@@ -489,25 +542,29 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
 24. **AC-10-24** — DB/disk hygiene takes the pre-VACUUM DB snapshot before `VACUUM`/`optimize`/prune
     runs; a `--force` git push is denied; these ops run only within Safety's carve-out allowlist. (§6,
     ADR-0012)
-25. **AC-10-25** — A failed git push is non-fatal to the run, is retried, and is reported on the morning
-    card's backup-status section; it is never silently swallowed and is never resolved with `--force`. (§7)
-26. **AC-10-26** — Trace-based verification produces a card line item when a claimed effect has no trace:
+25. **AC-10-25** — A failed git push is non-fatal to the run, is retried, and is reported in bounded
+    `NightResult`/Doctor evidence; it is never silently swallowed and is never resolved with `--force`. (§7)
+26. **AC-10-26** — Trace-based verification produces a bounded run/Doctor finding when a claimed effect has no trace:
     archived ⇒ file present at content-addressed hash; deleted ⇒ row `invalid_at != NULL` and absent from
     an FTS5 query; vacuumed ⇒ size delta and `PRAGMA integrity_check = ok`; pushed ⇒ remote ref advanced
     to the new commit hash. A claim with no matching trace is reported, not accepted. (ADR-0017)
-27. **AC-10-27** — Cold start (first ever run): the job acquires a fresh lock, completes all stages, and
-    produces an informational-only morning card when staging is empty, without error. (§7 cold start)
+27. **AC-10-27** — Cold start (first ever run): the job acquires a fresh lock,
+    completes all stages and, when staging is proven empty, publishes
+    `complete-zero` without approval card/provider; `zero-staging` arms only
+    after notification delivery. (§7 cold start)
 28. **AC-10-28** — When the human never approves, the next session's frozen snapshot is identical to the
     prior one for every held item (no memory edit and no skill change applied on silence). (§8
     hold-default, ADR-0007)
 29. **AC-10-29** — When Stage 2b runs and finds an orphaned `working/*.md` page, a remediation proposal
     appears in `staging/` and is not auto-promoted to live memory. (§5 Stage 2b)
 30. **AC-10-30** — When Stage 2b finds a broken typed relationship edge (`supersedes`/`contradicts`/`extends`
-    referencing a missing `fact_key`), the morning card lists it and no silent data loss occurs. (§5 Stage 2b)
+    referencing a missing `fact_key`), its pending remediation appears in the
+    non-empty approval card and no silent data loss occurs. (§5 Stage 2b)
 31. **AC-10-31** — When the generator is unavailable during Stage 2b, the nightly run completes and the
-    morning card contains the text "lint pass skipped". (§5 Stage 2b)
+    bounded `NightResult`/Doctor evidence contains `lint_skipped`; this status
+    alone does not create an approval card. (§5 Stage 2b)
 32. **AC-10-32** — after a backup push, a read-back verification confirms the pushed ref equals local
-    HEAD; a mismatch/failure is reported on the morning card and never silently ignored.
+    HEAD; a mismatch/failure is reported in `NightResult`/Doctor and never silently ignored.
 33. **AC-10-33** — a restore from the backup remote reconstructs the SQLite index and re-applies the
     forget-list invariant, so a previously forgotten fact does not reappear post-restore. *(ADR-0030)*
 34. **AC-10-34** — a manual `/consolidate` trigger runs the same generator→judge→staging pipeline and
@@ -549,9 +606,35 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     одноразово разрешает следующей обычной реплике bare `Покажи` при непустом
     staging открыть существующую карточку без запуска AgentRunner/provider.
     Любой другой обычный текст снимает разрешение; старый staging сам его не
-    создаёт, а активный AgentRunner сохраняет steering-приоритет. Если staging
-    пуст, transport не поглощает реплику и передаёт её обычному диалогу;
-    конкретное `Покажи <объект>` не считается этим shortcut.
+    создаёт, а активный AgentRunner сохраняет steering-приоритет. Уведомление с
+    нулём создаёт отдельный одноразовый `zero-staging` context: bare `Покажи`
+    получает `Новых правок нет.` без карточки и provider; это не
+    `open-staging` и допустимо только для `complete-zero`. `partial-failure`
+    сообщает число failed members, при `N > 0` открывает только доказанные
+    successful artifacts, а при `N = 0` отвечает `Доступных правок нет; часть
+    проектов не проверена.` без provider. Конкретное `Покажи <объект>` не
+    считается shortcut.
+45. **AC-10-45** — Sunday cohort фиксирует общий cutoff и отдельный cursor/state
+    для каждого exact Project member. Каждый `(cursor, cutoff]` включает все
+    завершённые records Monday–Sunday ровно один раз; provider failure Project B
+    не продвигает B и не повторяет успешный provider call Project A. Missed
+    Sunday catch-up в Monday/startup, restart и A-success/B-failure не
+    пропускают, не дублируют и не смешивают input. Aggregate result выходит
+    после terminal state всех members; результат после daily reset доставляется
+    отдельным durable at-most-once outbox и вооружает shortcut только после
+    `delivered`. A-success/B-quarantined даёт `partial-failure`, никогда не
+    `complete-zero`, и открывает только A artifacts.
+46. **AC-10-46** — daily deterministic stages не вызывают generator/judge и не
+    создают staging; manual ad-hoc consolidation идемпотентен и не подменяет
+    scheduled weekly member cursors. Manual-success→Sunday с exact одинаковым
+    artifact key переиспользует terminal artifact без второго provider call/card
+    и атомарно продвигает только scheduled member cursor; mismatch не
+    переиспользуется. Restart-матрица `pending/approved/applying/ambiguous/
+    applied/rejected/expired/forgotten/revoked/corrupt → Sunday` доказывает, что
+    только valid pending входит в `N`; `approved/applying/ambiguous` сначала
+    восстанавливают exact promotion WAL и до этого не делают member terminal и
+    не продвигают cursor; applied/rejected не создают card,
+    forgotten/revoked не resurrect'ятся, а corrupt даёт `partial-failure`.
 
 ## 10. Open questions
 
