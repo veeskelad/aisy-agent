@@ -91,8 +91,17 @@ checkpoint- и provider-работы.
    уже принятый update: transport оставляет незавершённый update неподтверждённым,
    и после recovery он снова проходит обычный handler.
 14. Запланированный `/restart` получает отдельный одноразовый permit, связанный с
-   текущими session, deadline и hash устойчивого intent. `exit(75)` без permit,
-   с просроченным permit или после replay считается аварийным.
+   текущими session, deadline и hash устойчивого intent. Durable intent также
+   содержит code-owned identity входного Telegram `update_id`. После замены
+   процесса transport до любых session/project/model mutations поглощает ровно
+   один replay того же update и нормально завершает handler, чтобы long polling
+   продвинул offset. Более новый update не поглощается; произвольный текст или
+   модельное утверждение не могут выбрать identity. Для ранее опубликованных
+   intent без identity допустим только одноразовый startup-совместимый случай:
+   первый разрешённый update и точная кнопка новой Session при exact причине
+   `новая сессия`; любой другой первый update снимает fallback без подавления.
+   `exit(75)` без permit, с просроченным permit или после replay считается
+   аварийным.
 15. Restart loop имеет code-owned backoff и бюджет. Durable quarantine по
     исчерпанию бюджета, повреждённому state или недоказуемой authority сохраняет
     ноль child и не снимается автоматически. Только quarantine
@@ -174,6 +183,12 @@ checkpoint- и provider-работы.
 - timeout ACK захвата и освобождения, malformed и oversized кадр не раскрывают
   подробностей;
 - restart storm останавливается по backoff и бюджету;
+- плановый restart из Telegram после замены child поглощает replay exact
+  `update_id` до побочных эффектов и не повторяет сообщение, создание Session,
+  переключение Project/model или новый restart; следующий update проходит;
+- legacy intent `новая сессия` без transport identity подавляет только первый
+  exact reply-keyboard update новой Session и не может проглотить произвольное
+  либо более позднее сообщение;
 - real-process parent без stdout/IPC/diagnostic handles переживает unexpected
   child exit, дожидается code-owned backoff без `unsettled top-level await` и
   запускает один replacement без рестарта service manager;

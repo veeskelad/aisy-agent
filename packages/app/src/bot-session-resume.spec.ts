@@ -80,6 +80,7 @@ function harness(input: {
   }
   const prepared: string[] = []
   const restartRuntime = {
+    previous: () => null,
     prepare: (reason: string) => {
       prepared.push(reason)
       return { requestedAt: '2026-08-07T00:00:00.000Z', reason, activeTurns: 0 }
@@ -139,7 +140,7 @@ describe('sessions screen', () => {
 
     expect(prefix).toHaveBeenCalledWith('session-o')
     expect(resume).toHaveBeenCalledWith('session-old')
-    expect(h.prepared).toEqual(['возврат в сессию'])
+    expect(h.prepared).toEqual(['telegram-update:1 · возврат в сессию'])
   })
 
   it('does not mutate state for an ambiguous /resume prefix', async () => {
@@ -161,7 +162,7 @@ describe('sessions screen', () => {
     await h.bot.handleUpdate(tap('session:token-1'))
 
     expect(resume).toHaveBeenCalledWith('session-old')
-    expect(h.prepared).toEqual(['возврат в сессию'])
+    expect(h.prepared).toEqual(['telegram-update:2 · возврат в сессию'])
   })
 
   it('says so instead of restarting when the switch is refused', async () => {

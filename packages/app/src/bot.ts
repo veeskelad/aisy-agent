@@ -148,6 +148,19 @@ const CUSTOM_SERVICE = '\u0000custom'
  */
 const STALE_SCREEN = 'Экран устарел — открой раздел заново.'
 const NOT_WIRED = 'Раздел ещё не подключён.'
+const TELEGRAM_RESTART_REASON = /^telegram-update:(0|[1-9]\d*) · /u
+
+function restartReasonForTelegramUpdate(updateId: number, reason: string): string {
+  if (!Number.isSafeInteger(updateId) || updateId < 0) throw new Error('INVALID_TELEGRAM_UPDATE_ID')
+  return `telegram-update:${updateId} · ${reason.trim() || 'по просьбе оператора'}`
+}
+
+function restartTelegramUpdateId(reason: string): number | null {
+  const match = TELEGRAM_RESTART_REASON.exec(reason)
+  if (match?.[1] === undefined) return null
+  const updateId = Number(match[1])
+  return Number.isSafeInteger(updateId) ? updateId : null
+}
 
 const SERVICE_KEY_ERRORS: Record<string, string> = {
   VALUE_EMPTY: 'Пустое значение — пришли сам ключ.',
@@ -565,7 +578,8 @@ export interface TelegramBotDeps {
    * Restart the runtime. Returns a refusal string when it must not happen —
    * nothing would bring the process back, or a turn is still running.
    */
-  restartRuntime?: Pick<RuntimeRestart, 'prepare' | 'commitExit' | 'cancel'>
+  restartRuntime?: Pick<RuntimeRestart, 'prepare' | 'commitExit' | 'cancel'> &
+    Partial<Pick<RuntimeRestart, 'previous'>>
   /**
    * Transcription providers (ADR-0085). The list says of each whether audio
    * leaves the host; choosing one that does is always explicit.
@@ -988,6 +1002,7 @@ let pendingFormUntilMs = 0
   // The in-flight turn's abort controller; /stop fires it for a hard-kill.
   let currentAbort: AbortController | null = null
   let restartPending = false
+  let recoveredRestart = deps.restartRuntime?.previous?.() ?? null
   // The last language the operator actually used; a letterless message ("?") keeps it.
   let lastLang: LangSignal | null = null
   // The menu keyboard rides on the next message this bot sends and is then
@@ -1006,6 +1021,38 @@ let pendingFormUntilMs = 0
   // Single-operator allowlist: silently drop anything off the allowed chat.
   bot.use(async (ctx, next) => {
     if (ctx.chat?.id !== deps.allowedChatId) return
+    await next()
+  })
+
+  // A planned restart exits from inside the Telegram handler, before grammY can
+  // advance the long-poll offset. The replacement process therefore sees the
+  // same update once more. Drop only the update bound into the durable restart
+  // intent, before any session/project/model mutation can run again.
+  bot.use(async (ctx, next) => {
+    const previous = recoveredRestart
+    if (previous === null) {
+      await next()
+      return
+    }
+
+    const previousUpdateId = restartTelegramUpdateId(previous.reason)
+    if (previousUpdateId !== null) {
+      if (ctx.update.update_id === previousUpdateId) {
+        recoveredRestart = null
+        return
+      }
+      if (ctx.update.update_id > previousUpdateId) recoveredRestart = null
+      await next()
+      return
+    }
+
+    // One-release bridge for the already deployed loop, whose old receipt did
+    // not carry update_id. It is consumed by the first allowed update either
+    // way, so a later legitimate button press can never be swallowed.
+    recoveredRestart = null
+    if (previous.reason === 'новая сессия' &&
+      typeof ctx.message?.text === 'string' &&
+      resolveMenu(ctx.message.text) === 'new_session') return
     await next()
   })
 
@@ -1410,7 +1457,7 @@ let pendingFormUntilMs = 0
   }
 
   /** Reached from the menu and from the sessions screen; one behaviour either way. */
-  const startNewSessionFromButton = async (): Promise<void> => {
+  const startNewSessionFromButton = async (updateId: number): Promise<void> => {
     if (!deps.startNewSession) {
       await bot.api.sendMessage(deps.allowedChatId, NOT_WIRED)
       return
@@ -1425,7 +1472,7 @@ let pendingFormUntilMs = 0
       `🆕 Новая сессия «${result.name}». Перезапускаюсь, чтобы разговор начался с чистого листа — память о тебе остаётся.`,
     )
     await runRestart('новая сессия', (message) =>
-      bot.api.sendMessage(deps.allowedChatId, message))
+      bot.api.sendMessage(deps.allowedChatId, message), updateId)
   }
 
   /** The sessions screen, reached both from the menu and from a project card. */
@@ -1471,10 +1518,10 @@ let pendingFormUntilMs = 0
       return
     }
     await ctx.reply(`↩️ Возвращаюсь в сессию «${target.name}».`)
-    await runRestart('возврат в сессию', (message) => ctx.reply(message))
+    await runRestart('возврат в сессию', (message) => ctx.reply(message), ctx.update.update_id)
   })
 
-  const handleMenu = async (action: MenuAction): Promise<void> => {
+  const handleMenu = async (action: MenuAction, updateId: number): Promise<void> => {
     deps.monitoringControls?.cancelForm()
     if (action === 'projects') {
       if (!deps.projectControls) {
@@ -1516,7 +1563,7 @@ let pendingFormUntilMs = 0
         await bot.api.sendMessage(deps.allowedChatId, lines.join('\n'))
       }
     } else if (action === 'new_session') {
-      await startNewSessionFromButton()
+      await startNewSessionFromButton(updateId)
     } else if (action === 'skills') {
       if (!deps.skillControls) {
         await bot.api.sendMessage(deps.allowedChatId, renderSkillCatalog(deps.skillsMenu?.() ?? []))
@@ -2692,7 +2739,11 @@ let pendingFormUntilMs = 0
   })
 
   bot.command('restart', async (ctx) => {
-    await runRestart((ctx.match ?? '').trim(), (message) => ctx.reply(message))
+    await runRestart(
+      (ctx.match ?? '').trim(),
+      (message) => ctx.reply(message),
+      ctx.update.update_id,
+    )
   })
 
   // Both the command and the settings button go through here: a restart that
@@ -2700,9 +2751,10 @@ let pendingFormUntilMs = 0
   const runRestart = async (
     reason: string,
     say: (message: string) => Promise<unknown>,
+    updateId: number,
   ): Promise<void> => {
     if (!deps.restartRuntime) { await say('❌ Перезапуск не настроен.'); return }
-    const result = deps.restartRuntime.prepare(reason)
+    const result = deps.restartRuntime.prepare(restartReasonForTelegramUpdate(updateId, reason))
     if (result === 'not-supervised') {
       await say('❌ Некому запустить процесс обратно — перезапуск был бы просто остановкой.')
       return
@@ -3365,7 +3417,7 @@ let pendingFormUntilMs = 0
           // which model answered. Restarting is honest and costs a few seconds.
           await bot.api.sendMessage(deps.allowedChatId, `🧠 Модель: ${model}. Перезапускаюсь…`)
           await runRestart(`смена модели на ${model}`, (message) =>
-            bot.api.sendMessage(deps.allowedChatId, message))
+            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
           return
         }
         case 'custom-model':
@@ -3474,7 +3526,7 @@ let pendingFormUntilMs = 0
         case 'restart': {
           await bot.api.sendMessage(deps.allowedChatId, '🔄 Перезапускаюсь…')
           await runRestart('перезапуск из настроек', (message) =>
-            bot.api.sendMessage(deps.allowedChatId, message))
+            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
           return
         }
         case 'reconnect-brain': {
@@ -3488,7 +3540,7 @@ let pendingFormUntilMs = 0
             '🔄 Сбрасываю мозг и перезапускаюсь в режиме настройки. Напиши /start через полминуты.',
           )
           await runRestart('переподключение мозга', (message) =>
-            bot.api.sendMessage(deps.allowedChatId, message))
+            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
           return
         }
       }
@@ -3741,7 +3793,7 @@ let pendingFormUntilMs = 0
       }
       const tap = deps.sessionControls.handle(data)
       if (tap.kind === 'new') {
-        await startNewSessionFromButton()
+        await startNewSessionFromButton(ctx.update.update_id)
         return
       }
       if (tap.kind === 'resume') {
@@ -3761,7 +3813,7 @@ let pendingFormUntilMs = 0
         // transcript and approval port are derived once at boot, so the honest
         // way into another session is to come back up in it.
         await runRestart('возврат в сессию', (message) =>
-          bot.api.sendMessage(deps.allowedChatId, message))
+          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
         return
       }
       await ctx.editMessageText(tap.view.text, {
@@ -3791,7 +3843,7 @@ let pendingFormUntilMs = 0
         // back up in the new context is both simpler and impossible to get
         // half-right.
         await runRestart('переключение проекта', (message) =>
-          bot.api.sendMessage(deps.allowedChatId, message))
+          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
         return
       }
       if (outcome.kind === 'unavailable') {
@@ -3853,7 +3905,7 @@ let pendingFormUntilMs = 0
     // instead of feeding the label to the agent as a task.
     const menuAction = resolveMenu(text)
     if (menuAction) {
-      await handleMenu(menuAction)
+      await handleMenu(menuAction, ctx.update.update_id)
       return
     }
 
@@ -3945,7 +3997,7 @@ let pendingFormUntilMs = 0
       deps.setBrainModel(model)
       await bot.api.sendMessage(deps.allowedChatId, `🧠 Модель: ${model}. Перезапускаюсь…`)
       await runRestart(`смена модели на ${model}`, (message) =>
-        bot.api.sendMessage(deps.allowedChatId, message))
+        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
       return
     }
 
@@ -3962,7 +4014,7 @@ let pendingFormUntilMs = 0
         `📁 Проект «${created.name}» создан: ${created.root}\nПерезапускаюсь в нём.`,
       )
       await runRestart('новый проект', (message) =>
-        bot.api.sendMessage(deps.allowedChatId, message))
+        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
       return
     }
 
@@ -4119,7 +4171,7 @@ let pendingFormUntilMs = 0
             await ctx.reply(outcome.text)
             if (outcome.kind === 'switched') {
               await runRestart('переключение проекта', (message) =>
-                bot.api.sendMessage(deps.allowedChatId, message))
+                bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
             }
           } else if (outcome.kind === 'view' || outcome.kind === 'stale') {
             await ctx.reply(outcome.view.text, {

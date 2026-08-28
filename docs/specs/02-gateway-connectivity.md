@@ -1457,6 +1457,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     restart снова проходит обычный handler. В карточке нет таймера, workspace,
     plan/tool history, exception/schema или текста пользователя; debug-проекция
     может сохранять content-redacted диагностику.
+105. **AC-02-105** — Запланированный restart, инициированный Telegram update,
+    записывает его code-owned `update_id` в durable restart intent. После запуска
+    новый process до любых session/project/model mutations поглощает ровно replay
+    того же update, ничего не отправляет и не создаёт новый restart; следующий
+    update обрабатывается обычно. Совместимость с уже выпущенным intent без
+    identity ограничена первым разрешённым update после startup: только exact
+    reply-keyboard действие «Новая сессия» при exact причине `новая сессия`
+    поглощается, а любое другое первое событие проходит и отключает fallback.
 
 ## 10. Open questions
 

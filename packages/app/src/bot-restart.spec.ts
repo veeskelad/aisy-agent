@@ -41,8 +41,12 @@ function update(): Update {
 
 function harness(
   restartRuntime: Pick<NonNullable<TelegramBotDeps['restartRuntime']>, 'prepare' | 'commitExit'>
-    & Partial<Pick<NonNullable<TelegramBotDeps['restartRuntime']>, 'cancel'>>,
-  options: { replyError?: Error; order?: string[] } = {},
+    & Partial<Pick<NonNullable<TelegramBotDeps['restartRuntime']>, 'cancel' | 'previous'>>,
+  options: {
+    replyError?: Error
+    order?: string[]
+    deps?: Partial<TelegramBotDeps>
+  } = {},
 ) {
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = []
   const { bot } = makeTelegramBot({
@@ -53,7 +57,12 @@ function harness(
     model: 'test-model',
     debounceMs: 1,
     registerCommands: false,
-    restartRuntime: { cancel: () => 'cancelled', ...restartRuntime },
+    ...options.deps,
+    restartRuntime: {
+      cancel: () => 'cancelled',
+      previous: () => null,
+      ...restartRuntime,
+    },
   })
   bot.botInfo = BOT_INFO
   bot.api.config.use(async (_previous, method, payload) => {
@@ -76,7 +85,7 @@ describe('/restart command', () => {
 
     await h.bot.handleUpdate(update())
 
-    expect(prepare).toHaveBeenCalledWith('после обновления')
+    expect(prepare).toHaveBeenCalledWith('telegram-update:1 · после обновления')
     expect(commitExit).not.toHaveBeenCalled()
     expect(h.replies()).toContain('Не удалось надёжно записать намерение перезапуска')
     expect(h.replies()).toContain('Процесс оставлен запущенным')
@@ -159,12 +168,93 @@ describe('/restart command', () => {
     expect(commitExit).not.toHaveBeenCalled()
     expect(cancel).toHaveBeenCalledWith(intent)
   })
+
+  it('drops the exact replay after a fresh process starts, before any reply or restart', async () => {
+    const intent = validRestartIntent()
+    const prepare = vi.fn(() => intent)
+    const commitExit = vi.fn(async () => 'committed' as const)
+    const first = harness({ prepare, commitExit })
+
+    await first.bot.handleUpdate(update())
+
+    const nextIntent = Object.freeze({
+      requestedAt: '2026-07-29T00:01:00.000Z',
+      reason: 'telegram-update:2 · после обновления',
+      activeTurns: 0,
+    })
+    const replayPrepare = vi.fn(() => nextIntent)
+    const replayCommit = vi.fn(async () => 'committed' as const)
+    const second = harness({
+      previous: () => intent,
+      prepare: replayPrepare,
+      commitExit: replayCommit,
+    })
+
+    await second.bot.handleUpdate(update())
+
+    expect(replayPrepare).not.toHaveBeenCalled()
+    expect(replayCommit).not.toHaveBeenCalled()
+    expect(second.replies()).toBe('')
+
+    const next = update()
+    next.update_id = 2
+    await second.bot.handleUpdate(next)
+
+    expect(replayPrepare).toHaveBeenCalledWith('telegram-update:2 · после обновления')
+    expect(replayCommit).toHaveBeenCalledWith(nextIntent)
+  })
+
+  it('bridges the deployed legacy new-session loop only for the first exact menu update', async () => {
+    const startNewSession = vi.fn(async () => ({ ok: true as const, name: 'New session' }))
+    const prepare = vi.fn()
+    const h = harness({
+      previous: () => Object.freeze({
+        requestedAt: '2026-08-28T00:00:00.000Z',
+        reason: 'новая сессия',
+        activeTurns: 0,
+      }),
+      prepare,
+      commitExit: vi.fn(),
+    }, { deps: { startNewSession } })
+
+    await h.bot.handleUpdate({
+      update_id: 7,
+      message: {
+        message_id: 7,
+        date: 0,
+        chat: { id: 42, type: 'private', first_name: 'Operator' },
+        from: { id: 42, is_bot: false, first_name: 'Operator' },
+        text: '🆕 Новая сессия',
+      },
+    })
+
+    expect(startNewSession).not.toHaveBeenCalled()
+    expect(prepare).not.toHaveBeenCalled()
+    expect(h.replies()).toBe('')
+  })
+
+  it('does not swallow the first update after a non-Telegram planned restart', async () => {
+    const prepare = vi.fn(() => validRestartIntent())
+    const h = harness({
+      previous: () => Object.freeze({
+        requestedAt: '2026-08-28T00:00:00.000Z',
+        reason: 'daily session rotation',
+        activeTurns: 0,
+      }),
+      prepare,
+      commitExit: vi.fn(async () => 'committed' as const),
+    })
+
+    await h.bot.handleUpdate(update())
+
+    expect(prepare).toHaveBeenCalledWith('telegram-update:1 · после обновления')
+  })
 })
 
 function validRestartIntent(): RestartIntent {
   return Object.freeze({
     requestedAt: '2026-07-29T00:00:00.000Z',
-    reason: 'после обновления',
+    reason: 'telegram-update:1 · после обновления',
     activeTurns: 0,
   })
 }
