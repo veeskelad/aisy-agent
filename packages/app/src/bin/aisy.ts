@@ -283,6 +283,10 @@ import {
 } from '../project-registry-v2-store.js'
 import { makeNodeAutonomyEvidenceStore } from '../autonomy-evidence-store.js'
 import { makeNodeLearnedGrantStore } from '../learned-grant-store.js'
+import {
+  makeCommunicationPreferenceStore,
+  makeNodeCommunicationPreferencePersistence,
+} from '../communication-preference-store.js'
 import { makeNodeProjectServiceRuntime } from '../project-service-runtime.js'
 import {
   makeDailySessionRotation,
@@ -1686,6 +1690,17 @@ const grantPersistence = makeNodeApprovalGrantPersistence({ path: grantsPath })
 
 const nowIso = (): string => new Date().toISOString()
 
+const communicationPreferences = makeCommunicationPreferenceStore({
+  scope: {
+    botId: activeBot?.id ?? 'telegram-primary',
+    ...registryOwner,
+  },
+  persistence: makeNodeCommunicationPreferencePersistence(
+    join(base, 'communication-preferences'),
+  ),
+  nowIso,
+})
+
 const journalPath = join(base, 'journal.jsonl')
 const journal = makeJsonlJournal({
   appendLine: (line) => appendFileSync(journalPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
@@ -2910,6 +2925,14 @@ const augmentTurnWithHooks = async (
   input: Parameters<NonNullable<Parameters<typeof makeAgentRunner>[0]['augmentTurn']>>[0],
 ): Promise<Awaited<ReturnType<NonNullable<Parameters<typeof makeAgentRunner>[0]['augmentTurn']>>>> => {
   const skillSpans = await skillPromptRuntime.augmentTurn(input)
+  const preferenceOverlay = communicationPreferences.overlay()
+  const preferenceSpans = preferenceOverlay.length === 0
+    ? []
+    : [{
+        role: 'system' as const,
+        provenance: 'operator' as const,
+        text: `[AISY_COMMUNICATION_PREFERENCES]\n${preferenceOverlay}`,
+      }]
   // Today's journal is pulled per turn, never frozen into the prefix: the file
   // changes during the day and a stable prefix must not (ADR-0079).
   const today = dailyJournal.today()
@@ -2938,7 +2961,9 @@ const augmentTurnWithHooks = async (
           text: `[AISY_OPEN_TASKS]\n${tasks}`,
         }]),
   ]
-  if (extensionHooks.providers.length === 0) return [...skillSpans, ...journalSpans]
+  if (extensionHooks.providers.length === 0) {
+    return [...skillSpans, ...preferenceSpans, ...journalSpans]
+  }
   const query = input.spans
     .map((span) => (typeof span.text === 'string' ? span.text : ''))
     .join(' ')
@@ -2950,6 +2975,7 @@ const augmentTurnWithHooks = async (
   })
   return [
     ...skillSpans,
+    ...preferenceSpans,
     ...journalSpans,
     ...fragments.map((fragment) => ({
       role: 'user' as const,
@@ -4208,6 +4234,13 @@ const {
     } catch {
       return ''
     }
+  },
+  observeAuthenticatedOperatorText: ({ text, sessionId, updateId }) => {
+    communicationPreferences.observeExplicit({
+      text,
+      sessionId,
+      evidenceId: `telegram-update:${updateId}`,
+    })
   },
   captureWorkBinding: async () => staticWorkBinding,
   ...(mediaInbox === null ? {} : { attachmentInbox: mediaInbox.inbox }),

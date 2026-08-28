@@ -2173,7 +2173,9 @@ describe('Tier-2 loop control seams', () => {
       expect(provider.requests).toHaveLength(2)
       expect(result.actionContractKind).toBe('inspect-required')
       expect(result.actionStatus).toBe('unverified')
-      expect(result.reply).toContain('Не удалось подтвердить')
+      expect(result.reply).toBe(
+        'Не смогла получить результат проверки. Попробуй ещё раз или уточни, что именно открыть.',
+      )
       expect(sessionLog.entries.map(e => e.kind)).toEqual(expect.arrayContaining([
         'action.contract',
         'action.recovery',
@@ -2197,7 +2199,7 @@ describe('Tier-2 loop control seams', () => {
 
       expect(provider.requests).toHaveLength(2)
       expect(result.actionStatus).toBe('unverified')
-      expect(result.reply).toContain('Не удалось подтвердить')
+      expect(result.reply).toBe('Изменение не выполнено. Могу попробовать ещё раз.')
     })
 
     it('AC-01-35: accepts inspection after the corrective turn executes an observation tool', async () => {

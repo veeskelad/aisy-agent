@@ -151,6 +151,13 @@ export function renderCard(action: PendingAction, ctx: CardContext): BotMessage 
     lines.push(`🎯 Зачем: ${escapeHtml(ctx.motivation)}`, '')
   }
   if (ctx.waiting) lines.push(`⏳ Жду: ${escapeHtml(ctx.waiting)}`)
+  if (action.tier === 2 && action.canRememberSimilar === true) {
+    lines.push(
+      '',
+      'После подтверждения похожее действие в этом контексте выполню без нового вопроса. ' +
+        'Правило можно отозвать через /grants.',
+    )
+  }
 
   // Идентификаторы сессии и действия оператору не нужны — он смотрит в телефон,
   // а не в журнал. В журнале они остаются.

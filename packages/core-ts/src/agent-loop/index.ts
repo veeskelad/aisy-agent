@@ -199,6 +199,16 @@ function isTurnLocalActionControl(span: ContextSpan): boolean {
     span.text.includes('Do not claim completion.')
 }
 
+function naturalUnverifiedReply(kind: Exclude<ActionContractKind, 'answer-only'>): string {
+  if (kind === 'inspect-required') {
+    return 'Не смогла получить результат проверки. Попробуй ещё раз или уточни, что именно открыть.'
+  }
+  if (kind === 'delegate-required') {
+    return 'Субагент не вернул результат. Могу повторить делегирование.'
+  }
+  return 'Изменение не выполнено. Могу попробовать ещё раз.'
+}
+
 /**
  * The transcript is an audit record, not a ready-made provider prompt. A
  * required-action turn records its private controls and every provider attempt
@@ -1100,7 +1110,9 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
             log('action.unverified', { kind: actionContract.kind, missing: actionVerdict.missing })
             log('turn.end', { state: 'ok', actionStatus: 'unverified' })
             checkpoint('complete')
-            const failureReply = 'Не удалось подтвердить выполнение: отсутствует проверяемое доказательство результата.'
+            const failureReply = naturalUnverifiedReply(
+              actionContract.kind as Exclude<ActionContractKind, 'answer-only'>,
+            )
             await recordSpan({ role: 'assistant', provenance: 'operator', text: failureReply })
             return {
               reply: failureReply,

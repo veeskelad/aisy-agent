@@ -276,16 +276,26 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
       }
 
       if (!complete(true)) return 'deny'
-      // Remember the grant only for Tier-2 (Tier-3 is never grantable, ADR-0047).
-      if (result.scope && action.tier === 2 && action.canRememberSimilar === true) {
+      // A normal Tier-2 confirmation teaches the exact code-derived matcher.
+      // `confirm` mode makes canRememberSimilar false, while Tier-3 never
+      // reaches this branch. An explicit legacy scope still wins.
+      if (action.tier === 2 && action.canRememberSimilar === true) {
         // Missing binding is deliberately fail-closed: the approval still
         // confirms this one call, but cannot create an unscoped remembered grant.
         if (deps.grantBinding !== undefined) {
           try {
-            deps.grants.recordSimilar(safetyCall, verdict.tier, result.scope, deps.grantBinding)
+            deps.grants.recordSimilar(
+              safetyCall,
+              verdict.tier,
+              result.scope ?? 'always',
+              deps.grantBinding,
+            )
           } catch {
-            complete(false)
-            return 'deny'
+            // The exact call was already confirmed and admitted. A failed
+            // durable rule must not turn that tap into a false rejection; the
+            // next similar call will ask again because recordSimilar rolls its
+            // in-memory candidate back when persistence fails.
+            return 'allow'
           }
         }
       }

@@ -63,10 +63,25 @@ describe('makeHookGate.pre', () => {
   })
 
   it('Tier-2 (bash) asks, and a confirmed decision allows', async () => {
-    const { hg, approve } = gate({ decision: { decision: 'confirmed' } })
+    const { hg, approve, grants } = gate({ decision: { decision: 'confirmed' } })
     expect(await hg.pre(call('bash', { cmd: 'npm test' }), OPERATOR)).toBe('allow')
     expect(approve.seen).toHaveLength(1)
     expect(approve.seen[0]!.tier).toBe(2)
+    expect(grants.hasSimilar({ tool: 'bash', args: { cmd: 'npm test' } }, 2, GRANT_BINDING))
+      .toBe(true)
+  })
+
+  it('runs the exact confirmed call when durable similar-grant persistence fails', async () => {
+    const base = makeGrantStore()
+    const grants: GrantStore = {
+      ...base,
+      recordSimilar: () => { throw new Error('disk unavailable') },
+    }
+    const { hg } = gate({ grants, decision: { decision: 'confirmed' } })
+
+    expect(await hg.pre(call('bash', { cmd: 'npm test' }), OPERATOR)).toBe('allow')
+    expect(base.hasSimilar({ tool: 'bash', args: { cmd: 'npm test' } }, 2, GRANT_BINDING))
+      .toBe(false)
   })
 
   it('Tier-2 rejected decision denies', async () => {

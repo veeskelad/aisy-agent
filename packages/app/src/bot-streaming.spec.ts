@@ -87,7 +87,10 @@ function harness(
   durableTurnControl?: TelegramBotDeps['durableTurnControl'],
   afterReplyDelivered?: TelegramBotDeps['afterReplyDelivered'],
   failFinalEdit = false,
-  extraDeps: Pick<TelegramBotDeps, 'getStaging'> = {},
+  extraDeps: Pick<
+    TelegramBotDeps,
+    'getStaging' | 'observeAuthenticatedOperatorText'
+  > = {},
 ) {
   let untrustedContext = false
   let messageId = 100
@@ -715,6 +718,26 @@ describe('Telegram structured reply streaming', () => {
     expect(h.calls.some(call => call.method === 'sendMessage' &&
       call.payload['text'] === '🌅 Начала новую сессию. Память и незавершённая работа сохранены. ' +
         '/resume — вернуться к прошлому разговору.')).toBe(true)
+  })
+
+  it('observes authenticated ordinary wording for the typed preference overlay', async () => {
+    const observe = vi.fn()
+    const h = harness(
+      { handle: vi.fn<AgentRunner['handle']>().mockResolvedValue({
+        state: 'ok', reply: 'Хорошо.', narrowed: false,
+      }) },
+      false, undefined, undefined, undefined, undefined, undefined, false,
+      { observeAuthenticatedOperatorText: observe },
+    )
+
+    await h.bot.handleUpdate(textUpdate(17, 'Говори короче'))
+    await waitFor(() => observe.mock.calls.length === 1)
+
+    expect(observe).toHaveBeenCalledWith({
+      text: 'Говори короче',
+      sessionId: '42',
+      updateId: 17,
+    })
   })
 
   it('opens available staged memory edits for a bare natural «Покажи» without running the agent', async () => {

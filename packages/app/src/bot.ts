@@ -461,6 +461,12 @@ export interface TelegramBotDeps {
     turnId?: string
     result: TurnResult
   }>) => void | Promise<void>
+  /** Authenticated operator wording observed for typed communication preferences. */
+  observeAuthenticatedOperatorText?: (input: Readonly<{
+    text: string
+    sessionId: string
+    updateId: number
+  }>) => void
   /**
    * Supervised per-turn path. When present, fallback to the legacy runner is
    * forbidden: the runner is built only after checkpoint bind from a genuine
@@ -4096,6 +4102,17 @@ let pendingFormUntilMs = 0
         await ctx.reply('❌ Не удалось безопасно выбрать контекст.')
         return
       }
+    }
+
+    try {
+      deps.observeAuthenticatedOperatorText?.({
+        text: span.text,
+        sessionId,
+        updateId: ctx.update.update_id,
+      })
+    } catch {
+      // Preference learning is a form-only overlay. A broken private store
+      // degrades to SOUL defaults and cannot block the operator's turn.
     }
 
     if (agentStateHolder.value === 'running') {

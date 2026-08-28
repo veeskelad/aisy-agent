@@ -112,6 +112,13 @@ describe('renderCard', () => {
     expect(msg.html).not.toContain('Риск')
   })
 
+  it('discloses the automatic scoped rule before a Tier-2 confirmation', () => {
+    const msg = renderCard(action({ tier: 2, canRememberSimilar: true }), { sessionId: 's' })
+
+    expect(msg.html).toContain('похожее действие в этом контексте')
+    expect(msg.html).toContain('/grants')
+  })
+
   it('tier 3 shows why it is dangerous and asks for nothing beyond the tap', () => {
     const msg = renderCard(action({ tier: 3, requiresStepUp: true }), {
       sessionId: 's',
