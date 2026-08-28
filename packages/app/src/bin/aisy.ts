@@ -16,6 +16,7 @@ import { dirname, join, sep } from 'node:path'
 import { Api } from 'grammy'
 import {
   actionEvidence,
+  wallClockIso,
   makeAgentRunner,
   runtimeToolDefinition,
   runtimeToolMinimumTiers,
@@ -304,6 +305,7 @@ import { makeMemorySelfCheckRuntime } from '../memory-self-check-runtime.js'
 import { makeDailyJournal } from '../daily-journal.js'
 import { makeTaskTracker } from '../task-tracker.js'
 import { makeDailyBudget } from '../daily-budget.js'
+import { makeNodeWeeklyConsolidationCadence } from '../weekly-consolidation-cadence.js'
 import { makeExecutionModeGrantStore, makeExecutionModeStore } from '../execution-mode.js'
 import { makeTranscriptionRegistry } from '../transcription-registry.js'
 import { makeDeepgramProxyProvider } from '../deepgram-proxy-provider.js'
@@ -3747,6 +3749,9 @@ const nightlyConfig: NightlyConfig = {
   stagingDir: join(base, 'staging'),
   archiveDir: join(base, 'archive'),
 }
+const weeklyConsolidationCadence = makeNodeWeeklyConsolidationCadence(
+  join(base, 'weekly-consolidation-cursor.json'),
+)
 
 // Generator on the routine tier; judge on critique. Single-provider fallback logged.
 const genSel = providersCfg.tiers?.routine ?? defaultSel
@@ -3911,7 +3916,10 @@ const goalBackstop = {
 let orchestrator: ReturnType<typeof makeGoalOrchestrator>
 let goalAbort: AbortController | null = null
 
-async function runNightly(binding: ResolvedWorkBinding): Promise<void> {
+async function runNightly(
+  binding: ResolvedWorkBinding,
+  cadence: 'scheduled' | 'manual' = 'scheduled',
+): Promise<void> {
   const session = projectRegistry.snapshot().sessions.find((item) => item.id === binding.sessionId)
   if (binding.scope !== 'workspace' || binding.projectId !== nightlyWorkspaceProject.id ||
     session?.projectId !== nightlyWorkspaceProject.id || session.status !== 'active') {
@@ -3942,7 +3950,18 @@ async function runNightly(binding: ResolvedWorkBinding): Promise<void> {
       })
     }
   }
-  const result = await nightlyRunner.run(nightlyConfig)
+  const zone = operatorTimeZone()
+  const localDate = (zone === undefined
+    ? nowIso()
+    : wallClockIso(nowIso(), zone)).slice(0, 10)
+  const weeklyDue = cadence === 'manual' || weeklyConsolidationCadence.due(localDate)
+  const result = weeklyDue
+    ? await nightlyRunner.run(nightlyConfig)
+    : await nightlyRunner.runDaily(nightlyConfig)
+  if (cadence === 'scheduled' && weeklyDue && result.modelStages === 'complete') {
+    weeklyConsolidationCadence.markSuccessful(localDate)
+  }
+  if (!weeklyDue) return
   const pending = result.card.memoryEdits.length
   if (pending > 0) {
     await gateway.issueCard({
@@ -3952,10 +3971,14 @@ async function runNightly(binding: ResolvedWorkBinding): Promise<void> {
       requiresStepUp: false,
       summary: `Ночная консолидация ${result.runDate}: ${pending} правок памяти на одобрение.`,
     })
-    await sendNightlyNoticeRef?.({ kind: 'complete-n', sessionReset: false, pending })
+    await sendNightlyNoticeRef?.(result.modelStages === 'complete'
+      ? { kind: 'complete-n', sessionReset: false, pending }
+      : { kind: 'partial-failure', sessionReset: false, pending, failedProjects: 1 })
     return
   }
-  await sendNightlyNoticeRef?.({ kind: 'complete-zero', sessionReset: false })
+  await sendNightlyNoticeRef?.(result.modelStages === 'complete'
+    ? { kind: 'complete-zero', sessionReset: false }
+    : { kind: 'partial-failure', sessionReset: false, pending: 0, failedProjects: 1 })
 }
 
 const buildMainRunner = (
@@ -4270,7 +4293,7 @@ const {
   onConsolidate: async () => {
     const binding = resolveNightlyBinding()
     if (!binding) throw new Error('NIGHTLY_BINDING_QUARANTINED')
-    await runNightly(binding)
+    await runNightly(binding, 'manual')
   },
   getStaging: async () => {
     const area = await nightlyRunner.getStagedProposals()

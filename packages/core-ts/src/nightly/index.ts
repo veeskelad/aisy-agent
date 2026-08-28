@@ -230,14 +230,16 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
     facts: Fact[],
     validators: ConsolidationRunSnapshot['validators'],
     card: MorningCard,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     let proposal: { ops: MemOp[]; diff: Diff }
     try {
       proposal = await deps.generator.proposeMemoryOps(log, liveFacts(facts))
     } catch {
       // Provider/generator unavailable: skip stage 2 (degrade; §7).
-      return
+      return false
     }
+
+    let complete = true
 
     for (const rawOp of proposal.ops) {
       // STRIP is_human_confirmed from every op before anything else (CSO-C3).
@@ -263,6 +265,7 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
         verdictJudge = await deps.judge.grade(quarantine({ added: [op], removed: [], updated: [] }))
       } catch {
         stageMemoryPatch(op, false)
+        complete = false
         continue
       }
       if (verdictJudge === 'accept') {
@@ -271,6 +274,7 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
         card.memoryEdits.push(stagedItem(memoryPatches[memoryPatches.length - 1]!, summarizeOp(op)))
       }
     }
+    return complete
   }
 
   // --- Stage 2b: lint pass (generator-assisted; graceful degradation) ---
@@ -321,13 +325,14 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
     log: NormalizedDayLog,
     validators: ConsolidationRunSnapshot['validators'],
     card: MorningCard,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     let drafts: SkillDraft[]
     try {
       drafts = await deps.generator.draftSkills(log)
     } catch {
-      return // generator down — degrade (§7)
+      return false // generator down — degrade (§7)
     }
+    let complete = true
     for (const skill of drafts) {
       // Transient-origin skills are flagged for retirement, never auto-promoted
       // (ADR-0025; AC-10-23). This is advisory only — an informational card line
@@ -341,16 +346,23 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
       // has_check_section fails deterministically BEFORE the judge (AC-10-23).
       const verdict = validators.check(skill)
       if (!verdict.ok) continue
-      const verdictJudge = await deps.judge.grade({
-        quarantined: true,
-        body: JSON.stringify(skill),
-        diff: { added: [], removed: [], updated: [] },
-      })
+      let verdictJudge: 'accept' | 'reject' | 'edit'
+      try {
+        verdictJudge = await deps.judge.grade({
+          quarantined: true,
+          body: JSON.stringify(skill),
+          diff: { added: [], removed: [], updated: [] },
+        })
+      } catch {
+        complete = false
+        continue
+      }
       if (verdictJudge === 'accept') {
         stageSkillPatch(skill)
         card.skillChanges.push(stagedItem(skillPatches[skillPatches.length - 1]!, `skill: ${skill.name}`))
       }
     }
+    return complete
   }
 
   // Tracks whether crash-recovery already re-ran the prior crashed commit this
@@ -477,8 +489,10 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
     cost: { generatorTokens: 0, judgeTokens: 0, lintPassTokens: 0, totalUsd: 0 },
   })
 
-  return {
-    async run(config: NightlyConfig): Promise<NightResult> {
+  const executeRun = async (
+    config: NightlyConfig,
+    cadence: 'daily' | 'weekly',
+  ): Promise<NightResult> => {
       const runDate = deps.clock.now().toISOString().slice(0, 10)
       const card = emptyCard(runDate)
 
@@ -512,24 +526,41 @@ export function makeConsolidationRunner(deps: ConsolidationDeps): ConsolidationR
         // Crash recovery first: resume any interrupted commit idempotently (Eng-7).
         await recoverFromJournal(card)
 
-        const snapshot = await loadRunSnapshot()
-        const log = normalizedLog(snapshot.rawDayLog)
         runArchival(config, card)                       // Stage 1
-        await runConsolidation(log, snapshot.facts, snapshot.validators, card) // Stage 2
-        card.lintReport = await runLintPassInternal(log) // Stage 2b
-        await runSkillHygiene(log, snapshot.validators, card) // Stage 3
+        let modelStages: NightResult['modelStages'] = 'not-run'
+        if (cadence === 'weekly') {
+          const snapshot = await loadRunSnapshot()
+          const log = normalizedLog(snapshot.rawDayLog)
+          const memoryComplete = await runConsolidation(
+            log, snapshot.facts, snapshot.validators, card,
+          ) // Stage 2
+          card.lintReport = await runLintPassInternal(log) // Stage 2b
+          const skillsComplete = await runSkillHygiene(
+            log, snapshot.validators, card,
+          ) // Stage 3
+          modelStages = memoryComplete && !card.lintReport.skipped && skillsComplete
+            ? 'complete'
+            : 'pending'
+        }
         runDiskHygiene(card)                            // Stage 4
         await runBackup(card)                           // Stage 5
 
-        emit('night.card.staged')
-        const stagesCompleted: Stage[] = [
-          'archival', 'consolidation', 'lint-pass', 'skill-hygiene', 'disk-hygiene', 'backup',
-        ]
-        return { runDate, stagesCompleted, card, lockToken: acquired.token }
+        if (cadence === 'weekly' && (card.memoryEdits.length > 0 ||
+          card.skillChanges.length > 0 || card.triedToResurrect.length > 0)) {
+          emit('night.card.staged')
+        }
+        const stagesCompleted: Stage[] = cadence === 'weekly'
+          ? ['archival', 'consolidation', 'lint-pass', 'skill-hygiene', 'disk-hygiene', 'backup']
+          : ['archival', 'disk-hygiene', 'backup']
+        return { runDate, modelStages, stagesCompleted, card, lockToken: acquired.token }
       } finally {
         deps.lock.release(acquired.token)
       }
-    },
+  }
+
+  return {
+    runDaily: (config) => executeRun(config, 'daily'),
+    run: (config) => executeRun(config, 'weekly'),
 
     async runLintPass(): Promise<LintPassResult> {
       return runLintPassInternal()

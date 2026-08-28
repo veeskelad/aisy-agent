@@ -273,6 +273,7 @@ export interface CommitJournalEntry {
 
 export interface NightResult {
   runDate: string
+  modelStages: 'not-run' | 'complete' | 'pending'
   stagesCompleted: Stage[]
   card: MorningCard
   lockToken: LockToken
@@ -423,6 +424,9 @@ export interface ConsolidationRunSnapshot {
 }
 
 export interface ConsolidationRunner {
+  /** Daily deterministic maintenance without model-backed stages or staging. */
+  runDaily(config: NightlyConfig): Promise<NightResult>
+  /** Weekly/manual full consolidation. */
   run(config: NightlyConfig): Promise<NightResult>
   runLintPass(): Promise<LintPassResult>
   getStagedProposals(): Promise<StagingArea>

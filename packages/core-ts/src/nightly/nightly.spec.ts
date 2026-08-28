@@ -89,6 +89,29 @@ describe('Nightly Consolidation', () => {
     deps = makeMinimalDeps()
   })
 
+  it('runs daily deterministic maintenance without model-backed stages or staging', async () => {
+    const generator: Generator = {
+      proposeMemoryOps: vi.fn(async () => ({
+        ops: [], diff: { added: [], removed: [], updated: [] },
+      })),
+      draftSkills: vi.fn(async () => []),
+    }
+    const judge: Judge = { grade: vi.fn(async () => 'accept' as const) }
+    const loadRunSnapshot = vi.fn(async () => ({ facts: [], validators: deps.validators }))
+    const runner = makeConsolidationRunner({ ...deps, generator, judge, loadRunSnapshot })
+
+    const result = await runner.runDaily(defaultConfig)
+
+    expect(result.stagesCompleted).toEqual(['archival', 'disk-hygiene', 'backup'])
+    expect(result.modelStages).toBe('not-run')
+    expect(result.card.memoryEdits).toEqual([])
+    expect(result.card.skillChanges).toEqual([])
+    expect(loadRunSnapshot).not.toHaveBeenCalled()
+    expect(generator.proposeMemoryOps).not.toHaveBeenCalled()
+    expect(generator.draftSkills).not.toHaveBeenCalled()
+    expect(judge.grade).not.toHaveBeenCalled()
+  })
+
   it('loads one fresh fact/validator snapshot per run while holding the night lock', async () => {
     const calls: string[] = []
     const snapshots = [
@@ -935,6 +958,7 @@ describe('Nightly Consolidation', () => {
     const result = await runner.run(defaultConfig)
     expect(result.card.lintReport.skipped).toBe(true)
     expect(result.card.lintReport.skipReason ?? '').toContain('lint pass skipped')
+    expect(result.modelStages).toBe('pending')
   })
 
   // --- Regression: the transient-skill retirement card entry must NOT carry a
