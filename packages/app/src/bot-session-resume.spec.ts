@@ -29,7 +29,15 @@ const VIEW: TelegramSessionView = {
 }
 
 function textUpdate(text: string): Update {
-  return { update_id: 1, message: { message_id: 1, date: 0, chat: CHAT, from: FROM, text } }
+  return {
+    update_id: 1,
+    message: {
+      message_id: 1, date: 0, chat: CHAT, from: FROM, text,
+      ...(text.startsWith('/resume')
+        ? { entities: [{ type: 'bot_command' as const, offset: 0, length: 7 }] }
+        : {}),
+    },
+  }
 }
 
 function tap(data: string): Update {
@@ -47,10 +55,12 @@ function tap(data: string): Update {
 
 function harness(input: {
   resume?: (sessionId: string) => Promise<{ ok: true } | { ok: false; errorCode: string }>
+  prefix?: TelegramSessionControls['resolvePrefix']
 } = {}) {
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = []
   const controls: TelegramSessionControls = {
     open: () => VIEW,
+    resolvePrefix: input.prefix ?? (() => ({ kind: 'unknown' })),
     handle: (data) => data === 'session:token-1'
       ? { kind: 'resume', sessionId: 'session-old', name: 'Вчерашний разбор' }
       : { kind: 'stale', view: VIEW },
@@ -106,6 +116,42 @@ describe('sessions screen', () => {
     const sent = h.calls.find((call) => call.method === 'sendMessage')!
     expect(String(sent.payload['text'])).toContain('Вчерашний разбор')
     expect(JSON.stringify(sent.payload['reply_markup'])).toContain('session:token-1')
+  })
+
+  it('opens the same list for /resume without an argument', async () => {
+    const h = harness()
+
+    await h.bot.handleUpdate(textUpdate('/resume'))
+
+    const sent = h.calls.find((call) => call.method === 'sendMessage')!
+    expect(String(sent.payload['text'])).toContain('Вчерашний разбор')
+    expect(JSON.stringify(sent.payload['reply_markup'])).toContain('session:token-1')
+  })
+
+  it('resolves a unique /resume prefix and restarts into it', async () => {
+    const resume = vi.fn(async () => ({ ok: true as const }))
+    const prefix = vi.fn(() => ({
+      kind: 'resume' as const, sessionId: 'session-old', name: 'Вчерашний разбор',
+    }))
+    const h = harness({ resume, prefix })
+
+    await h.bot.handleUpdate(textUpdate('/resume session-o'))
+
+    expect(prefix).toHaveBeenCalledWith('session-o')
+    expect(resume).toHaveBeenCalledWith('session-old')
+    expect(h.prepared).toEqual(['возврат в сессию'])
+  })
+
+  it('does not mutate state for an ambiguous /resume prefix', async () => {
+    const resume = vi.fn(async () => ({ ok: true as const }))
+    const h = harness({ resume, prefix: () => ({ kind: 'ambiguous' }) })
+
+    await h.bot.handleUpdate(textUpdate('/resume session'))
+
+    expect(resume).not.toHaveBeenCalled()
+    expect(h.prepared).toEqual([])
+    expect(h.calls.map((call) => String(call.payload['text'] ?? '')).join('\n'))
+      .toContain('Префикс неоднозначен')
   })
 
   it('switches and restarts into the session that was tapped', async () => {

@@ -154,6 +154,7 @@ function harness(
   return {
     bot, calls, checkpointStore,
     sendProactive: runtime.sendProactive,
+    sendNightlyNotice: runtime.sendNightlyNotice,
     resumeDurableTurn: runtime.resumeDurableTurn,
     checkpointContent: () => checkpointContent,
     untrustedContext: () => untrustedContext,
@@ -715,10 +716,7 @@ describe('Telegram structured reply streaming', () => {
       },
     )
 
-    await h.sendProactive(
-      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
-        'Открой карточку — покажу каждую.',
-    )
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: true, pending: 1 })
     await h.bot.handleUpdate(textUpdate(1, 'Покажи'))
 
     expect(handle).not.toHaveBeenCalled()
@@ -749,7 +747,7 @@ describe('Telegram structured reply streaming', () => {
     expect(getStaging).not.toHaveBeenCalled()
   })
 
-  it('falls through after an armed notice with empty staging and does not hijack a concrete object', async () => {
+  it('answers zero staging without provider and does not hijack a concrete object', async () => {
     const result = {
       state: 'ok' as const,
       reply: 'Что показать?',
@@ -760,14 +758,12 @@ describe('Telegram structured reply streaming', () => {
       { handle: emptyHandle }, false, undefined, undefined, undefined, undefined, undefined, false,
       { getStaging: async () => [] },
     )
-    await empty.sendProactive(
-      '🌅 Разобрала память за 2026-08-27: 0 правок ждут решения. ' +
-        'Открой карточку — покажу каждую.',
-    )
+    await empty.sendNightlyNotice({ kind: 'complete-zero', sessionReset: true })
 
     await empty.bot.handleUpdate(textUpdate(1, 'Покажи'))
-    await waitFor(() => emptyHandle.mock.calls.length === 1)
-    expect(emptyHandle).toHaveBeenCalledOnce()
+    expect(emptyHandle).not.toHaveBeenCalled()
+    expect(empty.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === 'Новых правок нет.')).toBe(true)
 
     const getStaging = vi.fn(async () => [
       { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
@@ -777,10 +773,7 @@ describe('Telegram structured reply streaming', () => {
       { handle: concreteHandle }, false, undefined, undefined, undefined, undefined, undefined, false,
       { getStaging },
     )
-    await concrete.sendProactive(
-      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
-        'Открой карточку — покажу каждую.',
-    )
+    await concrete.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
 
     await concrete.bot.handleUpdate(textUpdate(2, 'Покажи файл'))
     await waitFor(() => concreteHandle.mock.calls.length === 1)
@@ -804,10 +797,7 @@ describe('Telegram structured reply streaming', () => {
 
     await h.bot.handleUpdate(textUpdate(1, 'Начни долгий ответ'))
     await waitFor(() => handle.mock.calls.length === 1)
-    await h.sendProactive(
-      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. ' +
-        'Открой карточку — покажу каждую.',
-    )
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
     const messagesBeforeSteer = h.calls.filter(call => call.method === 'sendMessage').length
     await h.bot.handleUpdate(textUpdate(2, 'Покажи'))
     const messagesAfterSteer = h.calls.filter(call => call.method === 'sendMessage').length
@@ -815,6 +805,45 @@ describe('Telegram structured reply streaming', () => {
 
     expect(getStaging).not.toHaveBeenCalled()
     expect(messagesAfterSteer).toBe(messagesBeforeSteer + 1)
+  })
+
+  it('does not arm a shortcut from ordinary proactive text that resembles an old notice', async () => {
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue({
+      state: 'ok', reply: 'Что показать?', narrowed: false,
+    })
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+    await h.sendProactive(
+      '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. Открой карточку — покажу каждую.',
+    )
+
+    await h.bot.handleUpdate(textUpdate(3, 'Покажи'))
+    await waitFor(() => handle.mock.calls.length === 1)
+
+    expect(getStaging).not.toHaveBeenCalled()
+  })
+
+  it('reports a partial empty result deterministically and consumes it once', async () => {
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue({
+      state: 'ok', reply: 'Что показать?', narrowed: false,
+    })
+    const h = harness({ handle })
+    await h.sendNightlyNotice({
+      kind: 'partial-failure', sessionReset: false, pending: 0, failedProjects: 1,
+    })
+
+    await h.bot.handleUpdate(textUpdate(4, 'Покажи'))
+    expect(handle).not.toHaveBeenCalled()
+    expect(h.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === 'Доступных правок нет; часть проектов не проверена.')).toBe(true)
+
+    await h.bot.handleUpdate(textUpdate(5, 'Покажи'))
+    await waitFor(() => handle.mock.calls.length === 1)
   })
 
   it('renders action recovery and the authoritative unverified result', async () => {

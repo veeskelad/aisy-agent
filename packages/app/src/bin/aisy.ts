@@ -100,7 +100,11 @@ import {
   type VerificationTrace,
 } from '@aisy/core'
 import { plural, TOOL_LABEL, type GoalScreenView } from '@aisy/telegram-gw'
-import { makeTelegramBot, type TelegramExecutionTurnV1 } from '../bot.js'
+import {
+  makeTelegramBot,
+  type TelegramExecutionTurnV1,
+  type TelegramNightlyNotice,
+} from '../bot.js'
 import { makeSetupTelegramBot } from '../setup-bot.js'
 import { makeServiceKeyStore } from '../service-keys.js'
 import { makeOnboardingBrief } from '../onboarding-brief.js'
@@ -841,6 +845,7 @@ const postToolUse = {
 // Resolved after makeTelegramBot. Background workers retain only this send
 // closure and never receive the bot token or Telegram API object.
 let sendProactiveRef: ((text: string) => Promise<void>) | null = null
+let sendNightlyNoticeRef: ((notice: TelegramNightlyNotice) => Promise<void>) | null = null
 // Provider selection from ~/.aisy/providers.json (per-tier or a single default).
 // Back-compat: no file ⇒ Anthropic + AISY_PROVIDER_MODEL + the legacy reasoning key.
 interface ProviderSel {
@@ -3938,14 +3943,19 @@ async function runNightly(binding: ResolvedWorkBinding): Promise<void> {
     }
   }
   const result = await nightlyRunner.run(nightlyConfig)
-  await gateway.issueCard({
-    actionId: `nightly-${result.runDate}`,
-    actionHash: createHash('sha256').update(`nightly:${result.runDate}`).digest('hex'),
-    tier: 1,
-    requiresStepUp: false,
-    summary: `🌅 Ночная консолидация ${result.runDate}: ${result.card.memoryEdits.length} правок памяти на одобрение.`,
-  })
-  await sendProactiveRef?.(`🌅 Разобрала память за ${result.runDate}: ${result.card.memoryEdits.length} правок ждут решения. Открой карточку — покажу каждую.`)
+  const pending = result.card.memoryEdits.length
+  if (pending > 0) {
+    await gateway.issueCard({
+      actionId: `nightly-${result.runDate}`,
+      actionHash: createHash('sha256').update(`nightly:${result.runDate}`).digest('hex'),
+      tier: 1,
+      requiresStepUp: false,
+      summary: `Ночная консолидация ${result.runDate}: ${pending} правок памяти на одобрение.`,
+    })
+    await sendNightlyNoticeRef?.({ kind: 'complete-n', sessionReset: false, pending })
+    return
+  }
+  await sendNightlyNoticeRef?.({ kind: 'complete-zero', sessionReset: false })
 }
 
 const buildMainRunner = (
@@ -4009,6 +4019,7 @@ const {
   bot,
   runProactiveTurn,
   sendProactive,
+  sendNightlyNotice,
   goalProgress,
   researchProgress,
   proposeGoal,
@@ -4482,6 +4493,7 @@ const {
   },
 })
 sendProactiveRef = sendProactive
+sendNightlyNoticeRef = sendNightlyNotice
 // Resume durable candidate phases and ambiguous-notification accounting after
 // the Telegram send closure exists. This is background work; startup polling
 // and the first operator reply do not wait on model I/O.

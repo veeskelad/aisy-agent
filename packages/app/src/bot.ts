@@ -743,6 +743,16 @@ export interface TelegramBotDeps {
   recall?: (query: string) => Promise<string>
 }
 
+export type TelegramNightlyNotice =
+  | { kind: 'complete-zero'; sessionReset: boolean }
+  | { kind: 'complete-n'; sessionReset: boolean; pending: number }
+  | {
+      kind: 'partial-failure'
+      sessionReset: boolean
+      pending: number
+      failedProjects: number
+    }
+
 interface PendingCard {
   resolve: (decision: ApprovalDecision) => void
   action: PendingAction
@@ -1418,6 +1428,40 @@ let pendingFormUntilMs = 0
       ...(view.buttons.length === 0 ? {} : { reply_markup: toInlineKeyboard(view.buttons) }),
     })
   }
+
+  bot.command('resume', async (ctx) => {
+    const rawPrefix = (ctx.match ?? '').trim().replace(/^#/u, '')
+    if (rawPrefix.length === 0) {
+      await sendSessionsScreen()
+      return
+    }
+    if (!deps.sessionControls || !deps.resumeSession) {
+      await ctx.reply(NOT_WIRED)
+      return
+    }
+    const target = deps.sessionControls.resolvePrefix(rawPrefix)
+    if (target.kind === 'unknown') {
+      await ctx.reply('Сессия с таким префиксом не найдена. /resume покажет список.')
+      return
+    }
+    if (target.kind === 'ambiguous') {
+      await ctx.reply('Префикс неоднозначен. /resume покажет список с более длинными id.')
+      return
+    }
+    if (target.kind === 'current') {
+      await ctx.reply('Это и есть текущая сессия.')
+      return
+    }
+    const result = await deps.resumeSession(target.sessionId)
+    if (!result.ok) {
+      await ctx.reply(result.errorCode === 'ALREADY_ACTIVE'
+        ? 'Это и есть текущая сессия.'
+        : 'Не удалось вернуться в эту сессию.')
+      return
+    }
+    await ctx.reply(`↩️ Возвращаюсь в сессию «${target.name}».`)
+    await runRestart('возврат в сессию', (message) => ctx.reply(message))
+  })
 
   const handleMenu = async (action: MenuAction): Promise<void> => {
     deps.monitoringControls?.cancelForm()
@@ -2431,13 +2475,14 @@ let pendingFormUntilMs = 0
     }
   }
 
-  let stagingShortcutArmed = false
+  type NightlyShortcut = 'none' | 'open-staging' | 'zero-staging' | 'partial-empty'
+  let nightlyShortcut: NightlyShortcut = 'none'
 
   const sendStaging = async (
     say: (text: string) => Promise<unknown>,
     preloadedItems?: { id: string; preview: string; judged: boolean }[],
   ): Promise<void> => {
-    stagingShortcutArmed = false
+    nightlyShortcut = 'none'
     const items = preloadedItems ?? (await deps.getStaging?.()) ?? []
     if (items.length === 0) {
       await say('Правок памяти на проверке нет.')
@@ -4064,10 +4109,18 @@ let pendingFormUntilMs = 0
     // Only the next ordinary text after the code-owned morning notice can use
     // its deictic “Покажи”. Old pending proposals cannot hijack an unrelated
     // conversation, and an in-flight turn keeps steering precedence.
-    const openStaging = stagingShortcutArmed &&
-      /^(?:покажи|show)[.!?…]*$/iu.test(span.text.trim())
-    stagingShortcutArmed = false
-    if (openStaging && deps.getStaging !== undefined) {
+    const bareShow = /^(?:покажи|show)[.!?…]*$/iu.test(span.text.trim())
+    const shortcut = nightlyShortcut
+    nightlyShortcut = 'none'
+    if (bareShow && shortcut === 'zero-staging') {
+      await ctx.reply('Новых правок нет.')
+      return
+    }
+    if (bareShow && shortcut === 'partial-empty') {
+      await ctx.reply('Доступных правок нет; часть проектов не проверена.')
+      return
+    }
+    if (bareShow && shortcut === 'open-staging' && deps.getStaging !== undefined) {
       try {
         const stagedItems = await deps.getStaging()
         if (stagedItems.length > 0) {
@@ -4077,6 +4130,8 @@ let pendingFormUntilMs = 0
           )
           return
         }
+        await ctx.reply('Правок уже нет.')
+        return
       } catch {
         await ctx.reply('Не смогла открыть правки памяти. Попробуй ещё раз.')
         return
@@ -4462,7 +4517,35 @@ let pendingFormUntilMs = 0
     },
     sendProactive: async (text: string): Promise<void> => {
       await sendReply(text)
-      stagingShortcutArmed = /^🌅 Разобрала память за \d{4}-\d{2}-\d{2}: \d+ правок ждут решения\. Открой карточку — покажу каждую\.$/u.test(text)
+      nightlyShortcut = 'none'
+    },
+    sendNightlyNotice: async (notice: TelegramNightlyNotice): Promise<void> => {
+      const reset = notice.sessionReset ? '🌅 Начала новую сессию. ' : ''
+      if (notice.kind === 'complete-zero') {
+        await sendReply(`${reset}Память проверена: новых правок нет.` +
+          (notice.sessionReset ? ' /resume — вернуться к прошлому разговору.' : ''))
+        nightlyShortcut = 'zero-staging'
+        return
+      }
+      if (notice.kind === 'complete-n') {
+        if (!Number.isSafeInteger(notice.pending) || notice.pending < 1) {
+          throw new Error('INVALID_NIGHTLY_NOTICE')
+        }
+        await sendReply(`${reset}${notice.pending} правок памяти ждут решения. ` +
+          'Покажи — открою карточку.' +
+          (notice.sessionReset ? ' /resume — вернуться к прошлому разговору.' : ''))
+        nightlyShortcut = 'open-staging'
+        return
+      }
+      if (!Number.isSafeInteger(notice.pending) || notice.pending < 0 ||
+        !Number.isSafeInteger(notice.failedProjects) || notice.failedProjects < 1) {
+        throw new Error('INVALID_NIGHTLY_NOTICE')
+      }
+      await sendReply(`${reset}Память проверена частично: ${notice.pending} правок доступны, ` +
+        `${notice.failedProjects} проектов требуют повторной проверки.` +
+        (notice.pending > 0 ? ' Покажи — открою доступные правки.' : '') +
+        (notice.sessionReset ? ' /resume — вернуться к прошлому разговору.' : ''))
+      nightlyShortcut = notice.pending > 0 ? 'open-staging' : 'partial-empty'
     },
     /**
      * The goal's progress, as one post edited in place — the same shape the

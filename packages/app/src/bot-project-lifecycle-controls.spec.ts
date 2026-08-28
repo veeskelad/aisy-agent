@@ -206,6 +206,7 @@ describe('Telegram Project lifecycle controls transport', () => {
       }),
       sessionControls: {
         open: () => { throw new Error('not used') },
+        resolvePrefix: () => ({ kind: 'unknown' }),
         handle: () => { throw new Error('not used') },
         create: () => { throw new Error('not used') },
         rename: () => { throw new Error('not used') },

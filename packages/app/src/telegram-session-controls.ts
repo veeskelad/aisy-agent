@@ -34,8 +34,16 @@ export type TelegramSessionTap =
   | { kind: 'new' }
   | { kind: 'stale'; view: TelegramSessionView }
 
+export type TelegramSessionPrefixResolution =
+  | { kind: 'resume'; sessionId: string; name: string }
+  | { kind: 'current'; sessionId: string; name: string }
+  | { kind: 'ambiguous' }
+  | { kind: 'unknown' }
+
 export interface TelegramSessionControls {
   open(query?: string): TelegramSessionView
+  /** Resolve a user-typed id prefix inside the active Project only. */
+  resolvePrefix(prefix: string): TelegramSessionPrefixResolution
   /** Resolves a `session:` callback minted by `open`. */
   handle(data: string): TelegramSessionTap
   create(name?: string): TelegramSessionControlOutcome
@@ -221,6 +229,24 @@ export function makeTelegramSessionControls(input: {
 
   return Object.freeze<TelegramSessionControls>({
     open: (query) => render(query),
+    resolvePrefix(rawPrefix) {
+      const prefix = rawPrefix.normalize('NFKC').trim()
+      if (prefix.length === 0 || prefix.length > 128 || /\s/u.test(prefix)) {
+        return { kind: 'unknown' }
+      }
+      const selection = active()
+      const matches = input.runtime.service.searchSessions({
+        ...input.owner,
+        projectId: selection.projectId,
+        query: '',
+      }).filter((session) => session.id.startsWith(prefix))
+      if (matches.length === 0) return { kind: 'unknown' }
+      if (matches.length > 1) return { kind: 'ambiguous' }
+      const session = matches[0]!
+      return session.id === selection.sessionId
+        ? { kind: 'current', sessionId: session.id, name: session.name }
+        : { kind: 'resume', sessionId: session.id, name: session.name }
+    },
     handle(data) {
       if (!data.startsWith(CALLBACK_PREFIX)) return { kind: 'stale', view: render() }
       const tap = pending.get(data.slice(CALLBACK_PREFIX.length))

@@ -178,6 +178,22 @@ describe('session buttons', () => {
       .toContain('✅')
   })
 
+  it('resolves only a unique id prefix inside the active Project', () => {
+    const { controls, registry } = withSessions(2)
+    const view = controls.open()
+    const target = view.sessions.find((session) =>
+      session.id !== registry.getActive(OWNER).sessionId)!
+
+    expect(controls.resolvePrefix(target.id)).toEqual({
+      kind: 'resume', sessionId: target.id, name: target.name,
+    })
+    expect(controls.resolvePrefix(registry.getActive(OWNER).sessionId)).toMatchObject({
+      kind: 'current', sessionId: registry.getActive(OWNER).sessionId,
+    })
+    expect(controls.resolvePrefix('missing')).toEqual({ kind: 'unknown' })
+    expect(controls.resolvePrefix('session-')).toEqual({ kind: 'ambiguous' })
+  })
+
   it('pages instead of pouring twenty buttons onto the screen', () => {
     const { controls } = withSessions(11)
     const first = controls.open()
