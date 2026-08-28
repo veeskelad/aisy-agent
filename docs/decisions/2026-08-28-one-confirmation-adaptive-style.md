@@ -50,7 +50,10 @@ Skill мог бы получить prompt-authority. Нужна отдельна
    общения создаёт versioned typed preference и действует со следующего turn.
    Грамматический род — самостоятельная mutually-exclusive family
    `masculine-russian|feminine-russian`, поэтому его исправление не меняет
-   tone, verbosity, memory acknowledgement или полномочия tools.
+   tone, verbosity, memory acknowledgement или полномочия tools. Code-owned
+   Telegram notices, которые обходят provider overlay, используют тот же
+   выбранный род либо нейтральную форму; они не имеют независимой скрытой
+   личности.
 6. Неявное обучение общению выбирает только descriptor закрытого registry и
    требует два delivery-confirmed совпадения в разных Session. Preference не
    может добавить tool, scope, authority или external effect.

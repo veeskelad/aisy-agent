@@ -444,6 +444,8 @@ recipe в прежнем vocabulary/scope активируется автома�
     одно естественное подтверждение во втором лице.
 13. Явная communication correction активируется со следующего turn; два
     implicit совпадения разных Session активируют только registry descriptor.
+    Code-owned Telegram notices, обходящие provider overlay, используют тот же
+    выбранный grammatical-gender либо нейтральную форму.
 14. Communication preference store проходит crash/CAS/corruption/rollback и
     forget-first tests; current turn/explicit/inferred/SOUL precedence точна,
     две descriptor families независимы, failed update сохраняет прежний active,

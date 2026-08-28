@@ -467,6 +467,8 @@ export interface TelegramBotDeps {
     sessionId: string
     updateId: number
   }>) => void
+  /** Selected first-person Russian gender for code-owned Telegram notices. */
+  grammaticalGender?: () => 'masculine' | 'feminine' | 'neutral'
   /**
    * Supervised per-turn path. When present, fallback to the legacy runner is
    * forbidden: the runner is built only after checkpoint bind from a genuine
@@ -4561,10 +4563,16 @@ let pendingFormUntilMs = 0
       nightlyShortcut = 'none'
     },
     sendNightlyNotice: async (notice: TelegramNightlyNotice): Promise<void> => {
-      const reset = notice.sessionReset ? '🌅 Начала новую сессию. ' : ''
+      const selectedGender = deps.grammaticalGender?.() ?? 'neutral'
+      const sessionReset = selectedGender === 'masculine'
+        ? '🌅 Начал новую сессию. '
+        : selectedGender === 'feminine'
+          ? '🌅 Начала новую сессию. '
+          : '🌅 Новая сессия начата. '
+      const reset = notice.sessionReset ? sessionReset : ''
       if (notice.kind === 'session-only') {
         await sendReply(
-          '🌅 Начала новую сессию. Память и незавершённая работа сохранены. ' +
+          `${sessionReset}Память и незавершённая работа сохранены. ` +
           '/resume — вернуться к прошлому разговору.',
         )
         nightlyShortcut = 'none'

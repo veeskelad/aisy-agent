@@ -89,7 +89,7 @@ function harness(
   failFinalEdit = false,
   extraDeps: Pick<
     TelegramBotDeps,
-    'getStaging' | 'observeAuthenticatedOperatorText'
+    'getStaging' | 'grammaticalGender' | 'observeAuthenticatedOperatorText'
   > = {},
 ) {
   let untrustedContext = false
@@ -121,6 +121,7 @@ function harness(
     ...(afterReplyDelivered === undefined ? {} : { afterReplyDelivered }),
     setUntrustedContext: (untrusted: boolean) => { untrustedContext = untrusted },
     model: 'test-model',
+    grammaticalGender: () => 'masculine',
     debounceMs: 1,
     streamEditIntervalMs: 0,
     registerCommands: false,
@@ -716,8 +717,45 @@ describe('Telegram structured reply streaming', () => {
     await h.sendNightlyNotice({ kind: 'session-only', sessionReset: true })
 
     expect(h.calls.some(call => call.method === 'sendMessage' &&
-      call.payload['text'] === '🌅 Начала новую сессию. Память и незавершённая работа сохранены. ' +
+      call.payload['text'] === '🌅 Начал новую сессию. Память и незавершённая работа сохранены. ' +
         '/resume — вернуться к прошлому разговору.')).toBe(true)
+  })
+
+  it.each([
+    { kind: 'complete-zero' as const, sessionReset: true },
+    { kind: 'complete-n' as const, sessionReset: true, pending: 2 },
+    { kind: 'partial-failure' as const, sessionReset: true, pending: 1, failedProjects: 1 },
+  ])('keeps the code-owned reset prefix masculine for $kind', async (notice) => {
+    const h = harness({ handle: vi.fn<AgentRunner['handle']>() })
+
+    await h.sendNightlyNotice(notice)
+
+    const sent = h.calls.find(call => call.method === 'sendMessage')
+    expect(sent?.payload['text']).toMatch(/^🌅 Начал новую сессию\./u)
+    expect(sent?.payload['text']).not.toContain('Начала новую сессию')
+  })
+
+  it.each([
+    { gender: 'masculine' as const, prefix: '🌅 Начал новую сессию.' },
+    { gender: 'feminine' as const, prefix: '🌅 Начала новую сессию.' },
+    { gender: 'neutral' as const, prefix: '🌅 Новая сессия начата.' },
+  ])('uses the selected $gender gender in code-owned reset notices', async ({ gender, prefix }) => {
+    const h = harness(
+      { handle: vi.fn<AgentRunner['handle']>() },
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      { grammaticalGender: () => gender },
+    )
+
+    await h.sendNightlyNotice({ kind: 'session-only', sessionReset: true })
+
+    const sent = h.calls.find(call => call.method === 'sendMessage')
+    expect(String(sent?.payload['text'] ?? '').startsWith(prefix)).toBe(true)
   })
 
   it('observes authenticated ordinary wording for the typed preference overlay', async () => {

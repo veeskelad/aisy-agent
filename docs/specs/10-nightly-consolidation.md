@@ -641,6 +641,14 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     восстанавливают exact promotion WAL и до этого не делают member terminal и
     не продвигают cursor; applied/rejected не создают card,
     forgotten/revoked не resurrect'ятся, а corrupt даёт `partial-failure`.
+47. **AC-10-47** — Все code-owned Telegram notices с `sessionReset=true`
+    используют активный typed grammatical-gender агента независимо от результата
+    maintenance (`session-only`, `complete-zero`, `complete-n` или
+    `partial-failure`). При активном `masculine-russian` каждое такое сообщение
+    начинается с `🌅 Начал новую сессию.` и не содержит женскую форму
+    `Начала новую сессию`; `feminine-russian` даёт женскую
+    форму, а отсутствие active descriptor — нейтральную. Provider overlay
+    для этого не требуется.
 
 ## 10. Open questions
 

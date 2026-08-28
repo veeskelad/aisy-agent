@@ -4223,6 +4223,13 @@ const {
       return ''
     }
   },
+  grammaticalGender: () => {
+    const descriptor = communicationPreferences.active()
+      .find((preference) => preference.family === 'grammatical-gender')?.descriptor
+    if (descriptor === 'masculine-russian') return 'masculine'
+    if (descriptor === 'feminine-russian') return 'feminine'
+    return 'neutral'
+  },
   observeAuthenticatedOperatorText: ({ text, sessionId, updateId }) => {
     communicationPreferences.observeExplicit({
       text,
