@@ -68,7 +68,14 @@ export type { ProviderEntry, ProviderKind, BuildProviderConfig, TierAdapters } f
 export { makeFailoverProvider } from './runtime/failover-provider.js'
 
 export { makeToolExecutor } from './runtime/execute-tool.js'
-export type { ExecuteToolDeps, FsPort, ToolResult } from './runtime/execute-tool.js'
+export type {
+  ConfinedWorkspaceFsPort,
+  ExecuteToolDeps,
+  FsPort,
+  ResolvedWorkspacePath,
+  ToolResult,
+  WorkspaceResourceSeal,
+} from './runtime/execute-tool.js'
 export {
   makeMemoryRememberReceipt,
   parseMemoryRememberReceipt,
@@ -116,7 +123,13 @@ export type {
 } from './runtime/restricted-public-clone.js'
 
 export { makeHookGate, makePostToolUseProcessor } from './runtime/hook-gate.js'
-export type { HookGateDeps, ApprovalDecision, PostToolUseDeps } from './runtime/hook-gate.js'
+export type {
+  HookGateDeps,
+  ApprovalDecision,
+  PostToolUseDeps,
+  PolicyRelaxationTarget,
+  RuntimePolicyNarrowing,
+} from './runtime/hook-gate.js'
 
 export { makeGuardian } from './runtime/guardian.js'
 export type { GuardianDeps } from './runtime/guardian.js'
@@ -313,6 +326,7 @@ export type {
   ConfinementErrorCode,
   ConfinementEvent,
   ConfinementOperation,
+  ConfinementPathPin,
   ConfinementPort,
   ConfinementProcessPort,
   ConfinementScanLimits,

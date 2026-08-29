@@ -34,9 +34,16 @@ class FakeCodexChild extends EventEmitter {
   bridgeResult: unknown = null
   killed = 0
   private buffered = ''
+  private readonly toolName: string
+  private readonly toolArgs: Record<string, unknown>
 
-  constructor() {
+  constructor(input: {
+    toolName?: string
+    toolArgs?: Record<string, unknown>
+  } = {}) {
     super()
+    this.toolName = input.toolName ?? 'read_file'
+    this.toolArgs = input.toolArgs ?? { path: 'README.md' }
     this.stdin.on('data', chunk => {
       this.buffered += String(chunk)
       while (this.buffered.includes('\n')) {
@@ -88,7 +95,7 @@ class FakeCodexChild extends EventEmitter {
     if (typeof server?.url !== 'string' || typeof server.http_headers?.authorization !== 'string') {
       throw new Error('missing bridge config')
     }
-    const args = { path: 'README.md' }
+    const args = this.toolArgs
     const response = await fetch(server.url, {
       method: 'POST',
       headers: {
@@ -98,7 +105,7 @@ class FakeCodexChild extends EventEmitter {
       body: JSON.stringify({
         jsonrpc: '2.0', id: 41, method: 'tools/call',
         params: {
-          name: 'read_file', arguments: args,
+          name: this.toolName, arguments: args,
           _meta: {
             'x-codex-turn-metadata': {
               session_id: 'thread-live', thread_id: 'thread-live', turn_id: 'turn-live',
@@ -113,7 +120,7 @@ class FakeCodexChild extends EventEmitter {
       params: {
         threadId: 'thread-live', turnId: 'turn-live',
         item: {
-          id: 'tool-live', type: 'mcpToolCall', server: 'aisy', tool: 'read_file',
+          id: 'tool-live', type: 'mcpToolCall', server: 'aisy', tool: this.toolName,
           arguments: args, status: 'inProgress',
         },
       },
@@ -123,7 +130,7 @@ class FakeCodexChild extends EventEmitter {
       params: {
         threadId: 'thread-live', turnId: 'turn-live',
         item: {
-          id: 'tool-live', type: 'mcpToolCall', server: 'aisy', tool: 'read_file',
+          id: 'tool-live', type: 'mcpToolCall', server: 'aisy', tool: this.toolName,
           arguments: args, status: 'completed',
         },
       },
@@ -156,13 +163,16 @@ function readyAuth(): CodexAuthProcessPort {
   }
 }
 
-function fixture() {
+function fixture(input: {
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'aisy-codex-subscription-')))
   const executable = join(root, 'codex')
   writeFileSync(executable, '#!/bin/sh\n', { mode: 0o700 })
   chmodSync(executable, 0o700)
   const codexHome = join(root, 'codex-home')
-  const child = new FakeCodexChild()
+  const child = new FakeCodexChild(input)
   const spawns: Array<{
     command: string
     options: { cwd: string; env: Readonly<Record<string, string>> }
@@ -279,6 +289,37 @@ describe('live Codex subscription runtime', () => {
     expect(readProviderActionEvidence(response)).toEqual([{
       tool: 'read_file', family: 'inspect', successful: false, receipt: false,
     }])
+    h.runtime.close()
+  })
+
+  it('keeps exact policy operation evidence after a subscription mutation', async () => {
+    const args = {
+      operation: 'policy.tighten-project', target: 'current', value: 'read-only',
+    }
+    const h = fixture({ toolName: 'configure_agent', toolArgs: args })
+    const provider = h.runtime.provider({
+      projectId: 'project-a',
+      tools: [{
+        name: 'configure_agent', description: 'Configure Aisy',
+        input_schema: {
+          type: 'object',
+          properties: {
+            operation: { type: 'string' }, target: { type: 'string' }, value: { type: 'string' },
+          },
+        },
+      }],
+      invokeTool: async () => ({ text: 'Настроил.', isError: false, receipt: true }),
+    })
+
+    const response = await provider.complete({
+      sessionId: 'session-a', turnId: 'operator-turn-a', prefixBytes: new Uint8Array(),
+      spans: [{ role: 'user', provenance: 'operator', text: 'Включи только чтение' }],
+    })
+    expect(readProviderActionEvidence(response)).toEqual([{
+      tool: 'configure_agent', family: 'mutate', successful: true, receipt: true,
+      operation: 'policy.tighten-project',
+    }])
+    expect(readProviderToolExecutions(response)).toHaveLength(1)
     h.runtime.close()
   })
 

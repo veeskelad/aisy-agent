@@ -106,6 +106,7 @@ describe('LIVE Plan Mode composition', () => {
     const projected = (context: ToolExecutionContext) => Object.freeze({
       sessionId: context.sessionId,
       ...(context.turnId === undefined ? {} : { turnId: context.turnId }),
+      ordinal: context.ordinal,
     })
     const runner = makeAgentRunner({
       provider,

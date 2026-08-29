@@ -21,6 +21,8 @@ export interface ActionEvidence {
   family: ActionToolFamily
   successful: boolean
   receipt: boolean
+  /** Exact typed sub-operation needed to validate mixed-family platform tools. */
+  operation?: string
 }
 
 export interface ActionContractVerdict {
@@ -94,15 +96,24 @@ function snapshotProviderEvidence(item: ActionEvidence): Readonly<ActionEvidence
     typeof item.successful !== 'boolean' || typeof item.receipt !== 'boolean') {
     throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
   }
+  const operation = item.operation
+  if (operation !== undefined &&
+    (item.tool !== 'configure_agent' || typeof operation !== 'string' || operation.length > 128)) {
+    throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
+  }
   const validFamily = item.tool === 'bash'
     ? item.family === 'inspect' || item.family === 'mutate'
-    : item.family === actionToolFamily({ name: item.tool, args: {} })
+    : item.family === actionToolFamily({
+        name: item.tool,
+        args: operation === undefined ? {} : { operation },
+      })
   if (!validFamily) throw new Error('INVALID_PROVIDER_ACTION_EVIDENCE')
   return Object.freeze({
     tool: item.tool,
     family: item.family,
     successful: item.successful,
     receipt: item.receipt,
+    ...(operation === undefined ? {} : { operation }),
   })
 }
 
@@ -227,7 +238,10 @@ export function actionToolFamily(call: ToolCall): ActionToolFamily {
   // closed executor still rejects every unsupported operation before effects.
   if (call.name === 'configure_agent') {
     const operation = call.args['operation']
-    return operation === 'session.rename' || operation === 'session.request-delete'
+    if (operation === 'policy.resolve-path') return 'inspect'
+    return operation === 'session.rename' || operation === 'session.request-delete' ||
+      operation === 'policy.tighten-project' || operation === 'policy.tighten-path' ||
+      operation === 'policy.relax-project' || operation === 'policy.relax-path'
       ? 'mutate'
       : 'unknown'
   }
@@ -254,11 +268,15 @@ function hasReceipt(result: unknown): boolean {
 }
 
 export function actionEvidence(call: ToolCall, result: unknown): ActionEvidence {
+  const operation = call.name === 'configure_agent' && typeof call.args['operation'] === 'string'
+    ? call.args['operation']
+    : undefined
   return {
     tool: call.name,
     family: actionToolFamily(call),
     successful: result !== undefined && !failedResult(result),
     receipt: hasReceipt(result),
+    ...(operation === undefined ? {} : { operation }),
   }
 }
 

@@ -76,6 +76,31 @@ describe('ConfinementPort', () => {
     })
   })
 
+  it('carries an admitted component identity into the worker request', async () => {
+    const requests: ConfinementWorkerRequest[] = []
+    const { confinement, lease } = setup(async (request) => {
+      requests.push(request)
+      return success(request, { bytes: 1 })
+    })
+    const pin = {
+      rootDevice: '1',
+      rootInode: '2',
+      components: [
+        { name: 'docs', device: '1', inode: '3' },
+        { name: 'out.txt', device: '1', inode: '4' },
+      ],
+    }
+
+    await expect(confinement.writeText(lease, 'docs/out.txt', 'x', undefined, pin))
+      .resolves.toBe(1)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      expectedRootDevice: '1',
+      expectedRootInode: '2',
+      expectedPathComponents: pin.components,
+    })
+  })
+
   it('rejects a forged lease before starting the worker', async () => {
     let calls = 0
     const { confinement, lease } = setup(async () => { calls += 1 })

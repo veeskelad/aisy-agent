@@ -9,7 +9,14 @@
 
 import { makeSafetyPolicy } from '../safety/index.js'
 import type { GrantBinding, GrantStore, SafetyPolicy, SandboxSecurityLevel } from '../safety/index.js'
-import { makeHookGate, makePostToolUseProcessor, type ApprovalDecision, type HookGateDeps, type PostToolUseDeps } from './hook-gate.js'
+import {
+  makeHookGate,
+  makePostToolUseProcessor,
+  type ApprovalDecision,
+  type HookGateDeps,
+  type PolicyRelaxationTarget,
+  type PostToolUseDeps,
+} from './hook-gate.js'
 import { CALL_MCP_TOOL_NAME } from './mcp-capability-runtime.js'
 import { runtimeToolDefinition, validateRuntimeToolCall, type ToolTier } from './tool-catalog.js'
 import { makeAgentLoop } from '../agent-loop/index.js'
@@ -17,6 +24,7 @@ import type {
   AgentLoop,
   AgentLoopDeps,
   Clock,
+  HookCtx,
   ProviderAdapter,
   MemoryPort,
   LoopGuardian,
@@ -90,6 +98,10 @@ export interface AgentRunnerDeps {
    * гейт спрашивает карточкой, как раньше.
    */
   learnedAutonomy?: NonNullable<HookGateDeps['learnedAutonomy']>
+  /** Strict-only Project/path policy, evaluated after grants. */
+  narrowPolicy?: NonNullable<HookGateDeps['narrowPolicy']>
+  /** Resolves a relaxation handle to a code-owned operator-visible Project path. */
+  describePolicyRelaxation?: (call: ToolCall, context: HookCtx) => PolicyRelaxationTarget | null
   /** Наблюдатель ответов оператора — сырьё для той же автономности. */
   observeApproval?: NonNullable<HookGateDeps['observeApproval']>
 }
@@ -136,10 +148,24 @@ export function makeAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       }
       const definition = runtimeToolDefinition(call.name)
       if (!definition) throw new Error('unknown runtime tool')
+      const policyRelaxation = call.name === 'configure_agent' &&
+        typeof call.args['operation'] === 'string' &&
+        call.args['operation'].startsWith('policy.relax-')
+      let policyTarget: PolicyRelaxationTarget | null = null
+      if (policyRelaxation) {
+        policyTarget = deps.describePolicyRelaxation?.(call, ctx) ?? null
+        if (policyTarget === null) throw new Error('policy relaxation target unavailable')
+      }
       return {
         tool: call.name,
-        args: call.args,
-        policyTier: Math.max(definition.tier, deps.toolTiers?.[call.name] ?? definition.tier) as ToolTier,
+        args: policyTarget === null
+          ? call.args
+          : policyTarget.scope === 'project'
+            ? { ...call.args, policyScope: 'project' }
+            : { ...call.args, policyScope: 'path', policyPath: policyTarget.relativePath },
+        policyTier: policyRelaxation
+          ? 3
+          : Math.max(definition.tier, deps.toolTiers?.[call.name] ?? definition.tier) as ToolTier,
         outboundSink: definition.outboundSink,
       }
     },
@@ -151,6 +177,7 @@ export function makeAgentRunner(deps: AgentRunnerDeps): AgentRunner {
     }),
     ...(deps.grantBinding === undefined ? {} : { grantBinding: deps.grantBinding }),
     ...(deps.learnedAutonomy === undefined ? {} : { learnedAutonomy: deps.learnedAutonomy }),
+    ...(deps.narrowPolicy === undefined ? {} : { narrowPolicy: deps.narrowPolicy }),
     ...(deps.observeApproval === undefined ? {} : { observeApproval: deps.observeApproval }),
   })
 

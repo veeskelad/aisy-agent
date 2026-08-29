@@ -181,13 +181,15 @@ zero-I/O preflight; durable fence, provider purge и изменение зави
 ## 4. Разговорная конфигурация
 
 Модель получает закрытые инструменты `list_sessions` и `configure_agent` с
-версионированным набором операций. `list_sessions` возвращает не id, а bounded
+версионированным набором операций. `list_sessions`
+возвращает не id, а bounded
 one-turn opaque handles, привязанные к trusted owner/project/generation.
 Для main Agent это обязательные code-owned platform-controls: при включённой
 AgentCard они добавляются сверх её workload allowlist с фиксированными
 минимальными tiers, не открывая ни одного другого отсутствующего в карте tool.
-`configure_agent` первого среза принимает `session.rename`,
-`session.request-delete` и строгий policy overlay. Для current target допустим
+`configure_agent` принимает `session.rename`, `session.request-delete`,
+`session.propose-name`, `policy.resolve-path`, `policy.tighten-project`, `policy.tighten-path`,
+`policy.relax-project` и `policy.relax-path`. Для current target допустим
 literal `current`; inactive target задаётся только выданным handle. Resolver
 сам восстанавливает owner/project/session/path из trusted binding/handle.
 Модель передаёт допустимое значение, но не выбирает authority.
@@ -207,15 +209,46 @@ Project/path overlay выражает только narrowing: `ask-before-delete
 provider envelope, tool registry и safety rules не являются configurable
 resources и не доступны этому инструменту.
 
-Папка выбирается не свободной строкой модели. Read-only resolver
-`resolve_policy_path` принимает operator-visible candidate, проходит путь
+Папка выбирается не свободной строкой модели. Read-only операция
+`configure_agent(policy.resolve-path)` принимает operator-visible candidate, проходит путь
 component-by-component от trusted Project root без symlink traversal, проверяет
 root confinement и возвращает one-turn opaque handle. Перед commit resolver
 повторно сверяет device/inode, Project-relative identity и policy revision.
-Наложения наследуются от Project к самой глубокой папке; при конфликте действует
-самое строгое правило. Ужесточение применяется сразу через CAS. Ослабление или
-отзыв overlay — отдельное widening-действие с одним authenticated tap. UI умеет
-показать и отозвать точные Project-relative overlays без раскрытия host path.
+Canonical resolver сводит эквивалентные `.`/`..` и case-alias к одной
+Project-relative identity для policy matching. Сами `read_file`,
+`write_file` и `list_dir` исполняются через descriptor-relative confinement,
+привязанный к exact Project lease. Policy admission закрепляет за
+Session/turn/tool ordinal device/inode Project root и каждого существующего
+компонента; worker сверяет pin с уже открытыми дескрипторами. Symlink
+alias, escape, подмена компонента или resolver→effect swap, включая
+переименование обычного каталога, отклоняются fail-closed; при отказе
+проверяемый filesystem effect не происходит.
+Наложения наследуются от Project к самой глубокой папке; независимые строгие
+режимы объединяются, `deny` сильнее `ask`. Ужесточение применяется сразу через
+CAS. Ослабление или отзыв отдельного режима — Tier-3 widening-действие с одним
+authenticated tap, которое не создаёт remembered grant. Карточка показывает
+точный code-owned Project-relative путь либо «весь проект» и связывает его с
+action hash; длинный путь показывает bounded началом, концом и полным
+SHA-256, чтобы два target с общим префиксом не выглядели одинаково.
+Непрозрачный handle пользователю не показывается. Project-level режимы
+действуют для всех tools; folder-level `read-only` и `confirm-writes` действуют
+только для вызова с code-owned Project-relative resource path. Folder-level
+`no-egress` и `ask-before-delete` отвергаются вместо ложного обещания, потому что
+внешний вызов и shell-команда не несут доказуемой folder identity. Разговорный
+resolver использует точный Project-relative overlay без раскрытия
+host path; `policy.resolve-path(value=.)` перечисляет текущие строгие режимы и
+пути, не выдаёт usable handle, после чего named path разрешается отдельным
+one-turn handle. Project-wide `no-egress` отвергает весь opaque `bash`/MCP
+capability class и HTTP-watch trigger: строковый denylist не доказывает
+отсутствие сокетов. `session.request-delete` остаётся единственным purpose-bound
+preview и не получает вторую карточку от `confirm-writes`.
+В текущей LIVE-composition HTTP-watch не получает network probe port и потому
+остаётся dormant. Его будущая активация обязана применять overlay на
+каждом tick и после restart до выдачи fetch-порта.
+
+Subscription provider action evidence связывает `configure_agent` с exact
+operation; receipt для другой policy-операции не может подтвердить
+выполненное изменение.
 
 Короткие direct commands и Telegram buttons вызывают те же resolvers. Они нужны
 как deterministic fallback, а не как отдельный продуктовый путь.
@@ -338,8 +371,10 @@ minimum-readable-release marker.
 15. принятые Project-файлы и schema manifest byte-compatible переживают delete,
     target rows исчезают из transcript-v2, legacy session-log/anchor остаются
     byte-identical metadata-only, а новый audit не содержит dialogue content;
-16. path overlay corpus покрывает symlink swap, escape, stale handle/revision,
-    nested strictest-wins, immediate tighten и подтверждённое relax/revoke;
+16. path overlay corpus покрывает symlink/escape, APFS case-alias, ordinary-directory
+    resolver→effect swap, длинные одинаковые префиксы, stale handle/revision,
+    cross-Session replay, nested strictest-wins, immediate tighten, restart
+    persistence и Tier-3 relax/revoke без remembered grant;
 17. bootstrap corpus не запускает ни один transport/background/system writer до
     terminal create repair и применения delete fence/tombstone/replacement;
     `provider-purge-pending` после этого возобновляется асинхронно и блокирует

@@ -3,6 +3,7 @@ import { makeAgentRunner, type AgentRunnerDeps } from './agent-runner.js'
 import { makeGrantStore } from '../safety/index.js'
 import { makeGuardian } from './guardian.js'
 import type { ApprovalDecision } from './hook-gate.js'
+import type { PendingAction } from '../gateway/index.js'
 import type {
   ProviderAdapter,
   ModelResponse,
@@ -141,6 +142,45 @@ describe('call_mcp seam', () => {
 })
 
 describe('makeAgentRunner.handle', () => {
+  it('makes every conversational policy relaxation a Tier-3 confirmed action', async () => {
+    const approvals: PendingAction[] = []
+    const executed: ToolCall[] = []
+    const runner = makeAgentRunner({
+      provider: provider({
+        reply: '',
+        toolCalls: [{
+          name: 'configure_agent',
+          args: { operation: 'policy.relax-path', target: 'opaque', value: 'read-only' },
+        }],
+      }, { reply: 'Готово.' }),
+      memory,
+      grants: makeGrantStore(),
+      grantBinding: GRANT_BINDING,
+      executeTool: (call) => { executed.push(call); return { ok: true } },
+      approve: async (action) => { approvals.push(action); return { decision: 'confirmed' } },
+      describePolicyRelaxation: (_call, context) =>
+        context.sessionId === 's1'
+          ? { scope: 'path', relativePath: 'docs/private' }
+          : null,
+      guardian,
+      sessionLog,
+    })
+
+    await runner.handle(turn('Разреши запись в выбранной папке'))
+
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]).toMatchObject({
+      tier: 3,
+      requiresStepUp: true,
+      canRememberSimilar: false,
+      summary: 'Ослабить настройку «только чтение» для папки «docs/private». После этого агент получит больше свободы.',
+    })
+    expect(executed).toEqual([{
+      name: 'configure_agent',
+      args: { operation: 'policy.relax-path', target: 'opaque', value: 'read-only' },
+    }])
+  })
+
   it('forwards the recorder seam after applying lazy turn augmentation', async () => {
     const records: TranscriptRecordRequest[] = []
     const starts: string[] = []

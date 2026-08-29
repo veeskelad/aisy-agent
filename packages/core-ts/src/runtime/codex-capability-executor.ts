@@ -8,8 +8,15 @@ import {
 } from '../safety/index.js'
 import type { CodexCapabilityContext } from './codex-capability-bridge.js'
 import type { ToolResult } from './execute-tool.js'
-import { makeHookGate, type ApprovalDecision } from './hook-gate.js'
+import {
+  makeHookGate,
+  type ApprovalDecision,
+  type HookGateDeps,
+  type PolicyRelaxationTarget,
+  type RuntimePolicyNarrowing,
+} from './hook-gate.js'
 import { resolvedWorkBinding, type ResolvedWorkBinding } from './work-binding.js'
+import { runtimeToolDefinition, validateRuntimeToolCall } from './tool-catalog.js'
 
 export type CodexCapabilityExecutor = (
   binding: ResolvedWorkBinding,
@@ -43,6 +50,17 @@ export function makeCodexCapabilityExecutor(input: {
   ): Promise<ToolResult>
   /** ADR-0091: bypass Safety/approval for the exact host `bash` tool only. */
   unsafeHostBashBypass?: () => boolean
+  /** Same strict-only Project/path overlay as native and delegated runners. */
+  narrowPolicy?(
+    binding: ResolvedWorkBinding,
+    request: Parameters<NonNullable<HookGateDeps['narrowPolicy']>>[0],
+  ): RuntimePolicyNarrowing
+  /** Resolves a relaxation handle to a code-owned operator-visible Project path. */
+  describePolicyRelaxation?(
+    binding: ResolvedWorkBinding,
+    call: ToolCall,
+    context: HookCtx,
+  ): PolicyRelaxationTarget | null
 }): CodexCapabilityExecutor {
   return async (rawBinding, call, context, signal, runtimeContext): Promise<ToolResult> => {
     if (signal.aborted) return CANCELLED
@@ -77,6 +95,32 @@ export function makeCodexCapabilityExecutor(input: {
       safety,
       grants: input.grants,
       grantBinding: binding,
+      validateCall: call => validateRuntimeToolCall(call).ok,
+      resolveSafetyCall: (candidate) => {
+        const definition = runtimeToolDefinition(candidate.name)
+        if (definition === undefined) throw new Error('unknown runtime tool')
+        const policyRelaxation = candidate.name === 'configure_agent' &&
+          typeof candidate.args['operation'] === 'string' &&
+          candidate.args['operation'].startsWith('policy.relax-')
+        let policyTarget: PolicyRelaxationTarget | null = null
+        if (policyRelaxation) {
+          policyTarget = input.describePolicyRelaxation?.(binding, candidate, hookContext) ?? null
+          if (policyTarget === null) throw new Error('policy relaxation target unavailable')
+        }
+        return {
+          tool: candidate.name,
+          args: policyTarget === null
+            ? candidate.args
+            : policyTarget.scope === 'project'
+              ? { ...candidate.args, policyScope: 'project' }
+              : { ...candidate.args, policyScope: 'path', policyPath: policyTarget.relativePath },
+          policyTier: policyRelaxation ? 3 : definition.tier,
+          outboundSink: definition.outboundSink,
+        }
+      },
+      ...(input.narrowPolicy === undefined ? {} : {
+        narrowPolicy: request => input.narrowPolicy!(binding, request),
+      }),
       approve: async (action) => {
         if (signal.aborted) return { decision: 'rejected' }
         const decision = await input.approve(binding, action, signal)
@@ -86,6 +130,9 @@ export function makeCodexCapabilityExecutor(input: {
     const hookContext: HookCtx = Object.freeze({
       provenance: context.provenance,
       narrowed: context.narrowed,
+      ...(runtimeContext === undefined ? {} : { sessionId: runtimeContext.sessionId }),
+      ...(runtimeContext?.turnId === undefined ? {} : { turnId: runtimeContext.turnId }),
+      ...(runtimeContext?.ordinal === undefined ? {} : { ordinal: runtimeContext.ordinal }),
     })
     let verdict: Awaited<ReturnType<typeof gate.pre>>
     try { verdict = await gate.pre(call, hookContext) } catch { return FAILED }

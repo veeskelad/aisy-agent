@@ -48,6 +48,7 @@ export interface SubAgentRunnerDeps {
   budgetCheck?: AgentRunnerDeps['budgetCheck']
   propagateToolInterruption?: AgentRunnerDeps['propagateToolInterruption']
   postToolUse?: AgentRunnerDeps['postToolUse']
+  narrowPolicy?: AgentRunnerDeps['narrowPolicy']
   skillPromptRuntime?: SkillPromptRuntime
 }
 
@@ -78,6 +79,7 @@ export interface BoundSubAgentRunnerDeps {
   budgetCheck: NonNullable<AgentRunnerDeps['budgetCheck']>
   skillPromptRuntimeFactory?: (allowedSkills: ReadonlySet<string>) => SkillPromptRuntime
   postToolUse?: AgentRunnerDeps['postToolUse']
+  narrowPolicy?: AgentRunnerDeps['narrowPolicy']
 }
 
 const AUTHORITY_SEAL_KIND = 'runtime.agent-authority.v1'
@@ -159,6 +161,7 @@ export function makeSubAgentRunner(deps: SubAgentRunnerDeps): AgentRunner {
       ? {}
       : { propagateToolInterruption: deps.propagateToolInterruption }),
     ...(deps.postToolUse === undefined ? {} : { postToolUse: deps.postToolUse }),
+    ...(deps.narrowPolicy === undefined ? {} : { narrowPolicy: deps.narrowPolicy }),
     toolTiers: deps.handle.card.toolTiers as Readonly<Record<string, 0 | 1 | 2 | 3>>,
     ...(deps.skillPromptRuntime === undefined ? {} : {
       prefixExtension: deps.skillPromptRuntime.prefixExtension,
@@ -239,6 +242,7 @@ export function makeBoundSubAgentRunner(deps: BoundSubAgentRunnerDeps): BoundSub
       return deps.budgetCheck(usage)
     },
     ...(deps.postToolUse === undefined ? {} : { postToolUse: deps.postToolUse }),
+    ...(deps.narrowPolicy === undefined ? {} : { narrowPolicy: deps.narrowPolicy }),
     toolTiers: authority.capabilities.toolTiers,
     ...(skillPromptRuntime === undefined ? {} : {
       prefixExtension: skillPromptRuntime.prefixExtension,

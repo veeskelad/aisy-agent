@@ -50,6 +50,22 @@ export interface ConfinementWorkerRequest {
   /** Optional decimal-string pin; both root identity fields must be supplied together. */
   expectedRootDevice?: string
   expectedRootInode?: string
+  /** Existing descriptor-relative components pinned before policy admission. */
+  expectedPathComponents?: Array<{
+    name: string
+    device: string
+    inode: string
+  }>
+}
+
+export interface ConfinementPathPin {
+  readonly rootDevice: string
+  readonly rootInode: string
+  readonly components: readonly Readonly<{
+    name: string
+    device: string
+    inode: string
+  }>[]
 }
 
 export interface ConfinementProcessPort {
@@ -82,8 +98,19 @@ export interface ConfinementEvent {
 }
 
 export interface ConfinementPort {
-  readText(lease: TurnContextLease, path: string, maxBytes?: number): Promise<string>
-  writeText(lease: TurnContextLease, path: string, text: string, maxBytes?: number): Promise<number>
+  readText(
+    lease: TurnContextLease,
+    path: string,
+    maxBytes?: number,
+    pin?: ConfinementPathPin,
+  ): Promise<string>
+  writeText(
+    lease: TurnContextLease,
+    path: string,
+    text: string,
+    maxBytes?: number,
+    pin?: ConfinementPathPin,
+  ): Promise<number>
   editText(
     lease: TurnContextLease,
     path: string,
@@ -91,7 +118,12 @@ export interface ConfinementPort {
     newText: string,
     options?: { replaceAll?: boolean; maxBytes?: number },
   ): Promise<{ bytes: number; replacements: number }>
-  list(lease: TurnContextLease, path?: string, maxEntries?: number): Promise<string[]>
+  list(
+    lease: TurnContextLease,
+    path?: string,
+    maxEntries?: number,
+    pin?: ConfinementPathPin,
+  ): Promise<string[]>
   scan(
     lease: TurnContextLease,
     path?: string,
@@ -154,6 +186,36 @@ function natural(value: unknown, maximum: number): number {
     throw new ConfinementError('PROTOCOL_ERROR')
   }
   return value as number
+}
+
+function pinRequest(pin: ConfinementPathPin | undefined): Pick<
+  ConfinementWorkerRequest,
+  'expectedRootDevice' | 'expectedRootInode' | 'expectedPathComponents'
+> {
+  if (pin === undefined) return {}
+  const decimal = /^(?:0|[1-9][0-9]{0,19})$/
+  if (!decimal.test(pin.rootDevice) || !decimal.test(pin.rootInode) ||
+    !Array.isArray(pin.components) || pin.components.length > 256) {
+    throw new ConfinementError('INVALID_REQUEST')
+  }
+  const components = pin.components.map((component) => {
+    if (typeof component.name !== 'string' || component.name.length === 0 ||
+      component.name === '.' || component.name === '..' || component.name.includes('/') ||
+      component.name.includes('\0') || !decimal.test(component.device) ||
+      !decimal.test(component.inode)) {
+      throw new ConfinementError('INVALID_REQUEST')
+    }
+    return {
+      name: component.name,
+      device: component.device,
+      inode: component.inode,
+    }
+  })
+  return {
+    expectedRootDevice: pin.rootDevice,
+    expectedRootInode: pin.rootInode,
+    expectedPathComponents: components,
+  }
 }
 
 function parseEnvelope(response: unknown, requestId: string): Record<string, unknown> {
@@ -233,9 +295,9 @@ export function makeConfinementPort(deps: {
   }
 
   return Object.freeze<ConfinementPort>({
-    readText(lease, path, maxBytes) {
+    readText(lease, path, maxBytes, pin) {
       const limit = positiveLimit(maxBytes, MAX_READ_BYTES, MAX_READ_BYTES)
-      return execute(lease, { op: 'read', path, maxBytes: limit }, (data) => {
+      return execute(lease, { op: 'read', path, maxBytes: limit, ...pinRequest(pin) }, (data) => {
         if (typeof data.text !== 'string') throw new ConfinementError('PROTOCOL_ERROR')
         const bytes = natural(data.bytes, limit)
         if (Buffer.byteLength(data.text, 'utf8') !== bytes) {
@@ -245,10 +307,12 @@ export function makeConfinementPort(deps: {
       })
     },
 
-    writeText(lease, path, text, maxBytes) {
+    writeText(lease, path, text, maxBytes, pin) {
       const limit = positiveLimit(maxBytes, MAX_WRITE_BYTES, MAX_WRITE_BYTES)
       const expectedBytes = Buffer.byteLength(text, 'utf8')
-      return execute(lease, { op: 'write', path, text, maxBytes: limit }, (data) => {
+      return execute(lease, {
+        op: 'write', path, text, maxBytes: limit, ...pinRequest(pin),
+      }, (data) => {
         const bytes = natural(data.bytes, limit)
         if (bytes !== expectedBytes) throw new ConfinementError('PROTOCOL_ERROR')
         return bytes
@@ -280,9 +344,9 @@ export function makeConfinementPort(deps: {
       })
     },
 
-    list(lease, path = '.', maxEntries) {
+    list(lease, path = '.', maxEntries, pin) {
       const limit = positiveLimit(maxEntries, MAX_LIST_ENTRIES, MAX_LIST_ENTRIES)
-      return execute(lease, { op: 'list', path, maxEntries: limit }, (data) => {
+      return execute(lease, { op: 'list', path, maxEntries: limit, ...pinRequest(pin) }, (data) => {
         if (!Array.isArray(data.entries) || data.entries.length > limit ||
           data.entries.some((entry) => typeof entry !== 'string' || entry.length === 0 ||
             entry === '.' || entry === '..' || entry.includes('/') || entry.includes('\0')) ||

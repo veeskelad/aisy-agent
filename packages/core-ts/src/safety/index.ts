@@ -170,6 +170,13 @@ function cardArgument(value: unknown): string | null {
   return flat.length <= CARD_ARG_CHARS ? flat : `${flat.slice(0, CARD_ARG_CHARS)}…`
 }
 
+function policyPathArgument(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || /[\p{Cc}\p{Cf}]/u.test(value)) return null
+  if (value.length <= 240) return value
+  const digest = createHash('sha256').update(value).digest('hex')
+  return `${value.slice(0, 96)}…${value.slice(-96)} [${digest}]`
+}
+
 /**
  * What the operator reads on the card. Argument names only, with two
  * exceptions, both for the same reason — the name alone asks the operator to
@@ -180,6 +187,26 @@ function cardArgument(value: unknown): string | null {
  *    the card. "deep_research(question)" would be a blank cheque.
  */
 function actionSummary(call: ToolCall): string {
+  if (call.tool === 'configure_agent' && typeof call.args['operation'] === 'string' &&
+    call.args['operation'].startsWith('policy.relax-')) {
+    const labels: Readonly<Record<string, string>> = {
+      'ask-before-delete': 'спрашивать перед удалением',
+      'confirm-writes': 'подтверждать изменения',
+      'read-only': 'только чтение',
+      'no-egress': 'без внешних подключений',
+    }
+    const mode = typeof call.args['value'] === 'string'
+      ? labels[call.args['value']] ?? 'строгий режим'
+      : 'строгий режим'
+    const policyScope = call.args['policyScope']
+    const policyPath = policyPathArgument(call.args['policyPath'])
+    const place = policyScope === 'project'
+      ? 'для всего проекта'
+      : policyScope === 'path' && policyPath !== null
+        ? `для папки «${policyPath}»`
+        : 'для выбранной папки'
+    return `Ослабить настройку «${mode}» ${place}. После этого агент получит больше свободы.`
+  }
   if (call.tool === 'fetch_url') {
     const host = httpsHost(call.args['url'])
     if (host !== null) return `fetch_url(${host})`

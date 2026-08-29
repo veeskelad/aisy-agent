@@ -6,7 +6,7 @@
 // filesystem operations to the workspace as defense-in-depth. Side-effecting
 // tools (bash) are injected ports so the sandbox stays swappable/testable.
 
-import { isAbsolute, normalize, resolve } from 'node:path'
+import { isAbsolute, normalize, relative, resolve, sep } from 'node:path'
 import type { ToolCall, ToolExecutionContext } from '../agent-loop/types.js'
 import type { CommitResult, MemoryOp } from '../memory/index.js'
 import type { TaskObservation } from '../orchestration/index.js'
@@ -41,10 +41,44 @@ export interface FsPort {
   exists(path: string): boolean
 }
 
+export interface WorkspaceResourceSeal {
+  readonly rootDevice: string
+  readonly rootInode: string
+  /** Existing path components, in order. A missing final create target is omitted. */
+  readonly components: readonly Readonly<{
+    name: string
+    device: string
+    inode: string
+  }>[]
+}
+
+export interface ResolvedWorkspacePath {
+  readonly absolutePath: string
+  readonly seal?: WorkspaceResourceSeal
+}
+
+/** Descriptor-relative production file port; paths are workspace-relative. */
+export interface ConfinedWorkspaceFsPort {
+  readFile(path: string, seal?: WorkspaceResourceSeal): Promise<string>
+  writeFile(path: string, content: string, seal?: WorkspaceResourceSeal): Promise<void>
+  listDir(path: string, seal?: WorkspaceResourceSeal): Promise<string[]>
+}
+
 export interface ExecuteToolDeps {
   fs: FsPort
   /** Workspace root; file paths are resolved under it and may not escape. */
   workspaceRoot: string
+  /**
+   * Optional code-owned canonical resolver shared with Project policy matching.
+   * Returning null rejects the path immediately before the filesystem effect.
+   */
+  resolveWorkspacePath?: (
+    path: string,
+    call: ToolCall,
+    context?: ToolExecutionContext,
+  ) => string | ResolvedWorkspacePath | null
+  /** Atomic no-symlink I/O port used by the live composition after lexical policy matching. */
+  confinedWorkspaceFs?: ConfinedWorkspaceFsPort
   /** Sandbox shell port (Safety 05). Absent ⇒ bash reports unavailable. */
   runBash?: (cmd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
   /** Memory FTS read port. Absent ⇒ search_memory reports unavailable. */
@@ -138,12 +172,36 @@ export function makeToolExecutor(
   const committedRememberReceipts = new Map<string, ToolResult>()
 
   /** Resolve a tool-supplied path under the workspace root; null if it escapes. */
-  const confine = (p: string): string | null => {
+  const confine = (
+    p: string,
+    call: ToolCall,
+    context?: ToolExecutionContext,
+  ): ResolvedWorkspacePath | null => {
     if (p.length === 0) return null
-    const abs = isAbsolute(p) ? normalize(p) : resolve(root, p)
-    if (abs !== root && !abs.startsWith(root + '/')) return null
-    return abs
+    let resolvedPath: string
+    try {
+      if (deps.resolveWorkspacePath !== undefined) {
+        const candidate = deps.resolveWorkspacePath(p, call, context)
+        if (candidate === null) return null
+        resolvedPath = typeof candidate === 'string' ? candidate : candidate.absolutePath
+        const abs = normalize(resolvedPath)
+        if (!isAbsolute(abs) || (abs !== root && !abs.startsWith(root + sep))) return null
+        return typeof candidate === 'string'
+          ? { absolutePath: abs }
+          : { ...candidate, absolutePath: abs }
+      } else {
+        resolvedPath = isAbsolute(p) ? normalize(p) : resolve(root, p)
+      }
+    } catch {
+      return null
+    }
+    const abs = normalize(resolvedPath)
+    if (!isAbsolute(abs)) return null
+    if (abs !== root && !abs.startsWith(root + sep)) return null
+    return { absolutePath: abs }
   }
+
+  const confinedRelative = (absolutePath: string): string => relative(root, absolutePath) || '.'
 
   return async (call: ToolCall, context?: ToolExecutionContext): Promise<ToolResult> => {
     const validated = validateRuntimeToolCall(call)
@@ -174,22 +232,68 @@ export function makeToolExecutor(
     }
     switch (call.name) {
       case 'read_file': {
-        const path = confine(arg(call, 'path'))
-        if (!path) return { ok: false, output: 'read_file: path outside workspace' }
+        const resource = confine(arg(call, 'path'), call, context)
+        if (!resource) return { ok: false, output: 'read_file: path outside workspace' }
+        const path = resource.absolutePath
+        if (deps.confinedWorkspaceFs !== undefined) {
+          try {
+            return {
+              ok: true,
+              output: resource.seal === undefined
+                ? await deps.confinedWorkspaceFs.readFile(confinedRelative(path))
+                : await deps.confinedWorkspaceFs.readFile(confinedRelative(path), resource.seal),
+            }
+          } catch {
+            return { ok: false, output: 'read_file: confined operation failed' }
+          }
+        }
         if (!deps.fs.exists(path)) return { ok: false, output: `read_file: not found: ${path}` }
         return { ok: true, output: deps.fs.readFile(path) }
       }
 
       case 'write_file': {
-        const path = confine(arg(call, 'path'))
-        if (!path) return { ok: false, output: 'write_file: path outside workspace' }
+        const resource = confine(arg(call, 'path'), call, context)
+        if (!resource) return { ok: false, output: 'write_file: path outside workspace' }
+        const path = resource.absolutePath
+        if (deps.confinedWorkspaceFs !== undefined) {
+          try {
+            if (resource.seal === undefined) {
+              await deps.confinedWorkspaceFs.writeFile(confinedRelative(path), arg(call, 'content'))
+            } else {
+              await deps.confinedWorkspaceFs.writeFile(
+                confinedRelative(path),
+                arg(call, 'content'),
+                resource.seal,
+              )
+            }
+            return { ok: true, output: `wrote ${path}` }
+          } catch {
+            return { ok: false, output: 'write_file: confined operation failed' }
+          }
+        }
         deps.fs.writeFile(path, arg(call, 'content'))
         return { ok: true, output: `wrote ${path}` }
       }
 
       case 'list_dir': {
-        const path = confine(arg(call, 'path') || '.')
-        if (!path) return { ok: false, output: 'list_dir: path outside workspace' }
+        const resource = confine(arg(call, 'path') || '.', call, context)
+        if (!resource) return { ok: false, output: 'list_dir: path outside workspace' }
+        const path = resource.absolutePath
+        if (deps.confinedWorkspaceFs !== undefined) {
+          try {
+            return {
+              ok: true,
+              output: (resource.seal === undefined
+                ? await deps.confinedWorkspaceFs.listDir(confinedRelative(path))
+                : await deps.confinedWorkspaceFs.listDir(
+                    confinedRelative(path),
+                    resource.seal,
+                  )).join('\n'),
+            }
+          } catch {
+            return { ok: false, output: 'list_dir: confined operation failed' }
+          }
+        }
         if (!deps.fs.exists(path)) return { ok: false, output: `list_dir: not found: ${path}` }
         return { ok: true, output: deps.fs.listDir(path).join('\n') }
       }
@@ -372,7 +476,9 @@ export function makeToolExecutor(
         if (!configured.ok) return configured
         const operation = arg(call, 'operation')
         if (operation !== 'session.rename' && operation !== 'session.request-delete' &&
-          operation !== 'session.propose-name') {
+          operation !== 'session.propose-name' && operation !== 'policy.tighten-project' &&
+          operation !== 'policy.tighten-path' && operation !== 'policy.relax-project' &&
+          operation !== 'policy.relax-path' && operation !== 'policy.resolve-path') {
           return { ok: false, output: 'configure_agent: unsupported operation' }
         }
         const controlReceipt = makeAgentControlReceipt({

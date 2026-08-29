@@ -55,6 +55,7 @@ import {
   GLOBAL_DNA_PREFIX_FILES,
   serializeFactIndex,
   makeContextLeaseCoordinator,
+  makeConfinementPort,
   makeFreshProjectRegistryV2,
   makeProjectRegistryV2,
   makeCardResolver,
@@ -85,6 +86,7 @@ import {
   sameAutoSkillModelIdentity,
   type AnthropicTool,
   type ApprovalDecision,
+  type ConfinedWorkspaceFsPort,
   type FsPort,
   type GrantBinding,
   type MemoryPort,
@@ -99,6 +101,9 @@ import {
   type ToolExecutionContext,
   type LogEntry,
   type ResolvedWorkBinding,
+  type RuntimePolicyNarrowing,
+  type HookCtx,
+  type ToolCall,
   type VerificationTrace,
 } from '@aisy/core'
 import { plural, TOOL_LABEL, type GoalScreenView } from '@aisy/telegram-gw'
@@ -304,6 +309,11 @@ import {
   makeTelegramSessionControls,
 } from '../telegram-session-controls.js'
 import { makeConversationalSessionControl } from '../conversational-session-control.js'
+import { makeConversationalPolicyControl } from '../conversational-policy-control.js'
+import {
+  makeWorkspaceResourceAdmissionRegistry,
+  makeNodeProjectPolicyOverlayStore,
+} from '../project-policy-overlay.js'
 import { makeTelegramSkillControls } from '../telegram-skill-controls.js'
 import { makeNewSessionRunner, makeResumeSessionRunner } from '../telegram-new-session.js'
 import { makeNodeSessionLabelStore } from '../session-label-store.js'
@@ -1367,6 +1377,9 @@ const activeWorkspaceRoot = activeProject.root
 // `bash` resolves against this directory, so a missing one turns every first
 // action into ENOENT.
 mkdirSync(activeWorkspaceRoot, { recursive: true, mode: 0o700 })
+const projectPolicyOverlays = makeNodeProjectPolicyOverlayStore({
+  path: join(base, 'project-policy-overlays-v1.json'),
+})
 const staticWorkBinding: ResolvedWorkBinding = {
   ...(activeBot === null ? {} : { botId: activeBot.id }),
   operatorId: `telegram:${allowedChatId}`,
@@ -1731,6 +1744,21 @@ const fsPort: FsPort = {
   writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
   listDir: (p) => readdirSync(p),
   exists: (p) => existsSync(p),
+}
+const sidecarsRoot = fileURLToPath(new URL('../../../sidecars-py/', import.meta.url))
+const pythonExecutable = join(sidecarsRoot, '.venv', 'bin', 'python')
+const confinementWorkerPath = join(sidecarsRoot, 'aisy_sidecars', 'confinement_worker.py')
+const workspaceConfinement = makeConfinementPort({
+  leases: contextLeases,
+  process: makeNodeConfinementProcessPort({ pythonExecutable, workerPath: confinementWorkerPath }),
+  newId: () => randomUUID(),
+})
+const confinedWorkspaceFs: ConfinedWorkspaceFsPort = {
+  readFile: (path, seal) => workspaceConfinement.readText(sessionLease, path, undefined, seal),
+  writeFile: async (path, content, seal) => {
+    await workspaceConfinement.writeText(sessionLease, path, content, undefined, seal)
+  },
+  listDir: (path, seal) => workspaceConfinement.list(sessionLease, path, undefined, seal),
 }
 
 const grantPersistence = makeNodeApprovalGrantPersistence({ path: grantsPath })
@@ -2557,9 +2585,6 @@ const agentCardBinding = staticWorkBinding.scope === 'workspace'
 // Explicit rollback gate: lifecycle management may be used while the legacy
 // loader remains active. Only exact `1` makes published revisions authoritative.
 const agentCardRegistryCutover = process.env['AISY_AGENT_CARD_REGISTRY'] === '1'
-const sidecarsRoot = fileURLToPath(new URL('../../../sidecars-py/', import.meta.url))
-const pythonExecutable = join(sidecarsRoot, '.venv', 'bin', 'python')
-const confinementWorkerPath = join(sidecarsRoot, 'aisy_sidecars', 'confinement_worker.py')
 const agentCardLegacyImport = (() => {
   if (!existsSync(pythonExecutable) || !existsSync(confinementWorkerPath) ||
     !existsSync(join(base, 'agents'))) return undefined
@@ -3339,6 +3364,7 @@ const planContext = (context: ToolExecutionContext): ModelToolRuntimeContext => 
   const projected: ModelToolRuntimeContext = Object.freeze({
     sessionId: context.sessionId,
     ...(context.turnId === undefined ? {} : { turnId: context.turnId }),
+    ordinal: context.ordinal,
   })
   nativePlanContexts.set(projected, context)
   return projected
@@ -3375,6 +3401,22 @@ const conversationalSessionControl = makeConversationalSessionControl({
     },
   }),
 })
+const conversationalPolicyControl = makeConversationalPolicyControl({
+  projectId: activeProjectSelection.projectId,
+  projectRoot: activeWorkspaceRoot,
+  currentSessionId: () => projectRuntime.registry.getActive(registryOwner).sessionId,
+  store: projectPolicyOverlays,
+})
+const workspaceResourceAdmissions = makeWorkspaceResourceAdmissionRegistry({
+  root: activeWorkspaceRoot,
+})
+const safeWorkspacePath = (
+  candidate: string,
+  call: ToolCall,
+  context?: ToolExecutionContext,
+) => context === undefined
+  ? null
+  : workspaceResourceAdmissions.consume(context, call.name, candidate)
 
 const durableSpawnByContext = new WeakMap<
   ToolExecutionContext,
@@ -3387,6 +3429,8 @@ const durableSpawnByContext = new WeakMap<
 const executeTool = makeLiveToolExecutor({
   fs: fsPort,
   workspaceRoot: activeWorkspaceRoot,
+  resolveWorkspacePath: safeWorkspacePath,
+  confinedWorkspaceFs,
   fetchUrl: fetchUrlPort,
   // Commands run on the machine the agent lives on. `bash` is tier-2, so each
   // call the operator has not granted stops at the approval card. Explicit
@@ -3483,7 +3527,9 @@ const executeTool = makeLiveToolExecutor({
   // Wrapped: the port is declared further down, next to the delegation it uses.
   deepResearch: (question, context) => deepResearchPort(question, context),
   listSessions: (context) => conversationalSessionControl.list(context),
-  configureAgent: (input, context) => conversationalSessionControl.configure(input, context),
+  configureAgent: async (input, context) => input.operation.startsWith('policy.')
+    ? conversationalPolicyControl.configure(input, context)
+    : conversationalSessionControl.configure(input, context),
 })
 // Execution modes (ADR-0083): a mode may only tighten what the code already
 // enforces. Plan Mode now uses the durable research→submit→execute protocol;
@@ -3492,6 +3538,42 @@ const executeTool = makeLiveToolExecutor({
 // them without the operator re-issuing anything. The mode is read per call, so
 // a switch takes effect on the next tool, not on the next restart.
 const modeAwareGrants: GrantStore = makeExecutionModeGrantStore(grants, executionMode)
+const evaluateProjectPolicy = (
+  projectId: string,
+  call: ToolCall,
+  ctx: HookCtx,
+  safetyCall: Parameters<
+    NonNullable<Parameters<typeof makeAgentRunner>[0]['narrowPolicy']>
+  >[0]['safetyCall'],
+): RuntimePolicyNarrowing => {
+    if (safetyCall.tool === 'configure_agent' &&
+      typeof safetyCall.args['operation'] === 'string' &&
+      safetyCall.args['operation'].startsWith('policy.')) {
+      return { decision: 'unchanged' }
+    }
+    const definition = runtimeToolDefinition(safetyCall.tool)
+    const pathArg = definition?.scopedPathArg ??
+      (safetyCall.tool === 'read_file' || safetyCall.tool === 'list_dir' ? 'path' : undefined)
+    const rawPath = pathArg === undefined ? undefined : safetyCall.args[pathArg]
+    const resourcePath = safetyCall.tool === 'list_dir' &&
+      (rawPath === undefined || rawPath === '') ? '.' : rawPath
+    const admitted = typeof resourcePath === 'string'
+      ? workspaceResourceAdmissions.admit(ctx, call.name, resourcePath)
+      : undefined
+    if (typeof resourcePath === 'string' && admitted === null) return { decision: 'deny' }
+    const relativePath = admitted?.relativePath ?? null
+    return projectPolicyOverlays.evaluate({
+      projectId,
+      tool: safetyCall.tool,
+      args: safetyCall.args,
+      effect: definition?.effect ?? (safetyCall.tool.startsWith('mcp:write:') ? 'write' : null),
+      outboundSink: safetyCall.outboundSink === true,
+      relativePath,
+    })
+  }
+const narrowProjectPolicy: NonNullable<Parameters<typeof makeAgentRunner>[0]['narrowPolicy']> =
+  ({ call, safetyCall, ctx }) =>
+    evaluateProjectPolicy(activeProjectSelection.projectId, call, ctx, safetyCall)
 const nativeExecuteTool = mainCapabilityRuntime?.bindToolExecutor(executeTool) ?? executeTool
 // `call_mcp` is not a narrow-waist tool and never reaches the native executor:
 // only the capability runtime can prove this exact call is the one the hook
@@ -3764,6 +3846,8 @@ const budgetCheckFor = (agentId: string) => makeAgentBudgetCheck({
 const subAgentBaseExecutor = makeLiveToolExecutor({
   fs: fsPort,
   workspaceRoot: activeWorkspaceRoot,
+  resolveWorkspacePath: safeWorkspacePath,
+  confinedWorkspaceFs,
   searchMemory: memSearch,
   // A child sent to research something has to be able to open the page. It
   // passes the same tier-2 card as the parent — the approval port is shared.
@@ -3802,6 +3886,10 @@ const subscriptionPlanProtocol = makePlanToolProtocol({
 const subscriptionCapabilityExecutor = makeCodexCapabilityExecutor({
   grants: modeAwareGrants,
   unsafeHostBashBypass: () => executionMode.bypassesHostBash(),
+  narrowPolicy: (binding, { call, safetyCall, ctx }) =>
+    evaluateProjectPolicy(binding.projectId, call, ctx, safetyCall),
+  describePolicyRelaxation: (_binding, call, context) =>
+    conversationalPolicyControl.describeRelaxation(call, context),
   approve: async (_binding, action) => approveRef === null
     ? { decision: 'rejected' as const }
     : approveRef(action),
@@ -3992,6 +4080,7 @@ const spawnSubagent = async (
         budgetCheck: budgetCheckFor(agentId),
         skillPromptRuntime: childSkillRuntime,
         postToolUse,
+        narrowPolicy: narrowProjectPolicy,
       })
       const result = await subRunner.handle({
         sessionId: handle.delegationId,
@@ -4293,6 +4382,9 @@ const buildMainRunner = (
     unsafeHostBashBypass: () => executionMode.bypassesHostBash(),
     learnedAutonomy: (call) =>
       executionMode.get() === 'auto' && learnedAutonomyPort(call),
+    narrowPolicy: narrowProjectPolicy,
+    describePolicyRelaxation: (call, context) =>
+      conversationalPolicyControl.describeRelaxation(call, context),
     observeApproval: observeApprovalForAutonomy,
     ...(mcpCapability === null ? {} : {
       mcpCapability: {
@@ -4686,6 +4778,7 @@ const {
                     budgetCheck: budgetCheckFor(agentId),
                     skillPromptRuntime: childSkillRuntime,
                     postToolUse,
+                    narrowPolicy: narrowProjectPolicy,
                     propagateToolInterruption: error =>
                       durableDelegationRecoverableInterruptionCode(error) !== undefined ||
                       durableDelegationRecoverableRuntimeErrorCode(error) !== undefined,
@@ -4772,6 +4865,9 @@ const {
         ...executionMode.toolTiers(),
       },
       unsafeHostBashBypass: () => executionMode.bypassesHostBash(),
+      narrowPolicy: narrowProjectPolicy,
+      describePolicyRelaxation: (call, context) =>
+        conversationalPolicyControl.describeRelaxation(call, context),
       ...(mcpCapability === null ? {} : {
         mcpCapability: {
           resolveSafetyCall: mcpCapability.capability.resolveSafetyCall,

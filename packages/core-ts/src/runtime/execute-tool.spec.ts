@@ -55,6 +55,53 @@ describe('makeToolExecutor', () => {
     expect(r.ok).toBe(false)
   })
 
+  it('fails closed when the shared canonical path resolver rejects the resource', async () => {
+    const fs = memFs()
+    const resolveWorkspacePath = vi.fn(() => null)
+    const execute = makeToolExecutor({ fs, workspaceRoot: ROOT, resolveWorkspacePath })
+
+    await expect(execute(call('write_file', { path: 'alias/out.txt', content: 'x' })))
+      .resolves.toMatchObject({ ok: false })
+    expect(resolveWorkspacePath).toHaveBeenCalledWith(
+      'alias/out.txt',
+      call('write_file', { path: 'alias/out.txt', content: 'x' }),
+      undefined,
+    )
+    expect(fs.files.size).toBe(0)
+  })
+
+  it('uses descriptor-relative confinement when a component swaps after policy resolution', async () => {
+    const fs = memFs()
+    const events: string[] = []
+    const seal = {
+      rootDevice: '1', rootInode: '2',
+      components: [{ name: 'docs', device: '1', inode: '3' }],
+    }
+    const writeFile = vi.fn(async () => {
+      events.push('confined-deny')
+      throw new Error('SYMLINK_DENIED')
+    })
+    const execute = makeToolExecutor({
+      fs,
+      workspaceRoot: ROOT,
+      resolveWorkspacePath: path => {
+        events.push('component-swapped')
+        return { absolutePath: `${ROOT}/${path}`, seal }
+      },
+      confinedWorkspaceFs: {
+        readFile: async () => { throw new Error('unused') },
+        writeFile,
+        listDir: async () => { throw new Error('unused') },
+      },
+    })
+
+    await expect(execute(call('write_file', { path: 'docs/out.txt', content: 'x' })))
+      .resolves.toEqual({ ok: false, output: 'write_file: confined operation failed' })
+    expect(events).toEqual(['component-swapped', 'confined-deny'])
+    expect(writeFile).toHaveBeenCalledWith('docs/out.txt', 'x', seal)
+    expect(fs.files.size).toBe(0)
+  })
+
   it('list_dir lists entries', async () => {
     const r = await exec()(call('list_dir', { path: 'sub' }))
     expect(r.ok).toBe(true)
@@ -158,6 +205,22 @@ describe('makeToolExecutor', () => {
       controlReceipt: {
         operation: 'session.propose-name',
         outcome: 'session-name-proposed',
+        turnId: 'turn-a',
+      },
+    })
+    configureAgent.mockResolvedValueOnce({
+      ok: true,
+      output: '• folder-1 — docs/private',
+      outcome: 'policy-path-resolved',
+    })
+    expect(await e(call('configure_agent', {
+      operation: 'policy.resolve-path', target: 'current', value: 'docs/private',
+    }), context)).toMatchObject({
+      ok: true,
+      verified: true,
+      controlReceipt: {
+        operation: 'policy.resolve-path',
+        outcome: 'policy-path-resolved',
         turnId: 'turn-a',
       },
     })

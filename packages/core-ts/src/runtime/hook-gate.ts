@@ -8,7 +8,7 @@
 // confirmed Tier-2 with a remembered scope we record a code-derived similar
 // grant, so only a matching call is allowed without another card.
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { HookGate, HookCtx, ToolCall as LoopToolCall } from '../agent-loop/types.js'
 import type {
   SafetyPolicy,
@@ -33,6 +33,20 @@ export type ApprovalDecision =
   | { decision: 'confirmed'; scope?: GrantScope; proof?: ApprovalProof }
   | { decision: 'rejected' }
 
+/**
+ * A project policy is evaluated after ordinary grants. It deliberately has no
+ * `allow` result: an overlay may preserve the baseline, ask again or deny, but
+ * can never broaden a code-owned Safety verdict.
+ */
+export type RuntimePolicyNarrowing =
+  | { decision: 'unchanged' }
+  | { decision: 'ask'; summary: string }
+  | { decision: 'deny' }
+
+export type PolicyRelaxationTarget =
+  | { readonly scope: 'project' }
+  | { readonly scope: 'path'; readonly relativePath: string }
+
 export interface HookGateDeps {
   safety: SafetyPolicy
   grants: GrantStore
@@ -55,6 +69,13 @@ export interface HookGateDeps {
    * outside. Absence of the port means no learned autonomy exists.
    */
   learnedAutonomy?(call: LoopToolCall, ctx: HookCtx): boolean
+  /** Project/path policy applied after every ordinary or learned grant. */
+  narrowPolicy?(input: Readonly<{
+    call: LoopToolCall
+    safetyCall: SafetyToolCall
+    ctx: HookCtx
+    baseline: 'allow' | 'ask'
+  }>): RuntimePolicyNarrowing
   /**
    * Ответ человека на карточку — сырьё для обучаемой автономности (спека 24).
    *
@@ -229,7 +250,6 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
         return 'deny'
       }
 
-      if (verdict.decision === 'allow') return complete(true) ? 'allow' : 'deny'
       if (verdict.decision === 'deny') {
         complete(false)
         return 'deny'
@@ -243,25 +263,59 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
         return { modify: { name: verdict.rewritten.tool, args: verdict.rewritten.args } }
       }
 
+      let baseline: 'allow' | 'ask' = verdict.decision === 'allow' ? 'allow' : 'ask'
+
       // verdict.decision === 'ask' — a learned grant may answer it, but only
       // within the bounds the operator's tap actually covered: Tier 2 exactly,
       // never a narrowed turn, never tainted args. Everything outside those
       // bounds goes to the human as before. A throwing port is not a yes.
-      if (deps.learnedAutonomy !== undefined && verdict.tier === 2 &&
+      if (verdict.decision === 'ask' && deps.learnedAutonomy !== undefined && verdict.tier === 2 &&
         !ctx.narrowed && ctx.provenance === 'operator') {
         let covered = false
         try { covered = deps.learnedAutonomy(call, ctx) === true } catch { covered = false }
-        if (covered) return complete(true) ? 'allow' : 'deny'
+        if (covered) baseline = 'allow'
+      }
+
+      let narrowing: RuntimePolicyNarrowing = { decision: 'unchanged' }
+      if (deps.narrowPolicy !== undefined) {
+        try {
+          narrowing = deps.narrowPolicy({ call, safetyCall, ctx, baseline })
+        } catch {
+          complete(false)
+          return 'deny'
+        }
+      }
+      if (narrowing.decision === 'deny') {
+        complete(false)
+        return 'deny'
+      }
+      if (baseline === 'allow' && narrowing.decision === 'unchanged') {
+        return complete(true) ? 'allow' : 'deny'
       }
 
       // Otherwise resolve via the human approval round-trip.
+      const policyForcedAsk = narrowing.decision === 'ask'
+      const askTier = verdict.decision === 'ask' ? verdict.tier : 2
+      const askSummary = narrowing.decision === 'ask'
+        ? narrowing.summary
+        : verdict.decision === 'ask'
+          ? verdict.card.actionSummary
+          : 'Требуется подтверждение.'
+      const askHash = verdict.decision === 'ask'
+        ? verdict.card.actionHash
+        : createHash('sha256')
+            .update('aisy.runtime.policy.ask.v1\0')
+            .update(JSON.stringify({ tool: safetyCall.tool, args: safetyCall.args }))
+            .digest('hex')
       const action: PendingAction = Object.freeze({
         actionId: randomUUID(),
-        actionHash: verdict.card.actionHash,
-        tier: verdict.tier,
-        requiresStepUp: verdict.tier === 3,
-        summary: verdict.card.actionSummary,
-        canRememberSimilar: deps.grants.canRememberSimilar(safetyCall, verdict.tier),
+        actionHash: askHash,
+        tier: askTier,
+        requiresStepUp: askTier === 3,
+        summary: askSummary,
+        canRememberSimilar: policyForcedAsk
+          ? false
+          : deps.grants.canRememberSimilar(safetyCall, askTier),
       })
       let result: ApprovalDecision
       try { result = await deps.approve(action) } catch {
@@ -273,7 +327,8 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
       // (спека 24). Порт получает его вместе с вызовом, потому что из
       // PendingAction рабочий процесс уже не восстановить: там сводка и хэш, а
       // не аргументы. Отказ порта ничего не решает — он только наблюдатель.
-      if (deps.observeApproval !== undefined && (verdict.tier === 1 || verdict.tier === 2)) {
+      if (!policyForcedAsk && verdict.decision === 'ask' && deps.observeApproval !== undefined &&
+        (verdict.tier === 1 || verdict.tier === 2)) {
         try {
           deps.observeApproval({
             call,
@@ -293,7 +348,8 @@ export function makeHookGate(deps: HookGateDeps): HookGate {
       // A normal Tier-2 confirmation teaches the exact code-derived matcher.
       // `confirm` mode makes canRememberSimilar false, while Tier-3 never
       // reaches this branch. An explicit legacy scope still wins.
-      if (action.tier === 2 && action.canRememberSimilar === true) {
+      if (!policyForcedAsk && verdict.decision === 'ask' && action.tier === 2 &&
+        action.canRememberSimilar === true) {
         // Missing binding is deliberately fail-closed: the approval still
         // confirms this one call, but cannot create an unscoped remembered grant.
         if (deps.grantBinding !== undefined) {

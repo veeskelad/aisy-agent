@@ -193,7 +193,8 @@ function identity(deps: CapturedDeps, value: unknown): PlanExecutionIdentityV1 {
     }
     const descriptors = Object.getOwnPropertyDescriptors(value as object) as Record<string, PropertyDescriptor>
     const keys = Object.keys(descriptors)
-    if (!keys.includes('sessionId') || keys.some(key => !['sessionId', 'turnId'].includes(key))) {
+    if (!keys.includes('sessionId') ||
+      keys.some(key => !['sessionId', 'turnId', 'ordinal'].includes(key))) {
       throw new Error('invalid')
     }
     input = exactRecord(value, keys)
@@ -202,6 +203,10 @@ function identity(deps: CapturedDeps, value: unknown): PlanExecutionIdentityV1 {
   }
   if (typeof input['sessionId'] !== 'string' || input['sessionId'].length === 0 ||
     typeof input['turnId'] !== 'string' || input['turnId'].length === 0) {
+    throw new Error('PLAN_EXECUTION_IDENTITY_REQUIRED')
+  }
+  if (input['ordinal'] !== undefined &&
+    (!Number.isSafeInteger(input['ordinal']) || (input['ordinal'] as number) < 1)) {
     throw new Error('PLAN_EXECUTION_IDENTITY_REQUIRED')
   }
   return Object.freeze({

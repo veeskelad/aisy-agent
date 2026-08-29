@@ -2860,8 +2860,9 @@ let pendingFormUntilMs = 0
     updateId: number,
     startingMessage = 'Перезапускаюсь. Скоро вернусь.',
     restartRequired = false,
+    unavailableMessage = 'Перезапуск сейчас недоступен.',
   ): Promise<void> => {
-    if (!deps.restartRuntime) { await say('Перезапуск сейчас недоступен.'); return }
+    if (!deps.restartRuntime) { await say(unavailableMessage); return }
     const exactReason = restartReasonForTelegramUpdate(updateId, reason)
     const result = deps.restartRuntime.prepare(exactReason)
     if (result === 'not-supervised') {
@@ -2897,7 +2898,28 @@ let pendingFormUntilMs = 0
     } catch {
       committed = 'restart-state-ambiguous'
     }
-    if (committed === 'committed' || committed === 'already-committed') return
+    if (committed === 'committed') return
+    if (committed === 'already-committed') {
+      const message = 'Перезапуск уже начался.'
+      try {
+        const messageId = telegramMessageId(startReply)
+        if (messageId !== null) {
+          const edited = await bot.api.editMessageText(
+            deps.allowedChatId,
+            messageId,
+            message,
+          ).then(() => true).catch(() => false)
+          if (!edited) {
+            const deleted = await bot.api.deleteMessage(
+              deps.allowedChatId,
+              messageId,
+            ).then(() => true).catch(() => false)
+            if (deleted) await say(message)
+          }
+        } else await say(message)
+      } catch { /* the already-running restart remains authoritative */ }
+      return
+    }
     if (restartRequired) {
       const schedule = deps.scheduleRequiredRestartRetry ?? ((retry: () => void) => {
         const timer = setTimeout(retry, 1_000)
@@ -2927,7 +2949,7 @@ let pendingFormUntilMs = 0
     }
     restartPending = false
 
-    const corrective: Record<Exclude<typeof committed, 'committed'>, string> = {
+    const corrective: Record<Exclude<typeof committed, 'committed' | 'already-committed'>, string> = {
       'not-supervised': 'Перезапуск отменился. Я остаюсь на связи.',
       busy: 'Перезапуск отменился: началась новая задача. Я остаюсь на связи.',
       'restart-state-ambiguous': 'Перезапуск не завершился. Я остаюсь на связи.',
@@ -4017,7 +4039,8 @@ let pendingFormUntilMs = 0
         // half-right.
         await runRestart('переключение проекта', (message) =>
           bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
-          `${outcome.text}\nПерезапускаюсь.`)
+          `${outcome.text}\nПерезапускаюсь.`, false,
+          `${outcome.text}\nПерезапуск сейчас недоступен.`)
         return
       }
       if (outcome.kind === 'unavailable') {
@@ -4348,7 +4371,8 @@ let pendingFormUntilMs = 0
             if (outcome.kind === 'switched') {
               await runRestart('переключение проекта', (message) =>
                 bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
-                `${outcome.text}\nПерезапускаюсь.`)
+                `${outcome.text}\nПерезапускаюсь.`, false,
+                `${outcome.text}\nПерезапуск сейчас недоступен.`)
             } else await ctx.reply(outcome.text)
           } else if (outcome.kind === 'view' || outcome.kind === 'stale') {
             await ctx.reply(outcome.view.text, {

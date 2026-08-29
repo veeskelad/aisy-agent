@@ -100,6 +100,33 @@ def _required_decimal(request: dict[str, Any], key: str) -> int:
     return parsed
 
 
+def _expected_path_components(
+    request: dict[str, Any],
+    parts: tuple[str, ...],
+    allowed_lengths: set[int],
+) -> tuple[tuple[str, int, int], ...] | None:
+    raw = request.get("expectedPathComponents")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) not in allowed_lengths or len(raw) > 256:
+        _fail("INVALID_REQUEST")
+    result: list[tuple[str, int, int]] = []
+    for index, value in enumerate(raw):
+        item = _as_object(value)
+        if set(item) != {"name", "device", "inode"}:
+            _fail("INVALID_REQUEST")
+        name = _required_string(item, "name", max_bytes=MAX_PATH_BYTES)
+        _safe_entry_name(name)
+        if index >= len(parts) or name != parts[index]:
+            _fail("INVALID_REQUEST")
+        result.append((
+            name,
+            _required_decimal(item, "device"),
+            _required_decimal(item, "inode"),
+        ))
+    return tuple(result)
+
+
 def _path_parts(value: Any, *, allow_root: bool) -> tuple[str, ...]:
     if not isinstance(value, str) or "\x00" in value:
         _fail("INVALID_PATH")
@@ -168,6 +195,14 @@ def _verify_identity(before: os.stat_result, after: os.stat_result) -> None:
         _fail("PATH_CHANGED")
 
 
+def _verify_expected_identity(
+    info: os.stat_result,
+    expected: tuple[str, int, int] | None,
+) -> None:
+    if expected is not None and (info.st_dev != expected[1] or info.st_ino != expected[2]):
+        _fail("PATH_CHANGED")
+
+
 def _open_root(
     root: str,
     expected_device: int | None = None,
@@ -202,7 +237,12 @@ def _open_root(
         raise
 
 
-def _open_directory(parent_fd: int, name: str, root_device: int) -> int:
+def _open_directory(
+    parent_fd: int,
+    name: str,
+    root_device: int,
+    expected: tuple[str, int, int] | None = None,
+) -> int:
     before = _lstat(parent_fd, name)
     _reject_unsafe_node(before, root_device)
     if not stat.S_ISDIR(before.st_mode):
@@ -218,6 +258,7 @@ def _open_directory(parent_fd: int, name: str, root_device: int) -> int:
     try:
         after = os.fstat(opened)
         _verify_identity(before, after)
+        _verify_expected_identity(after, expected)
         _reject_unsafe_node(after, root_device)
         if not stat.S_ISDIR(after.st_mode):
             _fail("NOT_DIRECTORY")
@@ -227,11 +268,21 @@ def _open_directory(parent_fd: int, name: str, root_device: int) -> int:
         raise
 
 
-def _walk_directories(root_fd: int, parts: tuple[str, ...], root_device: int) -> int:
+def _walk_directories(
+    root_fd: int,
+    parts: tuple[str, ...],
+    root_device: int,
+    expected: tuple[tuple[str, int, int], ...] | None = None,
+) -> int:
     current = os.dup(root_fd)
     try:
-        for part in parts:
-            following = _open_directory(current, part, root_device)
+        for index, part in enumerate(parts):
+            following = _open_directory(
+                current,
+                part,
+                root_device,
+                None if expected is None else expected[index],
+            )
             os.close(current)
             current = following
         return current
@@ -240,7 +291,12 @@ def _walk_directories(root_fd: int, parts: tuple[str, ...], root_device: int) ->
         raise
 
 
-def _open_regular(parent_fd: int, name: str, root_device: int) -> tuple[int, os.stat_result]:
+def _open_regular(
+    parent_fd: int,
+    name: str,
+    root_device: int,
+    expected: tuple[str, int, int] | None = None,
+) -> tuple[int, os.stat_result]:
     before = _lstat(parent_fd, name)
     _reject_unsafe_node(before, root_device)
     if not stat.S_ISREG(before.st_mode):
@@ -252,6 +308,7 @@ def _open_regular(parent_fd: int, name: str, root_device: int) -> tuple[int, os.
     try:
         after = os.fstat(opened)
         _verify_identity(before, after)
+        _verify_expected_identity(after, expected)
         _reject_unsafe_node(after, root_device)
         if not stat.S_ISREG(after.st_mode):
             _fail("NOT_REGULAR")
@@ -276,10 +333,21 @@ def _read_all(file_fd: int, maximum: int) -> bytes:
 
 def _read(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, Any]:
     parts = _path_parts(request.get("path"), allow_root=False)
+    expected = _expected_path_components(request, parts, {len(parts)})
     maximum = _bounded_int(request, "maxBytes", MAX_READ_BYTES, MAX_READ_BYTES)
-    parent_fd = _walk_directories(root_fd, parts[:-1], root_device)
+    parent_fd = _walk_directories(
+        root_fd,
+        parts[:-1],
+        root_device,
+        None if expected is None else expected[:-1],
+    )
     try:
-        file_fd, info = _open_regular(parent_fd, parts[-1], root_device)
+        file_fd, info = _open_regular(
+            parent_fd,
+            parts[-1],
+            root_device,
+            None if expected is None else expected[-1],
+        )
         try:
             if info.st_size > maximum:
                 _fail("LIMIT_EXCEEDED")
@@ -308,6 +376,7 @@ def _read(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, 
 
 def _write(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, Any]:
     parts = _path_parts(request.get("path"), allow_root=False)
+    expected = _expected_path_components(request, parts, {len(parts) - 1, len(parts)})
     text = request.get("text")
     if not isinstance(text, str):
         _fail("INVALID_REQUEST")
@@ -315,7 +384,12 @@ def _write(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str,
     maximum = _bounded_int(request, "maxBytes", MAX_WRITE_BYTES, MAX_WRITE_BYTES)
     if len(payload) > maximum:
         _fail("LIMIT_EXCEEDED")
-    parent_fd = _walk_directories(root_fd, parts[:-1], root_device)
+    parent_fd = _walk_directories(
+        root_fd,
+        parts[:-1],
+        root_device,
+        None if expected is None else expected[: len(parts) - 1],
+    )
     temporary = f".aisy-write-{uuid4().hex}.tmp"
     temporary_created = False
     try:
@@ -324,7 +398,12 @@ def _write(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str,
         except ConfinementFailure as error:
             if error.code != "NOT_FOUND":
                 raise
+            if expected is not None and len(expected) == len(parts):
+                _fail("PATH_CHANGED")
         else:
+            if expected is not None and len(expected) != len(parts):
+                _fail("PATH_CHANGED")
+            _verify_expected_identity(existing, None if expected is None else expected[-1])
             _reject_unsafe_node(existing, root_device)
             if not stat.S_ISREG(existing.st_mode):
                 _fail("NOT_REGULAR")
@@ -467,8 +546,9 @@ def _edit(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, 
 
 def _list(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, Any]:
     parts = _path_parts(request.get("path", "."), allow_root=True)
+    expected = _expected_path_components(request, parts, {len(parts)})
     maximum = _bounded_int(request, "maxEntries", MAX_SCAN_ENTRIES, MAX_SCAN_ENTRIES)
-    directory_fd = _walk_directories(root_fd, parts, root_device)
+    directory_fd = _walk_directories(root_fd, parts, root_device, expected)
     try:
         try:
             entries = sorted(os.listdir(directory_fd))
@@ -558,6 +638,8 @@ def handle_request(raw_request: Any) -> dict[str, Any]:
     has_expected_device = "expectedRootDevice" in request
     has_expected_inode = "expectedRootInode" in request
     if has_expected_device != has_expected_inode:
+        _fail("INVALID_REQUEST")
+    if "expectedPathComponents" in request and not has_expected_device:
         _fail("INVALID_REQUEST")
     expected_device = _required_decimal(request, "expectedRootDevice") if has_expected_device else None
     expected_inode = _required_decimal(request, "expectedRootInode") if has_expected_inode else None

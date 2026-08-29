@@ -885,6 +885,9 @@ export function makeAgentLoop(deps: AgentLoopDeps): AgentLoop {
         const ctx = {
           provenance: dispatchCall.sourceSpanProvenance ?? ('operator' as const),
           narrowed: s.narrowed,
+          sessionId: executionContext.sessionId,
+          ...(executionContext.turnId === undefined ? {} : { turnId: executionContext.turnId }),
+          ordinal: executionContext.ordinal,
         }
         const verdict = await deps.hookGate.pre(dispatchCall, ctx)
         if (verdict === 'deny' || verdict === 'ask') {

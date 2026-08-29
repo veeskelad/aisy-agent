@@ -35,6 +35,7 @@ function gate(opts?: {
   resolveSafetyCall?: Parameters<typeof makeHookGate>[0]['resolveSafetyCall']
   completeSafetyCall?: Parameters<typeof makeHookGate>[0]['completeSafetyCall']
   learnedAutonomy?: Parameters<typeof makeHookGate>[0]['learnedAutonomy']
+  narrowPolicy?: Parameters<typeof makeHookGate>[0]['narrowPolicy']
   observeApproval?: Parameters<typeof makeHookGate>[0]['observeApproval']
 }) {
   const grants = opts?.grants ?? makeGrantStore()
@@ -47,6 +48,7 @@ function gate(opts?: {
     ...(opts?.resolveSafetyCall === undefined ? {} : { resolveSafetyCall: opts.resolveSafetyCall }),
     ...(opts?.completeSafetyCall === undefined ? {} : { completeSafetyCall: opts.completeSafetyCall }),
     ...(opts?.learnedAutonomy === undefined ? {} : { learnedAutonomy: opts.learnedAutonomy }),
+    ...(opts?.narrowPolicy === undefined ? {} : { narrowPolicy: opts.narrowPolicy }),
     ...(opts?.observeApproval === undefined ? {} : { observeApproval: opts.observeApproval }),
   })
   return { hg, grants, approve: a }
@@ -88,6 +90,51 @@ describe('makeHookGate.pre', () => {
   it('Tier-2 rejected decision denies', async () => {
     const { hg } = gate({ decision: { decision: 'rejected' } })
     expect(await hg.pre(call('bash', { cmd: 'npm test' }), OPERATOR)).toBe('deny')
+  })
+
+  it('applies a strict overlay after an existing durable grant', async () => {
+    const grants = makeGrantStore()
+    grants.recordSimilar({ tool: 'bash', args: { cmd: 'pnpm test' } }, 2, 'always', GRANT_BINDING)
+    const { hg, approve } = gate({
+      grants,
+      decision: { decision: 'confirmed' },
+      narrowPolicy: ({ baseline }) => ({
+        decision: 'ask',
+        summary: `Локальная политика после ${baseline}`,
+      }),
+    })
+
+    expect(await hg.pre(call('bash', { cmd: 'pnpm test' }), OPERATOR)).toBe('allow')
+    expect(approve.seen).toHaveLength(1)
+    expect(approve.seen[0]).toMatchObject({
+      tier: 2,
+      summary: 'Локальная политика после allow',
+      canRememberSimilar: false,
+    })
+  })
+
+  it('lets a strict overlay deny an otherwise allowed call and fails closed on errors', async () => {
+    const denied = gate({ narrowPolicy: () => ({ decision: 'deny' }) })
+    expect(await denied.hg.pre(call('read_file', { path: 'a' }), OPERATOR)).toBe('deny')
+    expect(denied.approve.seen).toHaveLength(0)
+
+    const failed = gate({ narrowPolicy: () => { throw new Error('store unavailable') } })
+    expect(await failed.hg.pre(call('read_file', { path: 'a' }), OPERATOR)).toBe('deny')
+    expect(failed.approve.seen).toHaveLength(0)
+  })
+
+  it('does not turn policy-forced confirmations into autonomy demonstrations', async () => {
+    const observeApproval = vi.fn()
+    const { hg, grants } = gate({
+      decision: { decision: 'confirmed' },
+      observeApproval,
+      narrowPolicy: () => ({ decision: 'ask', summary: 'Подтверди изменение.' }),
+    })
+
+    expect(await hg.pre(call('read_file', { path: 'a' }), OPERATOR)).toBe('allow')
+    expect(observeApproval).not.toHaveBeenCalled()
+    expect(grants.hasSimilar({ tool: 'read_file', args: { path: 'a' } }, 2, GRANT_BINDING))
+      .toBe(false)
   })
 
   it('a confirmed session scope records a grant that suppresses the next card', async () => {

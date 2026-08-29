@@ -83,6 +83,36 @@ const logFake: SessionLog = {
 // ---------------------------------------------------------------------------
 
 describe('makeSubAgentRunner', () => {
+  it('applies the parent Project policy inside the child HookGate', async () => {
+    let step = 0
+    const effects: string[] = []
+    const provider: ProviderAdapter = {
+      async complete() {
+        step++
+        return step === 1
+          ? { reply: '', toolCalls: [{ name: 'read_file', args: { path: 'src/a.ts' } }] }
+          : { reply: 'done', toolCalls: [] }
+      },
+    }
+    const runner = makeSubAgentRunner({
+      handle: fakeHandle(),
+      provider,
+      baseExecuteTool: async () => { effects.push('effect'); return { ok: true, output: '' } },
+      approve: async () => ({ decision: 'confirmed' }),
+      memory: memFake,
+      sessionLog: logFake,
+      parentNarrowed: false,
+      doNotTouch: [],
+      narrowPolicy: () => ({ decision: 'deny' }),
+    })
+
+    await runner.handle({
+      sessionId: 'd1',
+      spans: [{ role: 'user', provenance: 'operator', text: 'read it' }],
+    })
+    expect(effects).toEqual([])
+  })
+
   it('injects the immutable AgentCard Markdown body as the child system DNA', async () => {
     let seen = ''
     const provider: ProviderAdapter = {

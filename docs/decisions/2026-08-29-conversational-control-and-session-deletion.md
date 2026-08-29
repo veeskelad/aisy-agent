@@ -70,9 +70,23 @@
    operator/profile и Workspace или Project; resource matcher и policy revision
    остаются обязательными. Чистый global/operator scope не создаётся. Отдельный
    project/path policy overlay может только ужесточить правила, например всегда
-   спрашивать перед удалением в конкретной папке. Ни модель, ни overlay не могут
+   подтверждать запись в конкретной папке или спрашивать перед удалением во всём
+   Project. Ни модель, ни overlay не могут
    ослабить HARD_DENY, sandbox, egress, budget или обязательное подтверждение
-   необратимого действия.
+   необратимого действия. Снятие уже установленного overlay — отдельное Tier-3
+   действие: один authenticated tap разрешает только exact change, карточка
+   показывает точный code-owned Project-relative путь или весь Project, и
+   remembered grant не создаётся. Folder matching использует
+   component-by-component canonical identity без symlink traversal, а сами
+   `read_file`, `write_file` и `list_dir` выполняются через привязанную к
+   Project lease descriptor-relative confinement. Admission связывает exact
+   Session/turn/ordinal с device/inode root и каждого существующего
+   компонента; worker повторно сверяет эти pin уже по открытым
+   дескрипторам. Alias, escape, symlink и подмена обычного
+   каталога между policy admission и effect отклоняются fail-closed.
+   Project-wide `no-egress` целиком
+   запрещает opaque Bash/MCP и HTTP-watch, поскольку их безопасную сетевую
+   семантику нельзя вывести из строки модели.
 7. Обычный Telegram-режим показывает только разговор и необходимое состояние:
    быстрый результат без промежуточной карточки; одна редактируемая короткая
    карточка для действительно долгой работы; одно ясное подтверждение для
@@ -92,7 +106,9 @@
     Action-contract принимает его как доказательство exact rename либо выдачи
     delete-preview и не запускает лишний recovery-round. Receipt остаётся
     server-side; preview не считается физическим удалением и не создаёт deletion
-    authority до authenticated Telegram tap.
+    authority до authenticated Telegram tap. Provider action evidence для
+    `configure_agent` связано с exact operation, поэтому replay другой
+    policy-операции не проходит проверку эффекта.
 
 ## Последствия
 

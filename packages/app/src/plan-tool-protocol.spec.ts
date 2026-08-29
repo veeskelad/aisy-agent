@@ -20,7 +20,9 @@ import {
 
 const WORK_BINDING_HASH = 'a'.repeat(64)
 const POLICY_REVISION = 'policy-1'
-const context: ModelToolRuntimeContext = Object.freeze({ sessionId: 'session-a', turnId: 'turn-a' })
+const context: ModelToolRuntimeContext = Object.freeze({
+  sessionId: 'session-a', turnId: 'turn-a', ordinal: 1,
+})
 const identity: PlanExecutionIdentityV1 = Object.freeze({
   version: 1,
   sessionId: 'session-a',
@@ -437,6 +439,15 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('rejects a forged non-positive tool ordinal without I/O', async () => {
+    const { protocol, calls } = fixture()
+
+    await expect(protocol.invoke(readCall, {
+      sessionId: 'session-a', turnId: 'turn-a', ordinal: 0,
+    })).resolves.toEqual({ ok: false, output: 'PLAN_EXECUTION_IDENTITY_REQUIRED' })
+    expect(calls).toHaveLength(0)
+  })
+
   it('counts only successful research and requires fresh research after a known failed step', async () => {
     let fail = true
     const { protocol, state } = fixture({
@@ -500,6 +511,9 @@ describe('provider-neutral Plan Mode tool protocol (ADR-0092)', () => {
     expect(live).toContain('subscriptionPlanProtocol.preflight')
     expect(live).toContain('subscriptionPlanProtocol.executeAfterGate')
     expect(live).toContain('subscriptionPlanProtocol.observeAfterGate')
+    expect(live).toContain('ordinal: context.ordinal')
+    expect(live).toContain('workspaceResourceAdmissions.admit(ctx, call.name, resourcePath)')
+    expect(live).toContain('workspaceResourceAdmissions.consume(context, call.name, candidate)')
     expect(live).toContain("policyRevision: 'plan-live-v1'")
   })
 })

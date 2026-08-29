@@ -90,6 +90,11 @@ describe('Action Contract', () => {
     expect(evaluateActionContract(inspect, [
       actionEvidence(call('list_sessions'), { ok: true }),
     ])).toEqual({ satisfied: true, missing: 'none' })
+    expect(evaluateActionContract(inspect, [
+      actionEvidence(call('configure_agent', {
+        operation: 'policy.resolve-path', target: 'current', value: '.',
+      }), { ok: true, verified: true }),
+    ])).toEqual({ satisfied: true, missing: 'none' })
 
     const mutate = classifyActionContract(operator('Переименуй текущую сессию'))
     expect(evaluateActionContract(mutate, [actionEvidence(call('configure_agent', {
@@ -199,6 +204,18 @@ describe('Action Contract', () => {
     ))[0]?.family).toBe('inspect')
     expect(() => attachProviderActionEvidence({ reply: 'bad' }, [{
       tool: 'spawn_subagent', family: 'inspect', successful: true, receipt: false,
+    }])).toThrow('INVALID_PROVIDER_ACTION_EVIDENCE')
+    expect(readProviderActionEvidence(attachProviderActionEvidence({ reply: 'configured' }, [
+      actionEvidence(call('configure_agent', {
+        operation: 'policy.tighten-project', target: 'current', value: 'read-only',
+      }), { ok: true, verified: true }),
+    ]))).toEqual([{
+      tool: 'configure_agent', family: 'mutate', successful: true, receipt: true,
+      operation: 'policy.tighten-project',
+    }])
+    expect(() => attachProviderActionEvidence({ reply: 'bad' }, [{
+      tool: 'configure_agent', family: 'mutate', successful: true, receipt: true,
+      operation: 'source.rewrite',
     }])).toThrow('INVALID_PROVIDER_ACTION_EVIDENCE')
   })
 

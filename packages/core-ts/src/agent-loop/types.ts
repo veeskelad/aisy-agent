@@ -322,6 +322,11 @@ export interface ProviderAdapter {
 export interface HookCtx {
   provenance: Provenance
   narrowed: boolean
+  /** Code-owned turn identity. Optional only for legacy/custom HookGate callers. */
+  sessionId?: string
+  turnId?: string
+  /** Code-owned position of this tool call within the turn. */
+  ordinal?: number
 }
 
 export interface HookGate {

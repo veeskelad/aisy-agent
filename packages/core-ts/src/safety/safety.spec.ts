@@ -226,6 +226,54 @@ describe('AC-05-3: Tier-2 ask below Delegation; Tier-3 always ask', () => {
     }
   })
 
+  it('renders a literal folder named «весь проект» as a path-scoped relaxation', () => {
+    const policy = makeSafetyPolicy()
+    const relax: ToolCall = {
+      tool: 'configure_agent',
+      args: {
+        operation: 'policy.relax-path',
+        target: 'opaque-handle',
+        value: 'read-only',
+        policyScope: 'path',
+        policyPath: 'весь проект',
+      },
+      policyTier: 3,
+    }
+
+    const verdict = policy.evaluate(relax, [operatorSpan()])
+
+    expect(verdict.decision).toBe('ask')
+    if (verdict.decision === 'ask') {
+      expect(verdict.card.actionSummary).toBe(
+        'Ослабить настройку «только чтение» для папки «весь проект». После этого агент получит больше свободы.',
+      )
+    }
+  })
+
+  it('keeps long same-prefix policy paths unambiguous on Tier-3 cards', () => {
+    const policy = makeSafetyPolicy()
+    const summary = (path: string): string => {
+      const verdict = policy.evaluate({
+        tool: 'configure_agent',
+        args: {
+          operation: 'policy.relax-path', target: 'opaque', value: 'read-only',
+          policyScope: 'path', policyPath: path,
+        },
+        policyTier: 3,
+      }, [operatorSpan()])
+      expect(verdict.decision).toBe('ask')
+      return verdict.decision === 'ask' ? verdict.card.actionSummary : ''
+    }
+    const common = `docs/${'same-prefix-'.repeat(20)}`
+    const first = summary(`${common}first-target`)
+    const second = summary(`${common}second-target`)
+
+    expect(first).not.toBe(second)
+    expect(first).toContain('first-target')
+    expect(second).toContain('second-target')
+    expect(first).toMatch(/\[[a-f0-9]{64}\]/)
+  })
+
   it('AC-05-3: Tier-3 ask card cannot be bypassed by any flag', () => {
     const policy = makeSafetyPolicy()
     const tainted: ToolCall = { ...call('db.drop-database', { name: 'prod' }), argsTainted: false }
