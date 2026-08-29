@@ -30,6 +30,7 @@ export class CodexThreadStoreError extends Error {
 }
 
 export interface SqliteCodexThreadStore extends CodexAppServerThreadStore {
+  hasBinding(projectId: string, sessionId: string): boolean
   close(): void
 }
 
@@ -217,6 +218,13 @@ export function makeSqliteCodexThreadStore(input: { dbPath: string }): SqliteCod
   )
 
   const store: SqliteCodexThreadStore = {
+    hasBinding(projectId, sessionId) {
+      if (!validId(projectId) || !validId(sessionId)) {
+        throw new CodexThreadStoreError('INVALID_THREAD_RECORD')
+      }
+      return byBinding.get(projectId, sessionId) !== undefined
+    },
+
     async load(projectId, sessionId) {
       if (!validId(projectId) || !validId(sessionId)) {
         throw new CodexThreadStoreError('INVALID_THREAD_RECORD')

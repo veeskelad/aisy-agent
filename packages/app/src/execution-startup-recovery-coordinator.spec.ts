@@ -316,8 +316,11 @@ describe('dormant unified execution startup recovery envelope', () => {
     const recovery = makeDurableDelegationStartupRecoveryPortV1({
       registry: {
         register: vi.fn() as never,
+        list: vi.fn(() => []),
         listExact,
         runRoot: vi.fn(),
+        retiredExact: vi.fn(() => []),
+        purgeRetiredExact: vi.fn(() => []),
       },
       resolveCard: () => undefined,
       skillTouchedPaths: () => [],

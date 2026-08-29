@@ -6,7 +6,12 @@ import type { Gateway } from '@aisy/core'
 import type { Update, UserFromGetMe } from 'grammy/types'
 import { describe, expect, it, vi } from 'vitest'
 import { makeTelegramBot } from './bot.js'
-import type { TelegramSessionControls, TelegramSessionView } from './telegram-session-controls.js'
+import type { SessionDeletionRecordV1 } from './session-deletion.js'
+import type {
+  TelegramSessionControls,
+  TelegramSessionTap,
+  TelegramSessionView,
+} from './telegram-session-controls.js'
 
 const BOT_INFO: UserFromGetMe = {
   id: 999, is_bot: true, first_name: 'Aisy', username: 'aisy_test_bot',
@@ -56,14 +61,18 @@ function tap(data: string): Update {
 function harness(input: {
   resume?: (sessionId: string) => Promise<{ ok: true } | { ok: false; errorCode: string }>
   prefix?: TelegramSessionControls['resolvePrefix']
+  tapOutcome?: TelegramSessionTap
+  failMessage?: string
+  commitResults?: Array<'committed' | 'already-committed' | 'not-supervised' | 'busy' |
+  'restart-state-ambiguous'>
 } = {}) {
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = []
   const controls: TelegramSessionControls = {
     open: () => VIEW,
     resolvePrefix: input.prefix ?? (() => ({ kind: 'unknown' })),
-    handle: (data) => data === 'session:token-1'
+    handle: async ({ data }) => input.tapOutcome ?? (data === 'session:token-1'
       ? { kind: 'resume', sessionId: 'session-old', name: 'Вчерашний разбор' }
-      : { kind: 'stale', view: VIEW },
+      : { kind: 'stale', view: VIEW }),
     create: () => { throw new Error('not used') },
     rename: () => { throw new Error('not used') },
     handleAuthenticatedText: () => null,
@@ -79,14 +88,25 @@ function harness(input: {
     handleCardTap: async () => ({ decision: 'rejected', reason: 'unused' }),
   }
   const prepared: string[] = []
+  const scheduled: Array<() => void> = []
+  let preparedIntent: { requestedAt: string; reason: string; activeTurns: number } | null = null
   const restartRuntime = {
     previous: () => null,
     prepare: (reason: string) => {
+      if (preparedIntent !== null) return preparedIntent
       prepared.push(reason)
-      return { requestedAt: '2026-08-07T00:00:00.000Z', reason, activeTurns: 0 }
+      preparedIntent = { requestedAt: '2026-08-07T00:00:00.000Z', reason, activeTurns: 0 }
+      return preparedIntent
     },
-    commitExit: vi.fn(),
-    cancel: () => 'cancelled' as const,
+    commitExit: vi.fn(async () => {
+      const result = input.commitResults?.shift() ?? 'committed'
+      if (result === 'not-supervised' || result === 'busy') preparedIntent = null
+      return result
+    }),
+    cancel: vi.fn(() => {
+      preparedIntent = null
+      return 'cancelled' as const
+    }),
   }
   const { bot } = makeTelegramBot({
     token: 'test-token',
@@ -99,13 +119,18 @@ function harness(input: {
     sessionControls: controls,
     ...(input.resume === undefined ? {} : { resumeSession: input.resume }),
     restartRuntime,
+    scheduleRequiredRestartRetry: (retry) => { scheduled.push(retry) },
   })
   bot.botInfo = BOT_INFO
   bot.api.config.use(async (_previous, method, payload) => {
-    calls.push({ method, payload: payload as Record<string, unknown> })
+    const recorded = payload as Record<string, unknown>
+    calls.push({ method, payload: recorded })
+    if (method === 'sendMessage' && recorded['text'] === input.failMessage) {
+      throw new Error('injected Telegram delivery failure')
+    }
     return { ok: true, result: true } as never
   })
-  return { bot, calls, prepared, restartRuntime }
+  return { bot, calls, prepared, restartRuntime, scheduled }
 }
 
 describe('sessions screen', () => {
@@ -152,7 +177,7 @@ describe('sessions screen', () => {
     expect(resume).not.toHaveBeenCalled()
     expect(h.prepared).toEqual([])
     expect(h.calls.map((call) => String(call.payload['text'] ?? '')).join('\n'))
-      .toContain('Префикс неоднозначен')
+      .toContain('Нашёл несколько сессий')
   })
 
   it('switches and restarts into the session that was tapped', async () => {
@@ -185,5 +210,134 @@ describe('sessions screen', () => {
     expect(resume).not.toHaveBeenCalled()
     expect(h.prepared).toEqual([])
     expect(h.calls.some((call) => call.method === 'editMessageText')).toBe(true)
+  })
+
+  it('speaks once and commits the already prepared restart after deleting the active Session', async () => {
+    const operationHash = 'd'.repeat(64)
+    const record: SessionDeletionRecordV1 = {
+      schemaVersion: 1,
+      operationHash,
+      operatorId: 'telegram:42',
+      profileId: 'default',
+      projectId: 'project-a',
+      sessionId: 'session-old',
+      deletedAt: '2026-08-29T20:00:00.000Z',
+      restartRequired: true,
+      restartUpdateId: 2,
+      purgeRevision: 1,
+      purgedAt: '2026-08-29T20:00:01.000Z',
+      phase: 'restart-requested',
+    }
+    const h = harness({
+      tapOutcome: { kind: 'deleted', text: 'Сессия удалена.', record },
+    })
+    const intent = h.restartRuntime.prepare(
+      `telegram-update:2 · session deletion ${operationHash}`,
+    )
+
+    await h.bot.handleUpdate(tap('session:delete-token'))
+
+    expect(h.prepared).toEqual([
+      `telegram-update:2 · session deletion ${operationHash}`,
+    ])
+    const messages = h.calls.filter((call) =>
+      call.method === 'sendMessage' && typeof call.payload['text'] === 'string')
+    expect(messages.map((call) => call.payload['text'])).toEqual([
+      'Сессия удалена. Перезапускаюсь. Скоро вернусь.',
+    ])
+    expect(h.calls.some((call) => call.method === 'editMessageText')).toBe(false)
+    expect(h.restartRuntime.commitExit).toHaveBeenCalledTimes(1)
+    expect(h.restartRuntime.commitExit).toHaveBeenCalledWith(intent)
+  })
+
+  it('edits the card without restarting after deleting an inactive Session', async () => {
+    const record: SessionDeletionRecordV1 = {
+      schemaVersion: 1,
+      operationHash: 'e'.repeat(64),
+      operatorId: 'telegram:42',
+      profileId: 'default',
+      projectId: 'project-a',
+      sessionId: 'session-old',
+      deletedAt: '2026-08-29T20:00:00.000Z',
+      restartRequired: false,
+      purgeRevision: 1,
+      purgedAt: '2026-08-29T20:00:01.000Z',
+      phase: 'terminal',
+    }
+    const h = harness({
+      tapOutcome: { kind: 'deleted', text: 'Сессия удалена.', record },
+    })
+
+    await h.bot.handleUpdate(tap('session:delete-token'))
+
+    expect(h.prepared).toEqual([])
+    expect(h.calls.filter((call) => call.method === 'editMessageText')
+      .map((call) => call.payload['text'])).toEqual(['Сессия удалена.'])
+    expect(h.restartRuntime.commitExit).not.toHaveBeenCalled()
+  })
+
+  it('still commits the mandatory restart when the deletion notice cannot be delivered', async () => {
+    const operationHash = 'f'.repeat(64)
+    const startingMessage = 'Сессия удалена. Перезапускаюсь. Скоро вернусь.'
+    const record: SessionDeletionRecordV1 = {
+      schemaVersion: 1,
+      operationHash,
+      operatorId: 'telegram:42',
+      profileId: 'default',
+      projectId: 'project-a',
+      sessionId: 'session-old',
+      deletedAt: '2026-08-29T20:00:00.000Z',
+      restartRequired: true,
+      restartUpdateId: 2,
+      purgeRevision: 1,
+      purgedAt: '2026-08-29T20:00:01.000Z',
+      phase: 'restart-requested',
+    }
+    const h = harness({
+      tapOutcome: { kind: 'deleted', text: 'Сессия удалена.', record },
+      failMessage: startingMessage,
+    })
+    const intent = h.restartRuntime.prepare(
+      `telegram-update:2 · session deletion ${operationHash}`,
+    )
+
+    await h.bot.handleUpdate(tap('session:delete-token'))
+
+    expect(h.restartRuntime.cancel).not.toHaveBeenCalled()
+    expect(h.restartRuntime.commitExit).toHaveBeenCalledWith(intent)
+  })
+
+  it('keeps the deleted binding closed and retries a refused mandatory restart', async () => {
+    const operationHash = 'a'.repeat(64)
+    const record: SessionDeletionRecordV1 = {
+      schemaVersion: 1,
+      operationHash,
+      operatorId: 'telegram:42',
+      profileId: 'default',
+      projectId: 'project-a',
+      sessionId: 'session-old',
+      deletedAt: '2026-08-29T20:00:00.000Z',
+      restartRequired: true,
+      restartUpdateId: 2,
+      purgeRevision: 1,
+      purgedAt: '2026-08-29T20:00:01.000Z',
+      phase: 'restart-requested',
+    }
+    const h = harness({
+      tapOutcome: { kind: 'deleted', text: 'Сессия удалена.', record },
+      commitResults: ['not-supervised', 'committed'],
+    })
+    h.restartRuntime.prepare(`telegram-update:2 · session deletion ${operationHash}`)
+
+    await h.bot.handleUpdate(tap('session:delete-token'))
+
+    expect(h.scheduled).toHaveLength(1)
+    expect(h.restartRuntime.cancel).not.toHaveBeenCalled()
+    h.scheduled.shift()!()
+    await vi.waitFor(() => expect(h.restartRuntime.commitExit).toHaveBeenCalledTimes(2))
+    expect(h.prepared).toEqual([
+      `telegram-update:2 · session deletion ${operationHash}`,
+      `telegram-update:2 · session deletion ${operationHash}`,
+    ])
   })
 })

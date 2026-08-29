@@ -6,10 +6,12 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
@@ -19,11 +21,13 @@ export type BackgroundBindingName = 'nightly'
 export type BackgroundBindingLoadResult =
   | { status: 'missing' }
   | { status: 'ready'; binding: ResolvedWorkBinding }
-  | { status: 'quarantined'; reason: 'missing-or-invalid-work-binding' }
+  | { status: 'quarantined'; reason: 'missing-or-invalid-work-binding' | 'context-deleted' }
 
 export interface BackgroundBindingStore {
   load(name: BackgroundBindingName): BackgroundBindingLoadResult
   save(name: BackgroundBindingName, binding: ResolvedWorkBinding): void
+  disableExactSession(binding: Pick<ResolvedWorkBinding,
+  'operatorId' | 'profileId' | 'projectId' | 'sessionId'>): BackgroundBindingName[]
 }
 
 export interface BackgroundBindingStoreDeps {
@@ -36,7 +40,10 @@ export interface BackgroundBindingStoreDeps {
 interface StoreState {
   schemaVersion: 1
   bindings: Partial<Record<BackgroundBindingName, ResolvedWorkBinding>>
-  quarantine?: Partial<Record<BackgroundBindingName, 'missing-or-invalid-work-binding'>>
+  quarantine?: Partial<Record<
+  BackgroundBindingName,
+  'missing-or-invalid-work-binding' | 'context-deleted'
+  >>
   quarantinedBindings?: Partial<Record<BackgroundBindingName, unknown>>
 }
 
@@ -104,6 +111,23 @@ export function makeBackgroundBindingStore(
       if (state.quarantine) delete state.quarantine[name]
       write(state)
     },
+
+    disableExactSession(binding) {
+      const state = read()
+      const disabled: BackgroundBindingName[] = []
+      for (const name of ['nightly'] as const) {
+        const candidate = state.bindings[name]
+        if (candidate === undefined || candidate.operatorId !== binding.operatorId ||
+          candidate.profileId !== binding.profileId || candidate.projectId !== binding.projectId ||
+          candidate.sessionId !== binding.sessionId) continue
+        state.quarantinedBindings = { ...state.quarantinedBindings, [name]: candidate }
+        delete state.bindings[name]
+        state.quarantine = { ...state.quarantine, [name]: 'context-deleted' }
+        disabled.push(name)
+      }
+      if (disabled.length > 0) write(state)
+      return disabled
+    },
   }
 }
 
@@ -122,6 +146,16 @@ export function makeNodeBackgroundBindingStore(input: {
   const directory = dirname(input.path)
   const tempPath = input.path + '.tmp'
   mkdirSync(directory, { recursive: true, mode: 0o700 })
+  if (existsSync(tempPath)) {
+    const info = lstatSync(tempPath)
+    const owner = typeof process.getuid === 'function' ? process.getuid() : info.uid
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== owner ||
+      (info.mode & 0o077) !== 0) throw new Error('BACKGROUND_BINDING_STORE_UNSAFE')
+    // rename is the commit point; this fixed-path file can only be residue from
+    // the previous, already-dead singleton writer during bootstrap.
+    unlinkSync(tempPath)
+    syncPath(directory)
+  }
   return makeBackgroundBindingStore({
     path: input.path,
     exists: (path) => existsSync(path),

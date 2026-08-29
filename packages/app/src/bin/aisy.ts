@@ -50,6 +50,7 @@ import {
   makeBudgetTracker,
   makeProviderMonitoringScorer,
   makeJsonlSessionLog,
+  makeSqliteCodexThreadStore,
   AGENT_PROTOCOL,
   GLOBAL_DNA_PREFIX_FILES,
   serializeFactIndex,
@@ -103,6 +104,7 @@ import {
 import { plural, TOOL_LABEL, type GoalScreenView } from '@aisy/telegram-gw'
 import {
   makeTelegramBot,
+  restartReasonForTelegramUpdate,
   type TelegramExecutionTurnV1,
   type TelegramNightlyNotice,
 } from '../bot.js'
@@ -306,6 +308,16 @@ import {
   makeNodeSessionCreationStore,
   makeSessionCreationCoordinator,
 } from '../session-creation-coordinator.js'
+import {
+  assertExactSessionDeletionRestartIntent,
+  makeNodeSessionDeletionPersistence,
+  makeSessionDeletionCoordinator,
+  makeSessionDeletionJournal,
+  repairSessionDeletionSelections,
+  sessionDeletionOperationFromRestartReason,
+} from '../session-deletion.js'
+import { makeNodeSessionDependants } from '../session-dependants.js'
+import { makeNodeSessionTranscriptMaintenance } from '../session-transcript-store.js'
 import { makeNodeProjectLifecycleAuthorityRuntime } from '../project-lifecycle-authority-runtime.js'
 import { makeTelegramProjectLifecycleControls } from '../telegram-project-lifecycle-controls.js'
 import { makeTranscriptCompactionSummarizer } from '../transcript-compaction.js'
@@ -1195,14 +1207,23 @@ const releaseJournalLease = (): void => {
   try { held.release() } catch { /* a foreign/replaced identity is left untouched */ }
 }
 process.once('exit', releaseJournalLease)
+const sessionTranscriptMaintenance = journalLease === null
+  ? null
+  : makeNodeSessionTranscriptMaintenance({ root: journalRoot, lease: journalLease })
 
 mkdirSync(base, { recursive: true })
 const registryOwner = { operatorId: `telegram:${allowedChatId}`, profileId: 'default' }
+let liveTurns = 0
 const registryPolicy = {
   homeRoot: homedir(),
   projectsRoot: join(homedir(), 'projects'),
   protectedRoots: [base],
 }
+const sessionDeletionJournal = makeSessionDeletionJournal({
+  persistence: makeNodeSessionDeletionPersistence(
+    join(base, 'session-deletions', 'journal-v1.json'),
+  ),
+})
 
 // The v2 registry is the only registry the live path knows. There is no v1
 // fallback and no implicit migration: a first run simply publishes a fresh v2
@@ -1245,10 +1266,85 @@ const registryPair: { view: LiveProjectRegistryView; registry: ProjectRegistryV2
     nowIso: () => new Date().toISOString(),
     newId: () => randomUUID(),
     persistence: store,
+    sessionFence: sessionDeletionJournal,
   })
   return { view: makeLiveProjectRegistryView({ registry, owner: registryOwner }), registry }
 })()
 const projectRegistry = registryPair.view
+
+// Lifecycle and creation recovery precede the first static binding. A crash may
+// have fenced the old active Session without publishing its replacement yet.
+function durableSecret(path: string): Uint8Array {
+  if (existsSync(path)) {
+    const stored = Buffer.from(readFileSync(path, 'utf8').trim(), 'base64')
+    if (stored.byteLength >= 32) return new Uint8Array(stored)
+  }
+  const fresh = randomBytes(32)
+  mkdirSync(base, { recursive: true, mode: 0o700 })
+  writeFileSync(path, fresh.toString('base64') + '\n', { encoding: 'utf8', mode: 0o600 })
+  return new Uint8Array(fresh)
+}
+const switchAuthoritySecret = durableSecret(join(base, 'switch-authority.key'))
+const lifecycleAuthoritySecret = durableSecret(join(base, 'project-lifecycle.key'))
+const lifecycleRuntime = makeNodeProjectLifecycleAuthorityRuntime({
+  secret: lifecycleAuthoritySecret,
+  noncePath: join(base, 'project-lifecycle-nonces.json'),
+  newReceiptId: () => randomUUID(),
+  validateRestorableRoot: (project) => {
+    const resolved = realpathSync(project.root)
+    if (!statSync(resolved).isDirectory()) throw new Error('ROOT_NOT_A_DIRECTORY')
+    const allowed = realpathSync(registryPolicy.projectsRoot)
+    if (resolved !== allowed && !resolved.startsWith(allowed + sep)) {
+      throw new Error('ROOT_OUTSIDE_PROJECTS')
+    }
+  },
+})
+let forgetAutoSkillsBySource: ((selector: Readonly<{
+  projectId?: string
+  sessionId?: string
+}>) => void) | null = null
+let claimAutoSkillsBySource: ((selector: Readonly<{
+  projectId?: string
+  sessionId?: string
+}>) => void) | null = null
+const projectRuntime = makeNodeProjectServiceRuntime({
+  registry: registryPair.registry,
+  authoritySecret: switchAuthoritySecret,
+  noncePath: join(base, 'switch-authority-nonces.json'),
+  rotationNoncePath: join(base, 'session-rotation-nonces.json'),
+  newReceiptId: () => randomUUID(),
+  newLeaseId: () => randomUUID(),
+  lifecycle: lifecycleRuntime.lifecycle,
+  beforeArchive: (event) => {
+    const selector = event.kind === 'project.archived'
+      ? { projectId: event.projectId }
+      : event.kind === 'session.archived' && event.sessionId !== undefined
+        ? { sessionId: event.sessionId }
+        : null
+    if (selector !== null) claimAutoSkillsBySource?.(selector)
+  },
+  emit: (event) => { forgetAutonomyOn(event) },
+})
+if (projectRuntime.rotationAuthority === undefined) {
+  throw new Error('SESSION_ROTATION_AUTHORITY_UNAVAILABLE')
+}
+const sessionLabels = makeNodeSessionLabelStore({
+  path: join(base, 'session-labels-v1.json'),
+})
+const sessionCreation = makeSessionCreationCoordinator({
+  registry: registryPair.registry,
+  service: projectRuntime.service,
+  labels: sessionLabels,
+  store: makeNodeSessionCreationStore(join(base, 'session-creations-v1.json')),
+})
+sessionCreation.repair()
+await repairSessionDeletionSelections({
+  registry: registryPair.registry,
+  service: projectRuntime.service,
+  journal: sessionDeletionJournal,
+  creation: sessionCreation,
+})
+
 const activeProjectSelection = projectRegistry.ensureDefault(registryOwner)
 const activeProject = projectRegistry.snapshot().projects.find(
   (project) => project.id === activeProjectSelection.projectId,
@@ -1501,93 +1597,6 @@ const durableTurnState = executionSupervisorSession === null || durableDelegatio
         setLease(lease: ExecutionSupervisorLease | null) { currentLease = lease },
       }
     })()
-// Switching context is an authenticated operation: the service issues a
-// one-use receipt and consumes it. The secret must outlive a restart, or every
-// receipt minted before it becomes unverifiable after one.
-function durableSecret(path: string): Uint8Array {
-  if (existsSync(path)) {
-    const stored = Buffer.from(readFileSync(path, 'utf8').trim(), 'base64')
-    if (stored.byteLength >= 32) return new Uint8Array(stored)
-  }
-  const fresh = randomBytes(32)
-  mkdirSync(base, { recursive: true, mode: 0o700 })
-  writeFileSync(path, fresh.toString('base64') + '\n', { encoding: 'utf8', mode: 0o600 })
-  return new Uint8Array(fresh)
-}
-const switchAuthoritySecret = durableSecret(join(base, 'switch-authority.key'))
-
-// Archiving is a separate authority from switching, with its own secret: a
-// receipt minted to move context must never be spendable to archive a project.
-const lifecycleAuthoritySecret = durableSecret(join(base, 'project-lifecycle.key'))
-const lifecycleRuntime = makeNodeProjectLifecycleAuthorityRuntime({
-  secret: lifecycleAuthoritySecret,
-  noncePath: join(base, 'project-lifecycle-nonces.json'),
-  newReceiptId: () => randomUUID(),
-  // Restoring points the operator back at a directory that has been out of use.
-  // The registry proves ownership; this proves the directory is still a real
-  // directory under the projects root, and not a symlink pointing elsewhere.
-  validateRestorableRoot: (project) => {
-    const resolved = realpathSync(project.root)
-    if (!statSync(resolved).isDirectory()) throw new Error('ROOT_NOT_A_DIRECTORY')
-    const allowed = realpathSync(registryPolicy.projectsRoot)
-    if (resolved !== allowed && !resolved.startsWith(allowed + sep)) {
-      throw new Error('ROOT_OUTSIDE_PROJECTS')
-    }
-  },
-})
-
-// Project/session lifecycle is composed before providers and the optional
-// auto-skill canary. The indirection keeps forgetting active even when the
-// canary is off, without constructing the private v2 store on ordinary turns.
-let forgetAutoSkillsBySource: ((selector: Readonly<{
-  projectId?: string
-  sessionId?: string
-}>) => void) | null = null
-let claimAutoSkillsBySource: ((selector: Readonly<{
-  projectId?: string
-  sessionId?: string
-}>) => void) | null = null
-
-// Per-turn context lease (ADR-0060): every scoped subsystem — protected memory,
-// transcript, project tools — takes its authority from this coordinator rather
-// than from ambient process state. It belongs to the project service, because
-// switching context closes the leases of the previous binding: a second, private
-// coordinator here would leave the startup lease open and unreachable.
-const projectRuntime = makeNodeProjectServiceRuntime({
-  registry: registryPair.registry,
-  authoritySecret: switchAuthoritySecret,
-  noncePath: join(base, 'switch-authority-nonces.json'),
-  rotationNoncePath: join(base, 'session-rotation-nonces.json'),
-  newReceiptId: () => randomUUID(),
-  newLeaseId: () => randomUUID(),
-  lifecycle: lifecycleRuntime.lifecycle,
-  beforeArchive: (event) => {
-    const selector = event.kind === 'project.archived'
-      ? { projectId: event.projectId }
-      : event.kind === 'session.archived' && event.sessionId !== undefined
-        ? { sessionId: event.sessionId }
-        : null
-    if (selector !== null) claimAutoSkillsBySource?.(selector)
-  },
-  // Каскад забывания (спека 24 §7, AC-24-10). Объявление поднято, а журнал
-  // автономности создаётся ниже: к моменту первой архивации он уже есть.
-  emit: (event) => { forgetAutonomyOn(event) },
-})
-if (projectRuntime.rotationAuthority === undefined) {
-  throw new Error('SESSION_ROTATION_AUTHORITY_UNAVAILABLE')
-}
-const sessionLabels = makeNodeSessionLabelStore({
-  path: join(base, 'session-labels-v1.json'),
-})
-const sessionCreation = makeSessionCreationCoordinator({
-  registry: registryPair.registry,
-  service: projectRuntime.service,
-  labels: sessionLabels,
-  store: makeNodeSessionCreationStore(join(base, 'session-creations-v1.json')),
-})
-// Creation metadata is a bootstrap barrier: Telegram must not observe a new
-// registry row before its temporary/explicit naming semantics are repaired.
-sessionCreation.repair()
 const dailySessionRotation = makeDailySessionRotation({
   botId: activeBot?.id ?? 'telegram-primary',
   ...registryOwner,
@@ -1630,17 +1639,6 @@ if (!workspaceProject) {
 }
 const nightlyWorkspaceProject = workspaceProject
 let nightlyBindingState = backgroundBindingStore.load('nightly')
-if (nightlyBindingState.status === 'missing') {
-  const nightlySession = projectRegistry.createSession(nightlyWorkspaceProject.id, 'Aisy system (nightly)')
-  backgroundBindingStore.save('nightly', {
-    operatorId: `telegram:${allowedChatId}`,
-    profileId: 'default',
-    projectId: nightlyWorkspaceProject.id,
-    sessionId: nightlySession.id,
-    scope: 'workspace',
-  })
-  nightlyBindingState = backgroundBindingStore.load('nightly')
-}
 const resolveNightlyBinding = (): ResolvedWorkBinding | null =>
   nightlyBindingState.status === 'ready' ? nightlyBindingState.binding : null
 
@@ -1746,6 +1744,225 @@ const journal = makeJsonlJournal({
   appendLine: (line) => appendFileSync(journalPath, line + '\n', { encoding: 'utf8', mode: 0o600 }),
   nowIso,
 })
+
+// Session deletion repairs before providers and Telegram polling start, so the
+// media single-writer must be acquired inside the same bootstrap barrier.
+const MEDIA_INBOX_MAX_BYTES = 20 * 1024 * 1024
+const mediaInboxRoot = join(base, 'media-inbox')
+const mediaInbox = ((): SingletonTelegramAttachmentInbox | null => {
+  const open = (): SingletonTelegramAttachmentInbox =>
+    makeSingletonTelegramAttachmentInbox({
+      inboxRoot: mediaInboxRoot,
+      allowedChatId,
+      maxAttachmentBytes: MEDIA_INBOX_MAX_BYTES,
+      download: makeTelegramBotApiAttachmentDownloadPort({ token }),
+    })
+  try {
+    return open()
+  } catch { /* the lock is held by a live writer or was abandoned */ }
+  try {
+    const recovery = makeMediaInboxWriterRecovery({
+      inboxRoot: mediaInboxRoot,
+      authorization: unattendedRecoveryAuthorization,
+      quiescence: makeDeadWriterQuiescence({ inboxRoot: mediaInboxRoot }),
+    })
+    const held = recovery.inspect()
+    if (held.state === 'abandoned' && recovery.discardAbandoned()) {
+      const inbox = open()
+      journal.append('media', 'media.writer_lock_discarded', { reason: 'abandoned' })
+      process.stdout.write('aisy run: убрал оборванный writer lock вложений.\n')
+      return inbox
+    }
+    if (held.state === 'held') {
+      const archived = recovery.archive({
+        expectedOwnerFingerprint: held.ownerFingerprint,
+        approval: null,
+      })
+      journal.append('media', 'media.writer_lock_recovered', {
+        recoveryId: archived.recoveryId,
+      })
+      const inbox = open()
+      process.stdout.write('aisy run: убрал зависший writer lock вложений от прошлого запуска.\n')
+      return inbox
+    }
+  } catch { /* fall through to the honest refusal below */ }
+  process.stdout.write(
+    'aisy run: приём вложений и голос выключены — writer lock держит живой процесс.\n',
+  )
+  return null
+})()
+const forwardBatchStore = makeNodeTelegramForwardBatchStore({
+  path: join(base, 'telegram', 'forward-batch.json'),
+})
+
+// Restart authority and Session deletion recovery are part of the bootstrap
+// write barrier. They run before providers, transports and background workers.
+const runtimeRestart = makeRuntimeRestart({
+  path: join(base, 'restart.json'),
+  nowIso,
+  supervised: () => executionSupervisorSession?.isHeld() === true,
+  activeTurns: () => liveTurns,
+  authorizePlannedRestart: async (intentHash) => {
+    if (executionSupervisorSession === null) throw new Error('EXECUTION_AUTHORITY_UNAVAILABLE')
+    await executionSupervisorSession.authorizePlannedRestart(intentHash)
+  },
+  exit: (intent) => {
+    journal.append('server', 'server.restart_requested', intent)
+    process.exit(AISY_PLANNED_RESTART_EXIT_CODE)
+  },
+})
+const previousRestart = runtimeRestart.previous()
+if (previousRestart !== null) {
+  journal.append('server', 'server.restart_intent_recovered', previousRestart)
+}
+
+const sessionDependants = makeNodeSessionDependants({
+  statePath: join(base, 'session-dependants-v1.json'),
+  goalPath: join(base, 'goal.json'),
+  triggersPath: join(base, 'triggers.json'),
+  nowIso,
+  liveTurns: (target) =>
+    target.operatorId === staticWorkBinding.operatorId &&
+      target.profileId === staticWorkBinding.profileId &&
+      target.projectId === staticWorkBinding.projectId &&
+      target.sessionId === staticWorkBinding.sessionId
+      ? liveTurns
+      : 0,
+  continuationBindings: () => {
+    const loaded = durableTurnState?.continuation.load()
+    return loaded?.status === 'ready' && loaded.record.phase !== 'terminal'
+      ? [loaded.record.identity.binding]
+      : []
+  },
+  delegationBindings: () => durableDelegationRegistry?.list()
+    .map((record) => record.binding) ?? [],
+  purgeTerminalDelegations: (target) => durableDelegationRegistry?.purgeRetiredExact({
+    ...target,
+    scope: staticWorkBinding.scope,
+  }) ?? [],
+  disableBackgroundBindings: (target) =>
+    backgroundBindingStore.disableExactSession(target),
+})
+const codexThreadDbPath = join(base, 'codex-subscription-threads.sqlite')
+const hasHistoricalCodexThread = (projectId: string, sessionId: string): boolean => {
+  if (!existsSync(codexThreadDbPath)) return false
+  const store = makeSqliteCodexThreadStore({ dbPath: codexThreadDbPath })
+  try { return store.hasBinding(projectId, sessionId) } finally { store.close() }
+}
+let bootstrappingSessionDeletion = true
+const sessionDeletionCoordinator = sessionTranscriptMaintenance === null
+  ? null
+  : makeSessionDeletionCoordinator({
+      registry: registryPair.registry,
+      service: projectRuntime.service,
+      journal: sessionDeletionJournal,
+      creation: sessionCreation,
+      labels: sessionLabels,
+      transcript: sessionTranscriptMaintenance,
+      activity: sessionDependants,
+      attachments: {
+        assertIdle: (target) => {
+          if (mediaInbox === null) throw new Error('SESSION_ATTACHMENT_PURGE_UNAVAILABLE')
+          mediaInbox.maintenance.assertIdle()
+          forwardBatchStore.assertSessionIdle({ ...target, scope: staticWorkBinding.scope })
+        },
+        purgeSession: (target) => {
+          if (mediaInbox === null) throw new Error('SESSION_ATTACHMENT_PURGE_UNAVAILABLE')
+          mediaInbox.maintenance.purgeSession(target.sessionId)
+          forwardBatchStore.purgeSession({
+            ...target,
+            scope: staticWorkBinding.scope,
+          })
+        },
+      },
+      provider: {
+        preflight: (target) => {
+          if (hasHistoricalCodexThread(target.projectId, target.sessionId)) {
+            throw new Error('SESSION_PROVIDER_PURGE_UNSUPPORTED')
+          }
+          return {
+            kind: 'none' as const,
+            adapterRevision: 'live-provider-no-session-persistence-v2',
+          }
+        },
+        purge: () => {},
+      },
+      dependants: sessionDependants,
+      restart: {
+        assertAvailable: () => {
+          if (executionSupervisorSession?.isHeld() !== true || liveTurns !== 0) {
+            throw new Error('SESSION_RESTART_UNAVAILABLE')
+          }
+        },
+        prepare: ({ operationHash, updateId }) => {
+          // This process already rebuilt its static binding. Recovery therefore
+          // advances the exact WAL without asking for a redundant second boot.
+          if (bootstrappingSessionDeletion) return
+          const reason = restartReasonForTelegramUpdate(
+            updateId,
+            `session deletion ${operationHash}`,
+          )
+          const intent = runtimeRestart.prepare(reason)
+          if (typeof intent === 'string') throw new Error(`SESSION_RESTART_${intent}`)
+          assertExactSessionDeletionRestartIntent(intent, reason)
+        },
+      },
+      nowIso,
+    })
+if (sessionDeletionCoordinator === null && sessionDeletionJournal.snapshot().records.some((record) =>
+  !((record.phase === 'terminal' && record.restartRequired === false) ||
+    record.phase === 'restart-acknowledged'))) {
+  throw new Error('SESSION_DELETION_RECOVERY_REQUIRES_JOURNAL')
+}
+const recoveredDeletionOperation = previousRestart === null
+  ? null
+  : sessionDeletionOperationFromRestartReason(previousRestart.reason)
+if (sessionDeletionCoordinator !== null) {
+  await sessionDeletionCoordinator.repair()
+  for (const record of sessionDeletionJournal.snapshot().records) {
+    if (record.phase === 'restart-requested') {
+      if (record.operationHash === recoveredDeletionOperation) {
+        sessionDeletionCoordinator.acknowledgeRestart(record.operationHash)
+        continue
+      }
+      if (record.restartUpdateId === undefined) {
+        throw new Error('SESSION_DELETION_RESTART_AUTHORITY_MISSING')
+      }
+      const reason = restartReasonForTelegramUpdate(
+        record.restartUpdateId,
+        `session deletion ${record.operationHash}`,
+      )
+      const intent = runtimeRestart.prepare(reason)
+      if (typeof intent === 'string') throw new Error(`SESSION_RESTART_${intent}`)
+      assertExactSessionDeletionRestartIntent(intent, reason)
+      const committed = await runtimeRestart.commitExit(intent)
+      if (committed !== 'committed' && committed !== 'already-committed') {
+        throw new Error(`SESSION_RESTART_${committed}`)
+      }
+    }
+  }
+  nightlyBindingState = backgroundBindingStore.load('nightly')
+}
+bootstrappingSessionDeletion = false
+
+if (recoveredDeletionOperation !== null &&
+  sessionDeletionJournal.get(recoveredDeletionOperation)?.phase !== 'restart-acknowledged') {
+  throw new Error('SESSION_DELETION_RESTART_RECEIPT_MISMATCH')
+}
+if (nightlyBindingState.status === 'missing') {
+  const nightlySession = projectRegistry.createSession(
+    nightlyWorkspaceProject.id,
+    'Aisy system (nightly)',
+  )
+  backgroundBindingStore.save('nightly', {
+    operatorId: `telegram:${allowedChatId}`,
+    profileId: 'default',
+    projectId: nightlyWorkspaceProject.id,
+    sessionId: nightlySession.id,
+    scope: 'workspace',
+  })
+  nightlyBindingState = backgroundBindingStore.load('nightly')
+}
 
 const resolveLiveMonitoringBinding = (binding: ResolvedWorkBinding): void => {
   if (binding.operatorId !== staticWorkBinding.operatorId ||
@@ -2628,7 +2845,7 @@ function liveCodexSubscriptionRuntime(): NodeCodexSubscriptionRuntime {
   codexSubscriptionRuntime = makeNodeCodexSubscriptionRuntime({
     codexExecutable: executable,
     codexHome: join(base, 'codex-subscription'),
-    threadDbPath: join(base, 'codex-subscription-threads.sqlite'),
+      threadDbPath: codexThreadDbPath,
     environment: process.env,
     projectRoot: projectId => projectId === staticWorkBinding.projectId
       ? activeWorkspaceRoot
@@ -3315,31 +3532,9 @@ const augmentTurnForPlan = async (
 // It no longer locks the reply channel — see `isOutboundLocked` below.
 let untrustedContext = false
 
-// Server access from the panel (plan 11.9). A restart is refused when nothing
+// Moved bootstrap composition retained temporarily during edit.
 // would bring the process back: that would be a shutdown, not a restart, and the
 // operator would have no way left to say so.
-let liveTurns = 0
-const runtimeRestart = makeRuntimeRestart({
-  path: join(base, 'restart.json'),
-  nowIso,
-  // ADR-0071 requires an authenticated parent-supervisor ACK.  An environment
-  // marker cannot prove that anything will bring this exact child back.
-  supervised: () => executionSupervisorSession?.isHeld() === true,
-  activeTurns: () => liveTurns,
-  authorizePlannedRestart: async (intentHash) => {
-    if (executionSupervisorSession === null) throw new Error('EXECUTION_AUTHORITY_UNAVAILABLE')
-    await executionSupervisorSession.authorizePlannedRestart(intentHash)
-  },
-  exit: (intent) => {
-    journal.append('server', 'server.restart_requested', intent)
-    process.exit(AISY_PLANNED_RESTART_EXIT_CODE)
-  },
-})
-const previousRestart = runtimeRestart.previous()
-if (previousRestart !== null) {
-  journal.append('server', 'server.restart_intent_recovered', previousRestart)
-}
-
 // Server access (ADR-0086): only operations the operator described, each one
 // confirmed and audited, and every opened door closes itself on a timer.
 const serverAccess = makeServerAccess({
@@ -3400,63 +3595,6 @@ const transcription = makeTranscriptionRegistry({
       })],
   onSelect: (choice) => journal.append('voice', 'voice.provider_selected', choice),
 })
-
-// Durable media inbox (ADR-0060). The writer lock is process-lifetime and is
-// never reclaimed by age or PID, so a lock left by a crashed run keeps
-// attachments unavailable until `aisy doctor --fix` archives it. Failing soft
-// here is deliberate: a stale lock must not stop the whole agent from talking.
-const MEDIA_INBOX_MAX_BYTES = 20 * 1024 * 1024
-const mediaInboxRoot = join(base, 'media-inbox')
-const mediaInbox = ((): SingletonTelegramAttachmentInbox | null => {
-  const open = (): SingletonTelegramAttachmentInbox =>
-    makeSingletonTelegramAttachmentInbox({
-      inboxRoot: mediaInboxRoot,
-      allowedChatId,
-      maxAttachmentBytes: MEDIA_INBOX_MAX_BYTES,
-      download: makeTelegramBotApiAttachmentDownloadPort({ token }),
-    })
-  try {
-    return open()
-  } catch { /* the lock is held — by a live writer or by a dead one */ }
-  // A lock left by a crashed run made attachments and voice unavailable until
-  // someone deleted a file over SSH. Nothing about that needed a human: this
-  // process has not opened the inbox yet, so a recorded pid that no longer
-  // exists proves nobody is writing. A live owner still refuses.
-  try {
-    const recovery = makeMediaInboxWriterRecovery({
-      inboxRoot: mediaInboxRoot,
-      authorization: unattendedRecoveryAuthorization,
-      quiescence: makeDeadWriterQuiescence({ inboxRoot: mediaInboxRoot }),
-    })
-    const held = recovery.inspect()
-    // Оборванный захват: директория lock есть, владельца в ней нет — процесс
-    // убили между `mkdir` и записью владельца. Прежде это читалось как
-    // повреждённое состояние, и приём вложений с голосом выключались до тех
-    // пор, пока кто-нибудь не удалит директорию по SSH.
-    if (held.state === 'abandoned' && recovery.discardAbandoned()) {
-      const inbox = open()
-      journal.append('media', 'media.writer_lock_discarded', { reason: 'abandoned' })
-      process.stdout.write('aisy run: убрал оборванный writer lock вложений.\n')
-      return inbox
-    }
-    if (held.state === 'held') {
-      const archived = recovery.archive({
-        expectedOwnerFingerprint: held.ownerFingerprint,
-        approval: null,
-      })
-      journal.append('media', 'media.writer_lock_recovered', {
-        recoveryId: archived.recoveryId,
-      })
-      const inbox = open()
-      process.stdout.write('aisy run: убрал зависший writer lock вложений от прошлого запуска.\n')
-      return inbox
-    }
-  } catch { /* fall through to the honest refusal below */ }
-  process.stdout.write(
-    'aisy run: приём вложений и голос выключены — writer lock держит живой процесс.\n',
-  )
-  return null
-})()
 
 // Voice: the durable inbox saves the recording, the registry transcribes it.
 // Without the inbox there is nowhere to put the bytes, so there is no ingress
@@ -4306,9 +4444,7 @@ const {
   ...(mediaInbox === null ? {} : { attachmentInbox: mediaInbox.inbox }),
   ...(voiceIngress === undefined ? {} : { voiceIngress }),
   forwardBatch: {
-    store: makeNodeTelegramForwardBatchStore({
-      path: join(base, 'telegram', 'forward-batch.json'),
-    }),
+    store: forwardBatchStore,
   },
   skillsMenu: configuredSkillMenu,
   mcpMenu: configuredMcpMenu,
@@ -4342,6 +4478,12 @@ const {
     owner: registryOwner,
     creation: sessionCreation,
     labels: sessionLabels,
+    ...(sessionDeletionCoordinator === null || sessionTranscriptMaintenance === null
+      ? {}
+      : {
+          deletion: sessionDeletionCoordinator,
+          transcript: sessionTranscriptMaintenance,
+        }),
   }),
   projectLifecycleControls: makeTelegramProjectLifecycleControls({
     runtime: projectRuntime,

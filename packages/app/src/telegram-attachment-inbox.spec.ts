@@ -1,6 +1,8 @@
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -17,6 +19,7 @@ import {
   makeTelegramAttachmentInbox,
   makeTelegramBotApiAttachmentDownloadPort,
   parseTelegramAttachmentUpdate,
+  telegramAttachmentIdentity,
   TelegramAttachmentInboxError,
   type TelegramAttachmentDescriptor,
   type TelegramAttachmentDownloadPort,
@@ -306,6 +309,141 @@ describe('makeTelegramAttachmentInbox', () => {
 })
 
 describe('makeSingletonTelegramAttachmentInbox', () => {
+  it('cleans hard-crash media/control temps under the singleton writer and preserves foreign canonical media', async () => {
+    const inboxRoot = tempRoot()
+    const retainedBinding = { ...binding, sessionId: 'session-b' }
+    const first = makeSingletonTelegramAttachmentInbox({
+      inboxRoot,
+      allowedChatId: 42,
+      maxAttachmentBytes: 1024,
+      download: downloader(Uint8Array.of(1, 2, 3), []),
+    })
+    const retained = await first.inbox.ingest({
+      binding: retainedBinding,
+      attachment: descriptor({ updateId: 501, messageId: 78, declaredSizeBytes: 3 }),
+    })
+    first.close()
+
+    const target = telegramAttachmentIdentity(
+      binding,
+      descriptor({ updateId: 502, messageId: 79 }),
+    )
+    const intentsRoot = join(inboxRoot, 'intents')
+    const recordsRoot = join(inboxRoot, 'records')
+    const objectsRoot = join(inboxRoot, 'objects')
+    const intentPath = join(intentsRoot, `${target.fileId}.json`)
+    const objectTemp = join(objectsRoot, `.aisy-inbox-${target.fileId}.tmp`)
+    const intentTemp = `${intentPath}.create-202-00000000-0000-4000-8000-000000000202`
+    const recordTemp = join(
+      recordsRoot,
+      `${target.fileId}.json.create-202-00000000-0000-4000-8000-000000000202`,
+    )
+    writeFileSync(intentPath, JSON.stringify({
+      schemaVersion: 1,
+      fileId: target.fileId,
+      operatorId: binding.operatorId,
+      profileId: binding.profileId,
+      sessionId: binding.sessionId,
+    }) + '\n', { mode: 0o600 })
+    writeFileSync(objectTemp, 'raw target attachment bytes', { mode: 0o600 })
+    writeFileSync(intentTemp, '{"partial":"intent"', { mode: 0o600 })
+    writeFileSync(recordTemp, '{"partial":"record"', { mode: 0o600 })
+
+    const recovered = makeSingletonTelegramAttachmentInbox({
+      inboxRoot,
+      allowedChatId: 42,
+      maxAttachmentBytes: 1024,
+      download: downloader(Uint8Array.of(9), []),
+    })
+    expect(existsSync(objectTemp)).toBe(false)
+    expect(existsSync(intentTemp)).toBe(false)
+    expect(existsSync(recordTemp)).toBe(false)
+    expect(() => recovered.maintenance.assertIdle()).not.toThrow()
+    expect(recovered.maintenance.purgeSession(binding.sessionId)).toEqual({
+      recordsRemoved: 0,
+      objectsRemoved: 0,
+    })
+    expect(existsSync(intentPath)).toBe(false)
+    expect(readFileSync(join(objectsRoot, retained.fileId))).toEqual(Buffer.from([1, 2, 3]))
+    expect(readFileSync(join(recordsRoot, `${retained.fileId}.json`), 'utf8'))
+      .toContain('session-b')
+    recovered.close()
+  })
+
+  it('physically purges only the exact Session and removes orphaned object bytes', async () => {
+    const inboxRoot = tempRoot()
+    let failAfterObject = false
+    const singleton = makeSingletonTelegramAttachmentInbox({
+      inboxRoot,
+      allowedChatId: 42,
+      maxAttachmentBytes: 1024,
+      download: downloader(Uint8Array.from([0, 255, 65, 105, 115, 121, 10, 128]), []),
+      faultAt: (point) => {
+        if (failAfterObject && point === 'after-object') throw new Error('crash:after-object')
+      },
+    })
+    const target = await singleton.inbox.ingest({ binding, attachment: descriptor() })
+    const retainedBinding = { ...binding, sessionId: 'session-b' }
+    const retained = await singleton.inbox.ingest({
+      binding: retainedBinding,
+      attachment: descriptor({ updateId: 501, messageId: 78 }),
+    })
+    failAfterObject = true
+    await expect(singleton.inbox.ingest({
+      binding,
+      attachment: descriptor({ updateId: 502, messageId: 79 }),
+    })).rejects.toThrow('crash:after-object')
+    await expect(singleton.inbox.ingest({
+      binding: retainedBinding,
+      attachment: descriptor({ updateId: 503, messageId: 80 }),
+    })).rejects.toThrow('crash:after-object')
+    expect(readdirSync(join(inboxRoot, 'intents'))).toHaveLength(2)
+
+    expect(singleton.maintenance.purgeSession('session-a')).toEqual({
+      recordsRemoved: 1,
+      objectsRemoved: 2,
+    })
+    expect(existsSync(join(inboxRoot, 'records', `${target.fileId}.json`))).toBe(false)
+    expect(existsSync(join(inboxRoot, 'objects', target.fileId))).toBe(false)
+    expect(existsSync(join(inboxRoot, 'records', `${retained.fileId}.json`))).toBe(true)
+    expect(existsSync(join(inboxRoot, 'objects', retained.fileId))).toBe(true)
+    expect(readdirSync(join(inboxRoot, 'intents'))).toHaveLength(1)
+    expect(readdirSync(join(inboxRoot, 'objects'))).toHaveLength(2)
+    expect(singleton.maintenance.purgeSession('session-a')).toEqual({
+      recordsRemoved: 0,
+      objectsRemoved: 0,
+    })
+    singleton.close()
+  })
+
+  it('refuses maintenance while an attachment download is in flight', async () => {
+    const inboxRoot = tempRoot()
+    let release!: () => void
+    const ready = new Promise<void>((resolve) => { release = resolve })
+    let started!: () => void
+    const entered = new Promise<void>((resolve) => { started = resolve })
+    const singleton = makeSingletonTelegramAttachmentInbox({
+      inboxRoot,
+      allowedChatId: 42,
+      maxAttachmentBytes: 1024,
+      download: {
+        async download() {
+          started()
+          await ready
+          return { body: chunks(Uint8Array.from([0, 255, 65, 105, 115, 121, 10, 128])), sizeBytes: 8 }
+        },
+      },
+    })
+    const ingest = singleton.inbox.ingest({ binding, attachment: descriptor() })
+    await entered
+
+    expect(() => singleton.maintenance.assertIdle()).toThrow('WRITER_BUSY')
+    expect(() => singleton.maintenance.purgeSession('session-a')).toThrow('WRITER_BUSY')
+    release()
+    await ingest
+    singleton.close()
+  })
+
   it('admits one writer, fails closed on a competitor, and resumes after clean restart', async () => {
     const inboxRoot = tempRoot()
     const payload = Uint8Array.from([0, 255, 65, 105, 115, 121, 10, 128])

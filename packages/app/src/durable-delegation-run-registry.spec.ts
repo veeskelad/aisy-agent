@@ -1,6 +1,8 @@
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -75,6 +77,7 @@ describe('durable delegation run registry', () => {
     registration.activate()
     registration.activate()
     const reopened = makeNodeDurableDelegationRunRegistry({ stateRoot: root })
+    expect(reopened.list()).toEqual([expect.objectContaining({ binding: BINDING })])
     expect(reopened.listExact(BINDING_HASH)).toEqual([expect.objectContaining({
       phase: 'active',
     })])
@@ -116,10 +119,20 @@ describe('durable delegation run registry', () => {
       new DurableDelegationRunRegistryError('DELEGATION_RUN_REGISTRY_CONFLICT'),
     )
     registration.activate()
+    mkdirSync(runRoot, { mode: 0o700 })
+    writeFileSync(join(runRoot, 'private-output.json'), 'raw private result', { mode: 0o600 })
     registration.retire()
     registration.retire()
 
     expect(registry.listExact(BINDING_HASH)).toEqual([])
+    expect(registry.retiredExact(BINDING)).toEqual([expect.objectContaining({
+      runId: `inv-${'7'.repeat(64)}`,
+      binding: BINDING,
+    })])
+    expect(registry.purgeRetiredExact(BINDING)).toEqual([`inv-${'7'.repeat(64)}`])
+    expect(existsSync(runRoot)).toBe(false)
+    expect(registry.purgeRetiredExact(BINDING)).toEqual([`inv-${'7'.repeat(64)}`])
+    expect(registry.retiredExact(BINDING)).toHaveLength(1)
     expect(() => registration.activate()).toThrow(
       new DurableDelegationRunRegistryError('DELEGATION_RUN_REGISTRY_CONFLICT'),
     )
@@ -177,5 +190,46 @@ describe('durable delegation run registry', () => {
       new DurableDelegationRunRegistryError('DELEGATION_RUN_REGISTRY_STATE_INVALID'),
     )
     expect(registry.listExact(BINDING_HASH)).toEqual([])
+  })
+
+  it('purges dead-writer registry temps with raw target data and preserves foreign canonical state', () => {
+    const root = stateRoot()
+    const targetRoot = join(root, `inv-${'8'.repeat(64)}`)
+    const foreignRoot = join(root, `inv-${'9'.repeat(64)}`)
+    const registry = makeNodeDurableDelegationRunRegistry({ stateRoot: root })
+    const target = registry.register({
+      runRoot: targetRoot,
+      bindingHash: BINDING_HASH,
+      binding: BINDING,
+      plan: PLAN,
+    })
+    target.activate()
+    mkdirSync(targetRoot, { mode: 0o700 })
+    writeFileSync(join(targetRoot, 'private-output.json'), 'target private output', { mode: 0o600 })
+    target.retire()
+    registry.register({
+      runRoot: foreignRoot,
+      bindingHash: 'f'.repeat(64),
+      binding: { ...BINDING, sessionId: 'session-b' },
+      plan: PLAN,
+    })
+    const orphan = join(
+      root,
+      '.run-registry-v1.json.tmp-202-00000000-0000-4000-8000-000000000202',
+    )
+    writeFileSync(orphan, JSON.stringify({ binding: BINDING, plan: PLAN }), { mode: 0o600 })
+
+    const recovered = makeNodeDurableDelegationRunRegistry({
+      stateRoot: root,
+      pid: 101,
+      processAlive: () => false,
+    })
+    expect(recovered.purgeRetiredExact(BINDING)).toEqual([`inv-${'8'.repeat(64)}`])
+    expect(existsSync(orphan)).toBe(false)
+    expect(existsSync(targetRoot)).toBe(false)
+    expect(recovered.list()).toEqual([expect.objectContaining({
+      runId: `inv-${'9'.repeat(64)}`,
+      binding: expect.objectContaining({ sessionId: 'session-b' }),
+    })])
   })
 })

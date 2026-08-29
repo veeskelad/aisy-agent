@@ -3,13 +3,16 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   ProjectRegistryV2Error,
   type ProjectRegistryV2,
@@ -64,6 +67,8 @@ export interface SessionDeletionRecordV1 extends ProjectRegistryV2Owner {
   selectionGeneration?: number
   deletedAt: string
   restartRequired?: boolean
+  /** Telegram update whose replay must be consumed by the replacement boot. */
+  restartUpdateId?: number
   purgeRevision?: number
   purgedAt?: string
   phase: SessionDeletionPhase
@@ -113,9 +118,13 @@ export interface SessionDeletionCoordinator {
     transcriptHead: string
   }): Promise<SessionDeletionRecordV1>
   repair(): Promise<{ recovered: number }>
+  /** Called only by the new boot after it proves the exact prepared restart. */
+  acknowledgeRestart(operationHash: string): SessionDeletionRecordV1
 }
 
 const HASH = /^[a-f0-9]{64}$/u
+const DELETION_RESTART_REASON =
+  /^telegram-update:(?:0|[1-9]\d*) · session deletion ([a-f0-9]{64})$/u
 const ID = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/u
 const PHASES = new Set<SessionDeletionPhase>([
   'prepared-and-fenced', 'replacement-selected', 'dependants-settled',
@@ -206,11 +215,15 @@ function validate(value: unknown): SessionDeletionStateV1 {
     const terminal = TERMINAL_PHASES.has(phase)
     const shapeInvalid = terminal
       ? typeof record.restartRequired !== 'boolean' ||
+        (record.restartRequired === true
+          ? !Number.isSafeInteger(record.restartUpdateId) || (record.restartUpdateId ?? -1) < 0
+          : record.restartUpdateId !== undefined) ||
         !Number.isSafeInteger(record.purgeRevision) || (record.purgeRevision ?? 0) < 1 ||
         !validIso(record.purgedAt) ||
         Object.keys(record).some((key) => ![
           'schemaVersion', 'operationHash', 'operatorId', 'profileId', 'projectId',
-          'sessionId', 'deletedAt', 'restartRequired', 'purgeRevision', 'purgedAt', 'phase',
+          'sessionId', 'deletedAt', 'restartRequired', 'restartUpdateId',
+          'purgeRevision', 'purgedAt', 'phase',
         ].includes(key))
       : !Number.isSafeInteger(record.expectedGeneration) ||
         (record.expectedGeneration ?? 0) < 1 ||
@@ -309,6 +322,7 @@ export function makeSessionDeletionJournal(input: {
         sessionId: current.sessionId,
         deletedAt: current.deletedAt,
         restartRequired: current.activeAtPrepare,
+        ...(current.activeAtPrepare ? { restartUpdateId: current.sourceUpdateId } : {}),
         purgeRevision: 1,
         purgedAt,
         phase: 'terminal',
@@ -353,9 +367,32 @@ function syncPath(path: string): void {
   try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
 }
 
+function cleanupSessionDeletionTemps(path: string): void {
+  const directory = dirname(path)
+  const prefix = `${basename(path)}.tmp-`
+  let removed = false
+  for (const name of readdirSync(directory)) {
+    if (!name.startsWith(prefix)) continue
+    if (!/^[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      name.slice(prefix.length),
+    )) throw new Error('SESSION_DELETION_STATE_CORRUPT')
+    const temporary = join(directory, name)
+    const info = lstatSync(temporary)
+    const owner = typeof process.getuid === 'function' ? process.getuid() : info.uid
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== owner ||
+      (info.mode & 0o077) !== 0 || info.size > MAX_BYTES) {
+      throw new Error('SESSION_DELETION_STATE_CORRUPT')
+    }
+    unlinkSync(temporary)
+    removed = true
+  }
+  if (removed) syncPath(directory)
+}
+
 export function makeNodeSessionDeletionPersistence(path: string): SessionDeletionPersistence {
   const directory = dirname(path)
   mkdirSync(directory, { recursive: true, mode: 0o700 })
+  cleanupSessionDeletionTemps(path)
   let initial: SessionDeletionStateV1 = { schemaVersion: 1, records: [] }
   if (existsSync(path)) {
     const raw = readFileSync(path, 'utf8')
@@ -369,6 +406,7 @@ export function makeNodeSessionDeletionPersistence(path: string): SessionDeletio
   return makeMemorySessionDeletionPersistence({
     initial,
     save: (state) => {
+      cleanupSessionDeletionTemps(path)
       const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`
       writeFileSync(temporary, JSON.stringify(state, null, 2) + '\n', {
         encoding: 'utf8', flag: 'wx', mode: 0o600,
@@ -422,6 +460,83 @@ function selectionFromSnapshot(
   return { ...found }
 }
 
+async function publishReplacementSelection(input: {
+  record: SessionDeletionRecordV1
+  registry: ProjectRegistryV2
+  service: Pick<ProjectService, 'runSessionDeletionTransition'>
+  journal: SessionDeletionJournal
+  creation: Pick<SessionCreationCoordinator, 'prepareExternal' | 'completeExternal'>
+}): Promise<SessionDeletionRecordV1> {
+  const target = {
+    operatorId: input.record.operatorId,
+    profileId: input.record.profileId,
+    projectId: input.record.projectId,
+    sessionId: input.record.sessionId,
+  }
+  return input.service.runSessionDeletionTransition(target, () => {
+    const record = input.record
+    if (record.expectedGeneration === undefined) {
+      throw new Error('SESSION_DELETION_STATE_CORRUPT')
+    }
+    if (record.replacement !== undefined) {
+      input.creation.prepareExternal({
+        ...target,
+        sessionId: record.replacement.sessionId,
+        expectedGeneration: record.expectedGeneration,
+        createKeyHash: record.replacement.createKeyHash,
+        name: record.replacement.name,
+        labelKind: 'temporary',
+      })
+    }
+    let selection: ProjectSelectionV2
+    try {
+      const result = input.registry.selectSessionDeletionReplacement({
+        ...target,
+        expectedGeneration: record.expectedGeneration,
+        ...(record.replacement === undefined ? {} : { replacement: record.replacement }),
+      })
+      selection = result.selection
+    } catch (error) {
+      const current = selectionFromSnapshot(input.registry, target)
+      if (!(error instanceof ProjectRegistryV2Error) || error.code !== 'STALE_GENERATION' ||
+        (current.projectId === target.projectId && current.sessionId === target.sessionId)) {
+        throw error
+      }
+      selection = current
+    }
+    if (record.replacement !== undefined && input.registry.snapshot().sessions.some((session) =>
+      session.id === record.replacement!.sessionId &&
+      session.createKeyHash === record.replacement!.createKeyHash)) {
+      input.creation.completeExternal(record.replacement.createKeyHash)
+    }
+    return input.journal.advance(
+      record.operationHash,
+      record.phase,
+      'replacement-selected',
+      { selectionGeneration: selection.generation },
+    )
+  })
+}
+
+/**
+ * Startup barrier: repairs only the bounded selection publication before any
+ * static binding, turn lease, transport or background consumer can start.
+ */
+export async function repairSessionDeletionSelections(input: {
+  registry: ProjectRegistryV2
+  service: Pick<ProjectService, 'runSessionDeletionTransition'>
+  journal: SessionDeletionJournal
+  creation: Pick<SessionCreationCoordinator, 'prepareExternal' | 'completeExternal'>
+}): Promise<{ recovered: number }> {
+  let recovered = 0
+  for (const record of input.journal.snapshot().records) {
+    if (record.phase !== 'prepared-and-fenced') continue
+    await publishReplacementSelection({ ...input, record })
+    recovered += 1
+  }
+  return { recovered }
+}
+
 export function makeSessionDeletionCoordinator(input: {
   registry: ProjectRegistryV2
   service: Pick<ProjectService, 'runSessionDeletionTransition'>
@@ -430,6 +545,12 @@ export function makeSessionDeletionCoordinator(input: {
   labels: Pick<SessionLabelStore, 'remove'>
   transcript: NodeSessionTranscriptMaintenance
   activity: { assertIdle(target: ProjectRegistryV2Owner & { projectId: string; sessionId: string }): void }
+  attachments: {
+    assertIdle(target: ProjectRegistryV2Owner & { projectId: string; sessionId: string }): void
+    purgeSession(
+      target: ProjectRegistryV2Owner & { projectId: string; sessionId: string },
+    ): void | Promise<void>
+  }
   provider: {
     preflight(target: ProjectRegistryV2Owner & {
       projectId: string
@@ -447,7 +568,10 @@ export function makeSessionDeletionCoordinator(input: {
       operationHash: string,
     ): void | Promise<void>
   }
-  restart: { request(operationHash: string): void | Promise<void> }
+  restart: {
+    assertAvailable(): void
+    prepare(authority: { operationHash: string; updateId: number }): void | Promise<void>
+  }
   nowIso?: () => string
 }): SessionDeletionCoordinator {
   const nowIso = input.nowIso ?? (() => new Date().toISOString())
@@ -461,48 +585,7 @@ export function makeSessionDeletionCoordinator(input: {
     }
     while (true) {
       if (record.phase === 'prepared-and-fenced') {
-        record = await input.service.runSessionDeletionTransition(target, () => {
-          if (record.expectedGeneration === undefined) {
-            throw new Error('SESSION_DELETION_STATE_CORRUPT')
-          }
-          if (record.replacement !== undefined) {
-            input.creation.prepareExternal({
-              ...target,
-              sessionId: record.replacement.sessionId,
-              expectedGeneration: record.expectedGeneration,
-              createKeyHash: record.replacement.createKeyHash,
-              name: record.replacement.name,
-              labelKind: 'temporary',
-            })
-          }
-          let selection: ProjectSelectionV2
-          try {
-            const result = input.registry.selectSessionDeletionReplacement({
-              ...target,
-              expectedGeneration: record.expectedGeneration,
-              ...(record.replacement === undefined ? {} : { replacement: record.replacement }),
-            })
-            selection = result.selection
-          } catch (error) {
-            const current = selectionFromSnapshot(input.registry, target)
-            if (!(error instanceof ProjectRegistryV2Error) || error.code !== 'STALE_GENERATION' ||
-              (current.projectId === target.projectId && current.sessionId === target.sessionId)) {
-              throw error
-            }
-            selection = current
-          }
-          if (record.replacement !== undefined && input.registry.snapshot().sessions.some((session) =>
-            session.id === record.replacement!.sessionId &&
-            session.createKeyHash === record.replacement!.createKeyHash)) {
-            input.creation.completeExternal(record.replacement.createKeyHash)
-          }
-          return input.journal.advance(
-            record.operationHash,
-            record.phase,
-            'replacement-selected',
-            { selectionGeneration: selection.generation },
-          )
-        })
+        record = await publishReplacementSelection({ ...input, record })
         continue
       }
       if (record.phase === 'replacement-selected') {
@@ -554,6 +637,7 @@ export function makeSessionDeletionCoordinator(input: {
         continue
       }
       if (record.phase === 'registry-removed') {
+        await input.attachments.purgeSession(target)
         input.labels.remove(record.sessionId)
         await input.transcript.removeSessionControls(record.sessionId)
         record = input.journal.advance(record.operationHash, record.phase, 'target-controls-removed')
@@ -564,13 +648,22 @@ export function makeSessionDeletionCoordinator(input: {
         continue
       }
       if (record.phase === 'terminal' && record.restartRequired === true) {
+        if (record.restartUpdateId === undefined) {
+          throw new Error('SESSION_DELETION_STATE_CORRUPT')
+        }
+        await input.restart.prepare({
+          operationHash: record.operationHash,
+          updateId: record.restartUpdateId,
+        })
         record = input.journal.advance(record.operationHash, record.phase, 'restart-requested')
-        continue
-      }
-      if (record.phase === 'restart-requested') {
-        await input.restart.request(record.operationHash)
-        record = input.journal.advance(record.operationHash, record.phase, 'restart-acknowledged')
-        continue
+      } else if (record.phase === 'restart-requested' && record.restartRequired === true) {
+        if (record.restartUpdateId === undefined) {
+          throw new Error('SESSION_DELETION_STATE_CORRUPT')
+        }
+        await input.restart.prepare({
+          operationHash: record.operationHash,
+          updateId: record.restartUpdateId,
+        })
       }
       return record
     }
@@ -594,6 +687,7 @@ export function makeSessionDeletionCoordinator(input: {
       const prepared = await input.service.runSessionDeletionTransition(target, async () => {
         input.registry.getSession(target)
         input.activity.assertIdle(target)
+        input.attachments.assertIdle(target)
         const providerPurge = input.provider.preflight(target)
         if (!validProviderPurge(providerPurge)) {
           throw new Error('SESSION_DELETION_PROVIDER_AUTHORITY_INVALID')
@@ -608,6 +702,7 @@ export function makeSessionDeletionCoordinator(input: {
         }
         const activeAtPrepare = active.projectId === raw.projectId &&
           active.sessionId === raw.sessionId
+        if (activeAtPrepare) input.restart.assertAvailable()
         const otherActive = input.registry.searchSessions({
           ...raw, query: '', includeArchived: false,
         }).some((session) => session.id !== raw.sessionId)
@@ -659,5 +754,33 @@ export function makeSessionDeletionCoordinator(input: {
       }
       return { recovered }
     },
+    acknowledgeRestart(operationHash) {
+      const record = input.journal.get(operationHash)
+      if (record === null) throw new Error('SESSION_DELETION_NOT_FOUND')
+      if (record.phase === 'restart-acknowledged') return record
+      if (record.phase !== 'restart-requested' || record.restartRequired !== true) {
+        throw new Error('SESSION_DELETION_RESTART_NOT_REQUESTED')
+      }
+      return input.journal.advance(
+        operationHash,
+        'restart-requested',
+        'restart-acknowledged',
+      )
+    },
   })
+}
+
+/** Returns deletion authority only for the exact code-owned restart reason. */
+export function sessionDeletionOperationFromRestartReason(reason: string): string | null {
+  return DELETION_RESTART_REASON.exec(reason)?.[1] ?? null
+}
+
+export function assertExactSessionDeletionRestartIntent(
+  intent: Readonly<{ reason: string; activeTurns: number }>,
+  expectedReason: string,
+): void {
+  if (intent.reason !== expectedReason || intent.activeTurns !== 0 ||
+    sessionDeletionOperationFromRestartReason(intent.reason) === null) {
+    throw new Error('SESSION_DELETION_RESTART_IDENTITY_MISMATCH')
+  }
 }

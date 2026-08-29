@@ -8,8 +8,10 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -21,6 +23,7 @@ const RUN_ID = /^inv-[a-f0-9]{64}$/
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_ID_BYTES = 1024
 const MAX_RECORDS = 64
+const MAX_RETIRED_RECORDS = 10_000
 const MAX_STATE_BYTES = 4 * 1024 * 1024
 const MAX_PLAN_BYTES = 1024 * 1024
 const MAX_PLAN_TASKS = 128
@@ -60,8 +63,14 @@ export interface DurableDelegationRunRegistrationV1 {
 
 export interface DurableDelegationRunRegistryV1 {
   register(input: DurableDelegationRunRegistrationInputV1): DurableDelegationRunRegistrationV1
+  list(): readonly Readonly<DurableDelegationRunRegistryRecordV1>[]
   listExact(bindingHash: string): readonly Readonly<DurableDelegationRunRegistryRecordV1>[]
   runRoot(record: Readonly<DurableDelegationRunRegistryRecordV1>): string
+  retiredExact(binding: ResolvedWorkBinding): readonly Readonly<{
+    runId: string
+    binding: Readonly<ResolvedWorkBinding>
+  }>[]
+  purgeRetiredExact(binding: ResolvedWorkBinding): readonly string[]
 }
 
 export type DurableDelegationRunRegistrationInputV1 = Readonly<{
@@ -353,6 +362,9 @@ function sameRecord(
  */
 export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
   stateRoot: string
+  /** Deterministic seam for crash-recovery tests. */
+  processAlive?: (pid: number) => boolean
+  pid?: number
 }>): DurableDelegationRunRegistryV1 {
   if (typeof input !== 'object' || input === null ||
     !isAbsolute(input.stateRoot) || normalize(input.stateRoot) !== input.stateRoot ||
@@ -362,6 +374,123 @@ export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
   const stateRoot = resolve(input.stateRoot)
   assertPrivateDirectory(stateRoot)
   const registryPath = join(stateRoot, '.run-registry-v1.json')
+  const retiredPath = join(stateRoot, '.retired-run-registry-v1.json')
+  const ownerPid = input.pid ?? process.pid
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
+    fail('DELEGATION_RUN_REGISTRY_CONFIG_INVALID')
+  }
+  const processAlive = input.processAlive ?? ((pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EPERM') return true
+      if (code === 'ESRCH') return false
+      fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+    }
+  })
+  const TEMP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const reconcileRegistryTemps = (): void => {
+    let removed = false
+    for (const name of readdirSync(stateRoot)) {
+      const ownedPrefix = name.startsWith('.run-registry-v1.json.tmp-') ||
+        name.startsWith('.retired-run-registry-v1.json.tmp-')
+      if (!ownedPrefix) continue
+      const match = /^\.(?:run|retired-run)-registry-v1\.json\.tmp-([1-9][0-9]*)-([0-9a-f-]{36})$/.exec(name)
+      if (match === null || !TEMP_UUID.test(match[2]!)) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      const pid = Number(match[1])
+      if (!Number.isSafeInteger(pid) || pid <= 0) fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      const path = join(stateRoot, name)
+      const info = lstatSync(path)
+      const owner = typeof process.getuid === 'function' ? process.getuid() : info.uid
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== owner ||
+        (info.mode & 0o077) !== 0 || info.size > MAX_STATE_BYTES) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      // All registry mutations are synchronous. A marker carrying our own PID
+      // at a public-method boundary is orphaned; another live process fails
+      // closed, while a dead writer's partial bytes are safe to discard because
+      // rename is the only commit point.
+      if (pid !== ownerPid && processAlive(pid)) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      unlinkSync(path)
+      removed = true
+    }
+    if (removed) syncPath(stateRoot)
+  }
+
+  type RetiredRecord = Readonly<{ runId: string; binding: Readonly<ResolvedWorkBinding> }>
+  type RetiredState = Readonly<{
+    schemaVersion: 1
+    generation: number
+    records: readonly RetiredRecord[]
+    payloadSha256: string
+  }>
+  const retiredPayload = (records: readonly RetiredRecord[], generation: number) => ({
+    schemaVersion: 1 as const,
+    generation,
+    records: [...records].sort((left, right) => left.runId < right.runId ? -1 : 1),
+  })
+  const retiredState = (records: readonly RetiredRecord[], generation: number): RetiredState => {
+    const payload = retiredPayload(records, generation)
+    return Object.freeze({ ...payload, payloadSha256: digest(payload) })
+  }
+  const readRetired = (): RetiredState => {
+    if (!existsSync(retiredPath)) return retiredState([], 0)
+    try {
+      const raw = plainRecord(JSON.parse(readPrivateFile(retiredPath)) as unknown)
+      if (raw === null || raw['schemaVersion'] !== 1 ||
+        !Number.isSafeInteger(raw['generation']) || (raw['generation'] as number) < 0 ||
+        !Array.isArray(raw['records']) || raw['records'].length > MAX_RETIRED_RECORDS ||
+        typeof raw['payloadSha256'] !== 'string' || !HASH.test(raw['payloadSha256']) ||
+        !exactKeys(raw, ['schemaVersion', 'generation', 'records', 'payloadSha256'])) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      const records = raw['records'].map((value): RetiredRecord => {
+        const item = plainRecord(value)
+        if (item === null || !exactKeys(item, ['runId', 'binding']) ||
+          typeof item['runId'] !== 'string' || !RUN_ID.test(item['runId'])) {
+          fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+        }
+        return Object.freeze({ runId: item['runId'], binding: bindingSnapshot(item['binding']) })
+      })
+      if (new Set(records.map(item => item.runId)).size !== records.length) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      const candidate = retiredState(records, raw['generation'] as number)
+      if (candidate.payloadSha256 !== raw['payloadSha256']) {
+        fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+      }
+      return candidate
+    } catch (error) {
+      if (error instanceof DurableDelegationRunRegistryError) throw error
+      return fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+    }
+  }
+  const saveRetired = (state: RetiredState): void => {
+    const content = JSON.stringify(state, null, 2) + '\n'
+    if (Buffer.byteLength(content, 'utf8') > MAX_STATE_BYTES) {
+      fail('DELEGATION_RUN_REGISTRY_FULL')
+    }
+    const temporary = `${retiredPath}.tmp-${ownerPid}-${randomUUID()}`
+    try {
+      writeFileSync(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+      syncPath(temporary)
+      renameSync(temporary, retiredPath)
+      syncPath(stateRoot)
+    } catch (error) {
+      try { unlinkSync(temporary) } catch { /* best effort */ }
+      if (error instanceof DurableDelegationRunRegistryError) throw error
+      fail('DELEGATION_RUN_REGISTRY_WRITE_FAILED')
+    }
+  }
+  const sameSession = (left: ResolvedWorkBinding, right: ResolvedWorkBinding): boolean =>
+    left.operatorId === right.operatorId && left.profileId === right.profileId &&
+    left.projectId === right.projectId && left.sessionId === right.sessionId
 
   const read = (): RegistryStateV1 => {
     if (!existsSync(registryPath)) return emptyState()
@@ -376,7 +505,7 @@ export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
     if (Buffer.byteLength(content, 'utf8') > MAX_STATE_BYTES) {
       fail('DELEGATION_RUN_REGISTRY_FULL')
     }
-    const temporary = `${registryPath}.tmp-${process.pid}-${randomUUID()}`
+    const temporary = `${registryPath}.tmp-${ownerPid}-${randomUUID()}`
     let descriptor: number | undefined
     try {
       descriptor = openSync(
@@ -465,6 +594,23 @@ export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
           if (!sameRecord(active, candidate) || active.phase !== 'active') {
             fail('DELEGATION_RUN_REGISTRY_CONFLICT')
           }
+          const retiredStateBefore = readRetired()
+          const retiredExisting = retiredStateBefore.records.find(
+            record => record.runId === candidate.runId,
+          )
+          if (retiredExisting !== undefined &&
+            digest(retiredExisting.binding) !== digest(candidate.binding)) {
+            fail('DELEGATION_RUN_REGISTRY_CONFLICT')
+          }
+          if (retiredExisting === undefined) {
+            if (retiredStateBefore.records.length >= MAX_RETIRED_RECORDS) {
+              fail('DELEGATION_RUN_REGISTRY_FULL')
+            }
+            saveRetired(retiredState([
+              ...retiredStateBefore.records,
+              Object.freeze({ runId: candidate.runId, binding: candidate.binding }),
+            ], retiredStateBefore.generation + 1))
+          }
           save(immutableState(
             current.records.filter((_record, recordIndex) => recordIndex !== index),
             current.generation + 1,
@@ -472,6 +618,10 @@ export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
           retired = true
         },
       })
+    },
+
+    list() {
+      return Object.freeze([...read().records])
     },
 
     listExact(bindingHash: string) {
@@ -482,6 +632,35 @@ export function makeNodeDurableDelegationRunRegistry(input: Readonly<{
     runRoot(record: Readonly<DurableDelegationRunRegistryRecordV1>) {
       const snapshot = recordSnapshot(record)
       return exactRunRoot(snapshot.runId)
+    },
+
+    retiredExact(binding: ResolvedWorkBinding) {
+      reconcileRegistryTemps()
+      const exact = bindingSnapshot(binding)
+      return Object.freeze(readRetired().records.filter(record =>
+        sameSession(record.binding, exact)))
+    },
+
+    purgeRetiredExact(binding: ResolvedWorkBinding) {
+      reconcileRegistryTemps()
+      const exact = bindingSnapshot(binding)
+      const state = readRetired()
+      const selected = state.records.filter(record => sameSession(record.binding, exact))
+      if (selected.length === 0) return Object.freeze([])
+      for (const record of selected) {
+        const path = exactRunRoot(record.runId)
+        if (!existsSync(path)) continue
+        const info = lstatSync(path)
+        if (!info.isDirectory() || info.isSymbolicLink() ||
+          realpathSync.native(path) !== path || dirname(path) !== stateRoot) {
+          fail('DELEGATION_RUN_REGISTRY_STATE_INVALID')
+        }
+        rmSync(path, { recursive: true })
+        syncPath(stateRoot)
+      }
+      // The content-free retired row is the bounded receipt. Keeping it makes
+      // crash repair idempotent without retaining plan/output/tool payload.
+      return Object.freeze(selected.map(record => record.runId))
     },
   })
 }

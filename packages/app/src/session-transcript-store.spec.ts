@@ -181,7 +181,7 @@ describe('Node session transcript persistence', () => {
     const other = { ...binding, sessionId: 'session-b' }
     await service.createExactSession(binding, frozen, frozen.takenAt)
     await service.createExactSession(other, frozen, frozen.takenAt)
-    await service.append(appendInput)
+    const targetAppend = await service.append(appendInput)
     await service.append({
       ...appendInput,
       ...other,
@@ -191,6 +191,10 @@ describe('Node session transcript persistence', () => {
     const maintenance = makeNodeSessionTranscriptMaintenance({ root: dir })
     const persistence = makeNodeSessionTranscriptPersistence({ root: dir })
     const persistedManifest = await persistence.loadManifest(binding.sessionId)
+    expect(await maintenance.describe(binding.sessionId)).toEqual({
+      transcriptHead: targetAppend.row.rowHash,
+      turns: 1,
+    })
     expect(await maintenance.currentHead(binding.sessionId))
       .toBe(parseSessionTranscriptManifest(persistedManifest)?.hashHead)
     let interleavedRead: Promise<unknown> | null = null
@@ -217,6 +221,31 @@ describe('Node session transcript persistence', () => {
     })).resolves.toMatchObject({ status: 'appended' })
   })
 
+  it('removes an uncommitted global transcript temp before purging exact rows', async () => {
+    const dir = root()
+    const service = transcript(dir)
+    const other = { ...binding, sessionId: 'session-b' }
+    await service.createExactSession(binding, frozen, frozen.takenAt)
+    await service.createExactSession(other, frozen, frozen.takenAt)
+    await service.append(appendInput)
+    await service.append({
+      ...appendInput,
+      ...other,
+      eventId: 'event-b-temp',
+      content: 'foreign canonical row',
+    })
+    const transcriptPath = join(dir, 'transcript-v2.jsonl')
+    const orphan = `${transcriptPath}.tmp-202-00000000-0000-4000-8000-000000000202`
+    writeFileSync(orphan, readFileSync(transcriptPath), { mode: 0o600 })
+
+    await expect(makeNodeSessionTranscriptMaintenance({ root: dir })
+      .purgeSession(binding.sessionId)).resolves.toEqual({ removedRows: 1, retainedRows: 1 })
+    expect(existsSync(orphan)).toBe(false)
+    const canonical = readFileSync(transcriptPath, 'utf8')
+    expect(canonical).not.toContain('full private dialogue')
+    expect(canonical).toContain('foreign canonical row')
+  })
+
   it('keeps transcript bytes unchanged when any row is corrupt', async () => {
     const dir = root()
     const path = join(dir, 'transcript-v2.jsonl')
@@ -226,6 +255,26 @@ describe('Node session transcript persistence', () => {
     await expect(makeNodeSessionTranscriptMaintenance({ root: dir })
       .purgeSession('session-a')).rejects.toThrow('SESSION_TRANSCRIPT_CORRUPT')
     expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
+  it('rejects a corrupt manifest or transcript row while describing a Session', async () => {
+    const manifestDir = root()
+    const manifestService = transcript(manifestDir)
+    await manifestService.createExactSession(binding, frozen, frozen.takenAt)
+    const manifestPath = join(manifestDir, 'sessions', binding.sessionId, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
+    manifest['hiddenAuthority'] = true
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+    await expect(makeNodeSessionTranscriptMaintenance({ root: manifestDir })
+      .describe(binding.sessionId)).rejects.toThrow('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
+
+    const rowDir = root()
+    const rowService = transcript(rowDir)
+    await rowService.createExactSession(binding, frozen, frozen.takenAt)
+    await rowService.append(appendInput)
+    appendFileSync(join(rowDir, 'transcript-v2.jsonl'), '{"sessionId":"session-a"}\n')
+    await expect(makeNodeSessionTranscriptMaintenance({ root: rowDir })
+      .describe(binding.sessionId)).rejects.toThrow('SESSION_TRANSCRIPT_CORRUPT')
   })
 
   it('drains the current writer before exclusive maintenance and blocks interleaving', async () => {

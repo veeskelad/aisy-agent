@@ -12,6 +12,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   realpathSync,
   rmdirSync,
   unlinkSync,
@@ -34,6 +35,8 @@ const MAX_ORIGINAL_NAME_BYTES = 1024
 const MAX_GET_FILE_RESPONSE_BYTES = 256 * 1024
 const TELEGRAM_BOT_API_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const BOT_TOKEN = /^[A-Za-z0-9:_-]{8,256}$/
+const INBOX_FILE_ID = /^tg-[a-f0-9]{64}$/
+const TEMP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 export type TelegramAttachmentKind =
   | 'document'
@@ -71,8 +74,22 @@ export interface TelegramAttachmentInbox {
   }): Promise<InboxAttachmentV1>
 }
 
+export interface TelegramAttachmentInboxMaintenance {
+  assertIdle(): void
+  purgeSession(sessionId: string): { recordsRemoved: number; objectsRemoved: number }
+}
+
+interface TelegramAttachmentIntentV1 {
+  schemaVersion: 1
+  fileId: string
+  operatorId: string
+  profileId: string
+  sessionId: string
+}
+
 export interface SingletonTelegramAttachmentInbox {
   readonly inbox: TelegramAttachmentInbox
+  readonly maintenance: TelegramAttachmentInboxMaintenance
   close(): void
 }
 
@@ -481,6 +498,45 @@ function createRecordOnce(path: string, value: InboxAttachmentV1): void {
   }
 }
 
+function readAttachmentIntent(path: string): TelegramAttachmentIntentV1 | null {
+  if (!entryExists(path)) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(readFileSync(path, 'utf8')) } catch {
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  }
+  const value = record(parsed)
+  if (value === null || value['schemaVersion'] !== 1 ||
+    !safeText(value['fileId'], 256) || !safeText(value['operatorId'], 1024) ||
+    !safeText(value['profileId'], 1024) || !safeText(value['sessionId'], 1024) ||
+    Object.keys(value).some((key) =>
+      !['schemaVersion', 'fileId', 'operatorId', 'profileId', 'sessionId'].includes(key))) {
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  }
+  return value as unknown as TelegramAttachmentIntentV1
+}
+
+function createIntentOnce(path: string, value: TelegramAttachmentIntentV1): void {
+  const directory = dirname(path)
+  const temporary = `${path}.create-${process.pid}-${randomUUID()}`
+  try {
+    writeFileSync(temporary, JSON.stringify(value) + '\n', {
+      encoding: 'utf8', flag: 'wx', mode: 0o600,
+    })
+    syncPath(temporary)
+    try {
+      linkSync(temporary, path)
+      syncPath(directory)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (!isDeepStrictEqual(readAttachmentIntent(path), value)) {
+        throw new TelegramAttachmentInboxError('STATE_CONFLICT')
+      }
+    }
+  } finally {
+    cleanupTemporary(temporary, path, directory)
+  }
+}
+
 export function telegramAttachmentIdentity(
   binding: ResolvedWorkBinding,
   attachment: TelegramAttachmentDescriptor,
@@ -585,13 +641,19 @@ async function writeDownload(
   }
 }
 
-export function makeTelegramAttachmentInbox(input: {
+interface TelegramAttachmentInboxInput {
   inboxRoot: string
   allowedChatId: number
   maxAttachmentBytes: number
   download: TelegramAttachmentDownloadPort
   faultAt?: (point: TelegramAttachmentInboxFault) => void
-}): TelegramAttachmentInbox {
+}
+
+function makeTelegramAttachmentInboxState(input: TelegramAttachmentInboxInput):
+TelegramAttachmentInbox & Pick<TelegramAttachmentInboxMaintenance, 'purgeSession'> & {
+  assertPurgeReady(): void
+  recoverHardCrashTemps(): void
+} {
   if (!Number.isSafeInteger(input.allowedChatId) ||
     !Number.isSafeInteger(input.maxAttachmentBytes) || input.maxAttachmentBytes < 1) {
     throw new TelegramAttachmentInboxError('INVALID_REQUEST')
@@ -599,8 +661,9 @@ export function makeTelegramAttachmentInbox(input: {
   const root = resolve(input.inboxRoot)
   const objectsRoot = join(root, 'objects')
   const recordsRoot = join(root, 'records')
+  const intentsRoot = join(root, 'intents')
   try {
-    for (const directory of [root, objectsRoot, recordsRoot]) ensureDirectory(directory)
+    for (const directory of [root, objectsRoot, recordsRoot, intentsRoot]) ensureDirectory(directory)
   } catch (error) {
     if (error instanceof TelegramAttachmentInboxError) throw error
     throw new TelegramAttachmentInboxError('STATE_CORRUPT')
@@ -619,7 +682,86 @@ export function makeTelegramAttachmentInbox(input: {
     }
   }
 
-  return Object.freeze<TelegramAttachmentInbox>({
+  const assertRecoverableTemp = (path: string, maximum: number): void => {
+    const info = lstatSync(path)
+    const owner = typeof process.getuid === 'function' ? process.getuid() : info.uid
+    if (!info.isFile() || info.isSymbolicLink() || (info.nlink !== 1 && info.nlink !== 2) ||
+      info.uid !== owner || (info.mode & 0o077) !== 0 || info.size > maximum) {
+      throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+    }
+  }
+
+  const recoverHardCrashTemps = (): void => {
+    for (const directory of [recordsRoot, intentsRoot]) {
+      for (const name of readdirSync(directory)) {
+        if (!name.includes('.json.create-')) continue
+        const match = /^(tg-[a-f0-9]{64})\.json\.create-([1-9][0-9]*)-([0-9a-f-]{36})$/.exec(name)
+        if (match === null || !TEMP_UUID.test(match[3]!)) {
+          throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        }
+        const temporary = join(directory, name)
+        assertRecoverableTemp(temporary, MAX_CONTROL_BYTES)
+        cleanupTemporary(temporary, join(directory, `${match[1]!}.json`), directory)
+      }
+    }
+    for (const name of readdirSync(objectsRoot)) {
+      if (!name.startsWith('.aisy-inbox-') || !name.endsWith('.tmp')) continue
+      const match = /^\.aisy-inbox-(tg-[a-f0-9]{64})\.tmp$/.exec(name)
+      if (match === null || !INBOX_FILE_ID.test(match[1]!)) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      const fileId = match[1]!
+      const temporary = join(objectsRoot, name)
+      assertRecoverableTemp(temporary, input.maxAttachmentBytes)
+      const intentPath = join(intentsRoot, `${fileId}.json`)
+      const recordPath = join(recordsRoot, `${fileId}.json`)
+      const intent = readAttachmentIntent(intentPath)
+      const recordValue = readInboxRecord(recordPath)
+      if ((intent === null || intent.fileId !== fileId) &&
+        (recordValue === null || recordValue.fileId !== fileId)) {
+        // Download temp publication is preceded by a durable intent. Without
+        // that attribution this is not code-proven crash residue.
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      cleanupTemporary(temporary, join(objectsRoot, fileId), objectsRoot)
+    }
+  }
+
+  const assertPurgeReady = (): void => {
+    const referenced = new Set<string>()
+    for (const name of readdirSync(recordsRoot)) {
+      if (!name.endsWith('.json') || !safeText(name, 512)) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      const value = readInboxRecord(join(recordsRoot, name))
+      if (value === null || name !== `${value.fileId}.json`) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      referenced.add(value.fileId)
+    }
+    for (const name of readdirSync(intentsRoot)) {
+      if (!name.endsWith('.json') || !safeText(name, 512)) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      const value = readAttachmentIntent(join(intentsRoot, name))
+      if (value === null || name !== `${value.fileId}.json`) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      referenced.add(value.fileId)
+    }
+    for (const name of readdirSync(objectsRoot)) {
+      if (!safeText(name, 512) || !referenced.has(name)) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+      strictFile(join(objectsRoot, name))
+    }
+  }
+
+  return Object.freeze<TelegramAttachmentInbox &
+  Pick<TelegramAttachmentInboxMaintenance, 'purgeSession'> & {
+    assertPurgeReady(): void
+    recoverHardCrashTemps(): void
+  }>({
     async ingest({ binding, attachment }) {
       const bound = snapshotBinding(binding)
       const media = snapshotAttachment(attachment)
@@ -635,6 +777,7 @@ export function makeTelegramAttachmentInbox(input: {
           }
           const objectPath = join(objectsRoot, identity.fileId)
           const recordPath = join(recordsRoot, `${identity.fileId}.json`)
+          const intentPath = join(intentsRoot, `${identity.fileId}.json`)
           const temporary = join(objectsRoot, `.aisy-inbox-${identity.fileId}.tmp`)
           cleanupTemporary(temporary, objectPath, objectsRoot)
           const existingRecord = readInboxRecord(recordPath)
@@ -646,8 +789,26 @@ export function makeTelegramAttachmentInbox(input: {
               actual.sizeBytes !== existingRecord.sizeBytes) {
               throw new TelegramAttachmentInboxError('STATE_CORRUPT')
             }
+            if (entryExists(intentPath)) {
+              const intent = readAttachmentIntent(intentPath)
+              if (intent === null || intent.fileId !== identity.fileId ||
+                intent.operatorId !== bound.operatorId || intent.profileId !== bound.profileId ||
+                intent.sessionId !== bound.sessionId) {
+                throw new TelegramAttachmentInboxError('STATE_CONFLICT')
+              }
+              unlinkSync(intentPath)
+              syncPath(intentsRoot)
+            }
             return existingRecord
           }
+
+          createIntentOnce(intentPath, {
+            schemaVersion: 1,
+            fileId: identity.fileId,
+            operatorId: bound.operatorId,
+            profileId: bound.profileId,
+            sessionId: bound.sessionId,
+          })
 
           let downloaded: TelegramAttachmentDownload
           try { downloaded = await input.download.download(media.telegramFileId) } catch (error) {
@@ -710,6 +871,10 @@ export function makeTelegramAttachmentInbox(input: {
           if (inboxRecord === null) throw new TelegramAttachmentInboxError('INVALID_REQUEST')
           createRecordOnce(recordPath, inboxRecord)
           input.faultAt?.('after-record')
+          if (entryExists(intentPath)) {
+            unlinkSync(intentPath)
+            syncPath(intentsRoot)
+          }
           return inboxRecord
         })
       } catch (error) {
@@ -718,7 +883,83 @@ export function makeTelegramAttachmentInbox(input: {
         throw new TelegramAttachmentInboxError('STATE_CORRUPT')
       }
     },
+    recoverHardCrashTemps,
+    assertPurgeReady,
+    purgeSession(sessionId) {
+      if (!safeText(sessionId, 1024)) {
+        throw new TelegramAttachmentInboxError('INVALID_REQUEST')
+      }
+      const records = readdirSync(recordsRoot).map((name) => {
+        if (!name.endsWith('.json') || !safeText(name, 512)) {
+          throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        }
+        const path = join(recordsRoot, name)
+        const value = readInboxRecord(path)
+        if (value === null || name !== `${value.fileId}.json`) {
+          throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        }
+        return { path, value }
+      })
+      const objectNames = readdirSync(objectsRoot)
+      for (const name of objectNames) {
+        if (!safeText(name, 512)) throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        strictFile(join(objectsRoot, name))
+      }
+      const intents = readdirSync(intentsRoot).map((name) => {
+        if (!name.endsWith('.json') || !safeText(name, 512)) {
+          throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        }
+        const path = join(intentsRoot, name)
+        const value = readAttachmentIntent(path)
+        if (value === null || name !== `${value.fileId}.json`) {
+          throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        }
+        return { path, value }
+      })
+      const referenced = new Set([
+        ...records.map(({ value }) => value.fileId),
+        ...intents.map(({ value }) => value.fileId),
+      ])
+      if (objectNames.some((name) => !referenced.has(name))) {
+        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+      }
+
+      let recordsRemoved = 0
+      let objectsRemoved = 0
+      for (const item of records.filter(({ value }) => value.sessionId === sessionId)) {
+        const objectPath = join(objectsRoot, item.value.fileId)
+        if (entryExists(objectPath)) {
+          unlinkSync(objectPath)
+          syncPath(objectsRoot)
+          objectsRemoved += 1
+        }
+        unlinkSync(item.path)
+        syncPath(recordsRoot)
+        recordsRemoved += 1
+      }
+
+      for (const item of intents.filter(({ value }) => value.sessionId === sessionId)) {
+        const objectPath = join(objectsRoot, item.value.fileId)
+        if (entryExists(objectPath)) {
+          strictFile(objectPath)
+          unlinkSync(objectPath)
+          syncPath(objectsRoot)
+          objectsRemoved += 1
+        }
+        unlinkSync(item.path)
+        syncPath(intentsRoot)
+      }
+      return { recordsRemoved, objectsRemoved }
+    },
   })
+}
+
+/** Ordinary callers receive ingestion only; crash cleanup requires singleton writer authority. */
+export function makeTelegramAttachmentInbox(
+  input: TelegramAttachmentInboxInput,
+): TelegramAttachmentInbox {
+  const state = makeTelegramAttachmentInboxState(input)
+  return Object.freeze<TelegramAttachmentInbox>({ ingest: request => state.ingest(request) })
 }
 
 /**
@@ -736,12 +977,22 @@ export function makeSingletonTelegramAttachmentInbox(input: {
   newNonce?: () => string
   pid?: number
 }): SingletonTelegramAttachmentInbox {
-  const inbox = makeTelegramAttachmentInbox(input)
-  const writer = acquireInboxWriter(resolve(input.inboxRoot), {
-    nowIso: input.nowIso ?? (() => new Date().toISOString()),
-    newNonce: input.newNonce ?? randomUUID,
-    pid: input.pid ?? process.pid,
-  })
+  const inbox = makeTelegramAttachmentInboxState(input)
+  const writer = (() => {
+    let acquired: ReturnType<typeof acquireInboxWriter> | null = null
+    try {
+      acquired = acquireInboxWriter(resolve(input.inboxRoot), {
+        nowIso: input.nowIso ?? (() => new Date().toISOString()),
+        newNonce: input.newNonce ?? randomUUID,
+        pid: input.pid ?? process.pid,
+      })
+      inbox.recoverHardCrashTemps()
+      return acquired
+    } catch (error) {
+      try { acquired?.release() } catch { /* preserve recovery failure */ }
+      throw error
+    }
+  })()
   let active = 0
   let closed = false
   const guardedInbox = Object.freeze<TelegramAttachmentInbox>({
@@ -754,6 +1005,22 @@ export function makeSingletonTelegramAttachmentInbox(input: {
   })
   return Object.freeze<SingletonTelegramAttachmentInbox>({
     inbox: guardedInbox,
+    maintenance: Object.freeze<TelegramAttachmentInboxMaintenance>({
+      assertIdle() {
+        if (closed) throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        writer.assertHeld()
+        if (active !== 0) throw new TelegramAttachmentInboxError('WRITER_BUSY')
+        inbox.recoverHardCrashTemps()
+        inbox.assertPurgeReady()
+      },
+      purgeSession(sessionId) {
+        if (closed) throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        writer.assertHeld()
+        if (active !== 0) throw new TelegramAttachmentInboxError('WRITER_BUSY')
+        inbox.recoverHardCrashTemps()
+        return inbox.purgeSession(sessionId)
+      },
+    }),
     close() {
       if (closed) return
       if (active !== 0) throw new TelegramAttachmentInboxError('WRITER_BUSY')

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -67,12 +67,28 @@ describe('makeBackgroundBindingStore', () => {
     roots.push(root)
     const path = join(root, 'state', 'background-bindings.json')
     makeNodeBackgroundBindingStore({ path }).save('nightly', BINDING)
+    const orphan = path + '.tmp'
+    writeFileSync(orphan, '{"uncommitted":true}\n', { mode: 0o600 })
 
     expect(statSync(path).mode & 0o777).toBe(0o600)
     expect(readFileSync(path, 'utf8')).toContain('nightly-system-1')
     expect(makeNodeBackgroundBindingStore({ path }).load('nightly')).toEqual({
       status: 'ready',
       binding: BINDING,
+    })
+    expect(existsSync(orphan)).toBe(false)
+  })
+
+  it('disables only a future job bound to the deleted Session', () => {
+    const ports = deps()
+    const store = makeBackgroundBindingStore(ports)
+    store.save('nightly', BINDING)
+
+    expect(store.disableExactSession(BINDING)).toEqual(['nightly'])
+    expect(store.disableExactSession(BINDING)).toEqual([])
+    expect(store.load('nightly')).toEqual({
+      status: 'quarantined',
+      reason: 'context-deleted',
     })
   })
 })

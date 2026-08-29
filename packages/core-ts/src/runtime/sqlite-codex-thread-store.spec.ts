@@ -62,6 +62,8 @@ describe('SQLite Codex app-server thread store', () => {
     first.close()
 
     const restarted = open(dbPath)
+    expect(restarted.hasBinding('project-a', 'session-a')).toBe(true)
+    expect(restarted.hasBinding('project-a', 'other-session')).toBe(false)
     await expect(restarted.load('project-a', 'session-a')).resolves.toEqual(record())
     await expect(restarted.load('project-a', 'other-session')).resolves.toBeNull()
   })
@@ -119,6 +121,9 @@ describe('SQLite Codex app-server thread store', () => {
     )
     await expect(store.load('../escape', 'session-a')).rejects.toEqual(
       new CodexThreadStoreError('INVALID_THREAD_RECORD'),
+    )
+    expect(() => store.hasBinding('../escape', 'session-a')).toThrow(
+      expect.objectContaining({ code: 'INVALID_THREAD_RECORD' }),
     )
   })
 

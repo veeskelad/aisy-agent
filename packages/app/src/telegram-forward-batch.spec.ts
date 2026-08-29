@@ -1,9 +1,22 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  createHash,
+} from 'node:crypto'
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  checksumTelegramForwardBatch,
   makeTelegramForwardBatchRuntime,
   fingerprintTelegramForwardUpdate,
   validateTelegramForwardBatchState,
@@ -65,6 +78,19 @@ function forwarded(updateId: number, text = `forward-${updateId}`) {
     text,
     sourceRef: 'forward:channel:-1001',
   }
+}
+
+function writeMutationOwner(path: string, pid: number, token: string): string {
+  const directory = path + '.mutation-locks'
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const value = { schemaVersion: 1 as const, pid, token }
+  const checksum = createHash('sha256').update(JSON.stringify(value)).digest('hex')
+  const ownerPath = join(directory, `.mutation-${pid}-${token}.json`)
+  writeFileSync(ownerPath, JSON.stringify({ ...value, checksum }) + '\n', {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  return ownerPath
 }
 
 describe('Telegram forward batch runtime', () => {
@@ -386,6 +412,32 @@ describe('Node Telegram forward batch store', () => {
       count: 1,
     })
     expect(restartedStore.load()).toBeNull()
+    const marker = readFileSync(join(
+      root,
+      'forward-batch-archive',
+      readdirSync(join(root, 'forward-batch-archive'))
+        .find((name) => name.endsWith('.consumed.json'))!,
+    ), 'utf8')
+    expect(marker).not.toContain('forward-1')
+    expect(marker).not.toContain(BINDING.sessionId)
+  })
+
+  it('blocks an exact pending Session and purges only terminal raw legacy state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const store = makeNodeTelegramForwardBatchStore({ path })
+    const runtime = makeTelegramForwardBatchRuntime({
+      store,
+      captureBinding: async () => ({ ...BINDING }),
+      nowMs: () => 1_000,
+      quietMs: 250,
+    })
+    await runtime.acceptForward(forwarded(1, 'private pending text'))
+
+    expect(() => store.assertSessionIdle(BINDING)).toThrow('SESSION_BUSY')
+    expect(() => store.purgeSession(BINDING)).toThrow('SESSION_BUSY')
+    expect(store.load()).not.toBeNull()
   })
 
   it('persists exact dedupe markers for every completed member', async () => {
@@ -419,16 +471,195 @@ describe('Node Telegram forward batch store', () => {
     const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
     roots.push(root)
     const path = join(root, 'pending.json')
-    const store = makeNodeTelegramForwardBatchStore({ path })
+    const store = makeNodeTelegramForwardBatchStore({
+      path,
+      pid: 101,
+      processAlive: pid => pid === 202,
+    })
     const runtime = makeTelegramForwardBatchRuntime({
       store,
       captureBinding: async () => ({ ...BINDING }),
       nowMs: () => 1_000,
       quietMs: 250,
     })
-    writeFileSync(path + '.mutation.lock', 'other-owner', { encoding: 'utf8', mode: 0o600 })
+    writeMutationOwner(path, 202, '00000000-0000-4000-8000-000000000202')
     await expect(runtime.acceptForward(forwarded(1))).rejects.toThrow('FORWARD_BATCH_STORE_LOCKED')
     expect(store.load()).toBeNull()
+  })
+
+  it('recovers a dead process mutation marker before changing state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const stale = writeMutationOwner(path, 202, '00000000-0000-4000-8000-000000000202')
+    const store = makeNodeTelegramForwardBatchStore({
+      path,
+      pid: 101,
+      processAlive: () => false,
+    })
+    const runtime = makeTelegramForwardBatchRuntime({
+      store,
+      captureBinding: async () => ({ ...BINDING }),
+      nowMs: () => 1_000,
+      quietMs: 250,
+    })
+
+    await expect(runtime.acceptForward(forwarded(1))).resolves.toMatchObject({ kind: 'accepted' })
+    expect(existsSync(stale)).toBe(false)
+    expect(readdirSync(path + '.mutation-locks')).toEqual([])
+  })
+
+  it('recovers a partial owner marker left before lock fsync when its process is dead', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const directory = path + '.mutation-locks'
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const stale = join(
+      directory,
+      '.mutation-202-00000000-0000-4000-8000-000000000202.json',
+    )
+    writeFileSync(stale, '', { encoding: 'utf8', mode: 0o600 })
+    const store = makeNodeTelegramForwardBatchStore({
+      path,
+      pid: 101,
+      processAlive: () => false,
+    })
+    const runtime = makeTelegramForwardBatchRuntime({
+      store,
+      captureBinding: async () => ({ ...BINDING }),
+      nowMs: () => 1_000,
+      quietMs: 250,
+    })
+
+    await expect(runtime.acceptForward(forwarded(1))).resolves.toMatchObject({ kind: 'accepted' })
+    expect(existsSync(stale)).toBe(false)
+  })
+
+  it('removes an uncommitted raw temp while preserving foreign canonical state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const foreignBinding = { ...BINDING, sessionId: 'session-b' }
+    const store = makeNodeTelegramForwardBatchStore({ path })
+    const runtime = makeTelegramForwardBatchRuntime({
+      store,
+      captureBinding: async () => foreignBinding,
+      nowMs: () => 1_000,
+      quietMs: 250,
+    })
+    await runtime.acceptForward(forwarded(2, 'foreign committed text'))
+    const orphan = join(
+      root,
+      '.pending.json.00000000-0000-4000-8000-000000000303.tmp',
+    )
+    writeFileSync(orphan, '{"sessionId":"session-a","text":"target raw temp"}', {
+      encoding: 'utf8',
+      mode: 0o600,
+    })
+
+    expect(store.purgeSession(BINDING)).toEqual({ removed: 0 })
+    expect(existsSync(orphan)).toBe(false)
+    expect(store.load()).toMatchObject({
+      binding: { sessionId: 'session-b' },
+      items: [{ text: 'foreign committed text' }],
+    })
+  })
+
+  it('finishes archive idempotently after a crash left both marker and raw state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    const markerRoot = mkdtempSync(join(tmpdir(), 'aisy-forward-marker-'))
+    roots.push(root, markerRoot)
+    const path = join(root, 'pending.json')
+    const store = makeNodeTelegramForwardBatchStore({ path })
+    let now = 1_000
+    const crashingRuntime = makeTelegramForwardBatchRuntime({
+      store: {
+        load: store.load,
+        hasArchived: store.hasArchived,
+        lookupArchivedUpdate: store.lookupArchivedUpdate,
+        save: store.save,
+        archive: () => { throw new Error('simulated crash after completed publication') },
+      },
+      captureBinding: async () => ({ ...BINDING }),
+      nowMs: () => now,
+      quietMs: 250,
+    })
+    await crashingRuntime.acceptForward(forwarded(1, 'private raw state'))
+    now += 300
+    await expect(crashingRuntime.flushIfDue(async () => {})).rejects.toThrow()
+    const completed = store.load()!
+    expect(completed.status).toBe('completed')
+
+    const markerPath = join(markerRoot, 'pending.json')
+    const markerStore = makeNodeTelegramForwardBatchStore({ path: markerPath })
+    markerStore.save(null, completed)
+    markerStore.archive(completed.revision)
+    const markerName = `${completed.batchId}.consumed.json`
+    const encodedMarker = readFileSync(join(markerRoot, 'forward-batch-archive', markerName), 'utf8')
+    const targetArchive = join(root, 'forward-batch-archive')
+    mkdirSync(targetArchive, { recursive: true, mode: 0o700 })
+    writeFileSync(join(targetArchive, markerName), encodedMarker, { encoding: 'utf8', mode: 0o600 })
+
+    store.archive(completed.revision)
+    expect(store.load()).toBeNull()
+    expect(readFileSync(join(targetArchive, markerName), 'utf8')).not.toContain('private raw state')
+  })
+
+  it('blocks deletion when an archive is neither a strict marker nor valid terminal legacy state', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const archive = join(root, 'forward-batch-archive')
+    mkdirSync(archive, { recursive: true, mode: 0o700 })
+    writeFileSync(join(archive, 'damaged.json'), '{"sessionId":"session-a"', {
+      encoding: 'utf8',
+      mode: 0o600,
+    })
+    const store = makeNodeTelegramForwardBatchStore({ path })
+
+    expect(() => store.assertSessionIdle(BINDING)).toThrow('FORWARD_BATCH_STORE_CORRUPT')
+    expect(() => store.purgeSession(BINDING)).toThrow('FORWARD_BATCH_STORE_CORRUPT')
+    expect(readFileSync(join(archive, 'damaged.json'), 'utf8')).toContain('session-a')
+  })
+
+  it('purges only the target Session from valid terminal legacy raw archives', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aisy-forward-batch-'))
+    roots.push(root)
+    const path = join(root, 'pending.json')
+    const seed = memoryStore()
+    const runtime = makeTelegramForwardBatchRuntime({
+      store: seed,
+      captureBinding: async () => ({ ...BINDING }),
+      nowMs: () => 1_000,
+      quietMs: 250,
+    })
+    await runtime.acceptForward(forwarded(1, 'target private text'))
+    const collecting = seed.value()!
+    const targetValue = {
+      ...collecting,
+      status: 'completed' as const,
+      revision: collecting.revision + 1,
+    }
+    const target = { ...targetValue, checksum: checksumTelegramForwardBatch(targetValue) }
+    const foreignValue = {
+      ...targetValue,
+      batchId: 'foreign-batch',
+      binding: { ...targetValue.binding, sessionId: 'session-b' },
+    }
+    const foreign = { ...foreignValue, checksum: checksumTelegramForwardBatch(foreignValue) }
+    const archive = join(root, 'forward-batch-archive')
+    mkdirSync(archive, { recursive: true, mode: 0o700 })
+    const targetPath = join(archive, 'target.legacy.json')
+    const foreignPath = join(archive, 'foreign.legacy.json')
+    writeFileSync(targetPath, JSON.stringify(target), { encoding: 'utf8', mode: 0o600 })
+    writeFileSync(foreignPath, JSON.stringify(foreign), { encoding: 'utf8', mode: 0o600 })
+    const store = makeNodeTelegramForwardBatchStore({ path })
+
+    expect(() => store.assertSessionIdle(BINDING)).not.toThrow()
+    expect(store.purgeSession(BINDING)).toEqual({ removed: 1 })
+    expect(existsSync(targetPath)).toBe(false)
+    expect(readFileSync(foreignPath, 'utf8')).toContain('session-b')
   })
 
   it('rejects checksum tampering without exposing file contents', async () => {

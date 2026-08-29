@@ -164,7 +164,7 @@ function classifyTurnFailure(error: unknown): Readonly<{ code: string; errorName
   })
 }
 
-function restartReasonForTelegramUpdate(updateId: number, reason: string): string {
+export function restartReasonForTelegramUpdate(updateId: number, reason: string): string {
   if (!Number.isSafeInteger(updateId) || updateId < 0) throw new Error('INVALID_TELEGRAM_UPDATE_ID')
   return `telegram-update:${updateId} · ${reason.trim() || 'по просьбе оператора'}`
 }
@@ -602,6 +602,8 @@ export interface TelegramBotDeps {
    */
   restartRuntime?: Pick<RuntimeRestart, 'prepare' | 'commitExit' | 'cancel'> &
     Partial<Pick<RuntimeRestart, 'previous' | 'acknowledgePrevious'>>
+  /** Testable retry scheduler for a restart made mandatory by irreversible state. */
+  scheduleRequiredRestartRetry?: (retry: () => void) => void
   /**
    * Transcription providers (ADR-0085). The list says of each whether audio
    * leaves the host; choosing one that does is always explicit.
@@ -1490,7 +1492,7 @@ let pendingFormUntilMs = 0
     }
     const result = await deps.startNewSession(updateId)
     if (!result.ok) {
-      await bot.api.sendMessage(deps.allowedChatId, `❌ Не удалось начать сессию (${result.errorCode}).`)
+      await bot.api.sendMessage(deps.allowedChatId, 'Не удалось начать новую сессию. Попробуй ещё раз.')
       return
     }
     await runRestart('новая сессия', (message) =>
@@ -1526,7 +1528,7 @@ let pendingFormUntilMs = 0
       return
     }
     if (target.kind === 'ambiguous') {
-      await ctx.reply('Префикс неоднозначен. /resume покажет список с более длинными id.')
+      await ctx.reply('Нашёл несколько сессий. Выбери нужную из списка — /resume его откроет.')
       return
     }
     if (target.kind === 'current') {
@@ -2808,9 +2810,11 @@ let pendingFormUntilMs = 0
     say: (message: string) => Promise<unknown>,
     updateId: number,
     startingMessage = 'Перезапускаюсь. Скоро вернусь.',
+    restartRequired = false,
   ): Promise<void> => {
     if (!deps.restartRuntime) { await say('Перезапуск сейчас недоступен.'); return }
-    const result = deps.restartRuntime.prepare(restartReasonForTelegramUpdate(updateId, reason))
+    const exactReason = restartReasonForTelegramUpdate(updateId, reason)
+    const result = deps.restartRuntime.prepare(exactReason)
     if (result === 'not-supervised') {
       await say('Не могу перезапуститься: меня некому запустить обратно. Я остаюсь на связи.')
       return
@@ -2832,9 +2836,11 @@ let pendingFormUntilMs = 0
     try {
       startReply = await say(startingMessage)
     } catch {
-      try { deps.restartRuntime.cancel(result) } catch { /* process remains alive */ }
-      restartPending = false
-      return
+      if (!restartRequired) {
+        try { deps.restartRuntime.cancel(result) } catch { /* process remains alive */ }
+        restartPending = false
+        return
+      }
     }
     let committed: Awaited<ReturnType<RuntimeRestart['commitExit']>>
     try {
@@ -2842,11 +2848,37 @@ let pendingFormUntilMs = 0
     } catch {
       committed = 'restart-state-ambiguous'
     }
-    if (committed === 'committed') return
+    if (committed === 'committed' || committed === 'already-committed') return
+    if (restartRequired) {
+      const schedule = deps.scheduleRequiredRestartRetry ?? ((retry: () => void) => {
+        const timer = setTimeout(retry, 1_000)
+        timer.unref?.()
+      })
+      const retry = (): void => {
+        void (async () => {
+          const next = deps.restartRuntime!.prepare(exactReason)
+          if (typeof next === 'string') {
+            schedule(retry)
+            return
+          }
+          let nextCommit: Awaited<ReturnType<RuntimeRestart['commitExit']>>
+          try {
+            nextCommit = await deps.restartRuntime!.commitExit(next)
+          } catch {
+            nextCommit = 'restart-state-ambiguous'
+          }
+          if (nextCommit !== 'committed' && nextCommit !== 'already-committed') {
+            schedule(retry)
+          }
+        })()
+      }
+      await say('Сессию удалил, но перезапуск задержался. Продолжаю попытки.').catch(() => {})
+      schedule(retry)
+      return
+    }
     restartPending = false
 
     const corrective: Record<Exclude<typeof committed, 'committed'>, string> = {
-      'already-committed': 'Перезапуск уже начался.',
       'not-supervised': 'Перезапуск отменился. Я остаюсь на связи.',
       busy: 'Перезапуск отменился: началась новая задача. Я остаюсь на связи.',
       'restart-state-ambiguous': 'Перезапуск не завершился. Я остаюсь на связи.',
@@ -3859,7 +3891,14 @@ let pendingFormUntilMs = 0
         await deadTap(NOT_WIRED)
         return
       }
-      const tap = deps.sessionControls.handle(data)
+      const tap = await deps.sessionControls.handle({
+        data,
+        chatId: ctx.chat?.id ?? deps.allowedChatId,
+        updateId: ctx.update.update_id,
+        ...(pendingRetry === null || deps.durableReply === undefined
+          ? {}
+          : { busySessionId: deps.durableReply.binding.sessionId }),
+      })
       if (tap.kind === 'new') {
         await startNewSessionFromButton(ctx.update.update_id)
         return
@@ -3873,7 +3912,7 @@ let pendingFormUntilMs = 0
         if (!result.ok) {
           await ctx.reply(result.errorCode === 'ALREADY_ACTIVE'
             ? 'Это и есть текущая сессия.'
-            : `❌ Не удалось вернуться в сессию (${result.errorCode}).`)
+            : 'Не удалось вернуться в эту сессию.')
           return
         }
         // Same reasoning as a project switch: the workspace root, memory scope,
@@ -3882,6 +3921,24 @@ let pendingFormUntilMs = 0
         await runRestart('возврат в сессию', (message) =>
           bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
           `Возвращаюсь в сессию «${tap.name}».`)
+        return
+      }
+      if (tap.kind === 'notice') {
+        await ctx.reply(tap.text)
+        return
+      }
+      if (tap.kind === 'deleted') {
+        if (tap.record.restartRequired === true && tap.record.phase === 'restart-requested') {
+          await runRestart(
+            `session deletion ${tap.record.operationHash}`,
+            (message) => bot.api.sendMessage(deps.allowedChatId, message),
+            ctx.update.update_id,
+            'Сессия удалена. Перезапускаюсь. Скоро вернусь.',
+            true,
+          )
+        } else {
+          await ctx.editMessageText(tap.text).catch(() => ctx.reply(tap.text))
+        }
         return
       }
       await ctx.editMessageText(tap.view.text, {
@@ -4213,7 +4270,13 @@ let pendingFormUntilMs = 0
           updateId: ctx.update.update_id,
         })
         if (outcome) {
-          await ctx.reply(outcome.kind === 'view' ? outcome.view.text : outcome.text)
+          if (outcome.kind === 'view') {
+            await ctx.reply(outcome.view.text, {
+              ...(outcome.view.buttons.length === 0
+                ? {}
+                : { reply_markup: toInlineKeyboard(outcome.view.buttons) }),
+            })
+          } else await ctx.reply(outcome.text)
           return
         }
       } catch {

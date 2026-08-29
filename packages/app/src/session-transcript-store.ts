@@ -28,7 +28,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
 interface TranscriptQuarantineMarkerV1 {
@@ -49,6 +49,7 @@ const ROW_KEYS = new Set([
   'role', 'provenance', 'content', 'ts', 'loadBearing',
   'loadBearingClassifierVersion', 'prevSessionHash', 'rowHash',
 ])
+const TEMP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 interface TranscriptMaintenanceGate {
   enterWriter(): () => void
@@ -104,6 +105,7 @@ function gateFor(root: string): TranscriptMaintenanceGate {
 
 export interface NodeSessionTranscriptMaintenance {
   currentHead(sessionId: string): Promise<string>
+  describe(sessionId: string): Promise<{ transcriptHead: string; turns: number }>
   purgeSession(
     sessionId: string,
     afterRewrite?: () => void,
@@ -123,6 +125,34 @@ function safeId(value: string): void {
 function syncPath(path: string): void {
   const descriptor = openSync(path, 'r')
   try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+}
+
+function cleanupAtomicTemps(path: string, kinds: readonly ('tmp' | 'create')[]): void {
+  const directory = dirname(path)
+  if (!existsSync(directory)) return
+  const base = basename(path)
+  let removed = false
+  for (const name of readdirSync(directory)) {
+    const kind = kinds.find(candidate => name.startsWith(`${base}.${candidate}-`))
+    if (kind === undefined) continue
+    const suffix = name.slice(`${base}.${kind}-`.length)
+    const match = /^([1-9][0-9]*)-([0-9a-f-]{36})$/.exec(suffix)
+    if (match === null || !TEMP_UUID.test(match[2]!)) {
+      throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+    }
+    const temporary = join(directory, name)
+    const info = lstatSync(temporary)
+    const owner = typeof process.getuid === 'function' ? process.getuid() : info.uid
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== owner ||
+      (info.mode & 0o077) !== 0 || info.size > MAX_TRANSCRIPT_BYTES) {
+      throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+    }
+    // rename/link is the commit point. At a lease-owned synchronous operation
+    // boundary every matching temporary is therefore uncommitted crash residue.
+    unlinkSync(temporary)
+    removed = true
+  }
+  if (removed) syncPath(directory)
 }
 
 function saveAtomic(path: string, content: string): void {
@@ -309,6 +339,9 @@ export function makeNodeSessionTranscriptPersistence(input: {
 
   const recoverSession = (sessionId: string): void => {
     const target = paths(sessionId)
+    cleanupAtomicTemps(target.manifest, ['tmp', 'create'])
+    cleanupAtomicTemps(target.wal, ['tmp'])
+    cleanupAtomicTemps(target.quarantine, ['tmp'])
     assertNotQuarantined(sessionId)
     if (!existsSync(target.wal)) return
     try {
@@ -336,6 +369,7 @@ export function makeNodeSessionTranscriptPersistence(input: {
 
   asWriter(() => {
     owned()
+    cleanupAtomicTemps(transcriptPath, ['tmp'])
     for (const name of readdirSync(sessionsRoot)) {
       if (!ID.test(name)) continue
       try { recoverSession(name) } catch { /* marker is the durable startup result */ }
@@ -428,41 +462,78 @@ export function makeNodeSessionTranscriptMaintenance(input: {
   const transcriptPath = join(input.root, 'transcript-v2.jsonl')
   const sessionsRoot = join(input.root, 'sessions')
   const owned = (): void => { input.lease?.assertOwned() }
+  const describeSession = async (
+    sessionId: string,
+  ): Promise<{ transcriptHead: string; turns: number }> => {
+    safeId(sessionId)
+    owned()
+    const releaseWriter = gate.enterWriter()
+    try {
+      const manifestPath = join(sessionsRoot, sessionId, 'manifest.json')
+      if (!existsSync(manifestPath)) throw new Error('SESSION_TRANSCRIPT_MANIFEST_MISSING')
+      let manifest: SessionTranscriptManifestV1
+      try {
+        const parsed = parseSessionTranscriptManifest(
+          JSON.parse(readBounded(manifestPath, MAX_CONTROL_BYTES)) as unknown,
+        )
+        if (parsed === null) throw new Error('invalid manifest')
+        manifest = parsed
+      } catch {
+        throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
+      }
+      const targetDirectory = join(sessionsRoot, sessionId)
+      cleanupAtomicTemps(transcriptPath, ['tmp'])
+      cleanupAtomicTemps(manifestPath, ['tmp', 'create'])
+      cleanupAtomicTemps(join(targetDirectory, 'append.wal.json'), ['tmp'])
+      cleanupAtomicTemps(join(targetDirectory, 'quarantine.json'), ['tmp'])
+      if (manifest.sessionId !== sessionId ||
+        existsSync(join(targetDirectory, 'append.wal.json')) ||
+        existsSync(join(targetDirectory, 'quarantine.json'))) {
+        throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
+      }
+      let turns = 0
+      if (existsSync(transcriptPath)) {
+        const text = readBounded(transcriptPath, MAX_TRANSCRIPT_BYTES)
+        if (text.length !== 0 && !text.endsWith('\n')) {
+          throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+        }
+        for (const line of text.split('\n')) {
+          if (line.length === 0) continue
+          if (Buffer.byteLength(line, 'utf8') > MAX_ROW_BYTES) {
+            throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+          }
+          let row: TranscriptEnvelope
+          try {
+            row = JSON.parse(line) as TranscriptEnvelope
+            if (typeof row !== 'object' || row === null || !hasExactKeys(row, ROW_KEYS) ||
+              typeof row.sessionId !== 'string' || !ID.test(row.sessionId) ||
+              typeof row.rowHash !== 'string' || !HASH.test(row.rowHash) ||
+              computeTranscriptRowHash(row) !== row.rowHash) throw new Error('invalid row')
+          } catch {
+            throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+          }
+          if (row.sessionId === sessionId && row.role === 'user') turns += 1
+        }
+      }
+      return { transcriptHead: manifest.hashHead, turns }
+    } finally {
+      releaseWriter()
+    }
+  }
 
   return Object.freeze<NodeSessionTranscriptMaintenance>({
-    async currentHead(sessionId) {
-      safeId(sessionId)
-      owned()
-      const releaseWriter = gate.enterWriter()
-      try {
-        const manifestPath = join(sessionsRoot, sessionId, 'manifest.json')
-        if (!existsSync(manifestPath)) throw new Error('SESSION_TRANSCRIPT_MANIFEST_MISSING')
-        let manifest: SessionTranscriptManifestV1
-      try {
-          const parsed = parseSessionTranscriptManifest(
-            JSON.parse(readBounded(manifestPath, MAX_CONTROL_BYTES)) as unknown,
-          )
-          if (parsed === null) throw new Error('invalid manifest')
-          manifest = parsed
-        } catch {
-          throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
-        }
-        const targetDirectory = join(sessionsRoot, sessionId)
-        if (manifest.sessionId !== sessionId ||
-          existsSync(join(targetDirectory, 'append.wal.json')) ||
-          existsSync(join(targetDirectory, 'quarantine.json'))) {
-          throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
-        }
-        return manifest.hashHead
-      } finally {
-        releaseWriter()
-      }
-    },
+    async currentHead(sessionId) { return (await describeSession(sessionId)).transcriptHead },
+    describe: describeSession,
     async purgeSession(sessionId, afterRewrite) {
       safeId(sessionId)
       owned()
       const release = await gate.beginExclusive()
       try {
+        cleanupAtomicTemps(transcriptPath, ['tmp'])
+        const targetDirectory = join(sessionsRoot, sessionId)
+        cleanupAtomicTemps(join(targetDirectory, 'manifest.json'), ['tmp', 'create'])
+        cleanupAtomicTemps(join(targetDirectory, 'append.wal.json'), ['tmp'])
+        cleanupAtomicTemps(join(targetDirectory, 'quarantine.json'), ['tmp'])
         let removedRows = 0
         let retainedRows = 0
         if (existsSync(transcriptPath)) {
@@ -508,6 +579,9 @@ export function makeNodeSessionTranscriptMaintenance(input: {
       const release = await gate.beginExclusive()
       try {
         const directory = join(sessionsRoot, sessionId)
+        cleanupAtomicTemps(join(directory, 'manifest.json'), ['tmp', 'create'])
+        cleanupAtomicTemps(join(directory, 'append.wal.json'), ['tmp'])
+        cleanupAtomicTemps(join(directory, 'quarantine.json'), ['tmp'])
         if (!existsSync(directory)) return
         if (lstatSync(directory).isSymbolicLink()) {
           throw new Error('SESSION_TRANSCRIPT_CONTROLS_UNSAFE')
