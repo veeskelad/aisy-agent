@@ -50,10 +50,15 @@ Session не удаляется и доступен через `/resume`. Кон
    procedural skills без расширения полномочий;
 10. production cutover, restart/rollback и живые Telegram acceptance cases.
 
-Не входят fine-tuning модели, удаление transcript, автоматическая установка
-неизвестного кода, выдача новых credentials/egress, grant для Tier-3/HARD_DENY,
+Не входят fine-tuning модели, автоматическая установка неизвестного кода,
+выдача новых credentials/egress, grant для Tier-3/HARD_DENY,
 самостоятельная правка `constitution.md` или свободная model-authored правка
 `SOUL.md`/`SKILL.md`.
+
+Permanent delete отдельной Session и session-independent grants добавлены
+последующим [ADR-0112](../../decisions/2026-08-29-conversational-control-and-session-deletion.md)
+и не меняют ежедневный reset/`/resume`: автоматическая ротация по-прежнему
+сохраняет старую Session, пока оператор отдельно не удалит её.
 
 ## 4. Ежедневный Session lifecycle
 

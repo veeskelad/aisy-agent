@@ -13,6 +13,7 @@ in this index so cross-references stay stable.
 
 | ID | Status | Date | Title | Tags |
 |----|--------|------|-------|------|
+| ADR-0112 | Принято | 2026-08-29 | [Разговорное управление без самопереписывания и удаление Session](./2026-08-29-conversational-control-and-session-deletion.md) | sessions, personality, approvals, tools, telegram |
 | ADR-0111 | Принято | 2026-08-28 | [Выученный контекст применяется молча, знакомство не захватывает обычный диалог](./2026-08-28-silent-learned-context-and-bounded-onboarding.md) | personality, providers, onboarding |
 | ADR-0110 | Принято | 2026-08-28 | [Одно подтверждение обучает разрешению, стиль — отдельный typed overlay](./2026-08-28-one-confirmation-adaptive-style.md) | approvals, personality, learning |
 | ADR-0109 | Принято | 2026-08-28 | [Ежедневная новая Session и воскресная консолидация памяти](./2026-08-28-daily-session-reset-weekly-memory.md) | sessions, memory, nightly |
