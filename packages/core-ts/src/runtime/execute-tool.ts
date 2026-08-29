@@ -17,6 +17,11 @@ import {
   renderMemoryAcknowledgement,
   type VerifiedToolMutationReceipt,
 } from './memory-receipt.js'
+import {
+  makeAgentControlReceipt,
+  type AgentControlOutcome,
+  type VerifiedAgentControlReceiptV1,
+} from './agent-control-receipt.js'
 
 export interface ToolResult {
   ok: boolean
@@ -25,6 +30,8 @@ export interface ToolResult {
   verified?: true
   /** Exact code-owned mutation proof. Free-form executors cannot mint it. */
   mutationReceipt?: VerifiedToolMutationReceipt
+  /** Exact code-owned conversational control outcome. */
+  controlReceipt?: VerifiedAgentControlReceiptV1
 }
 
 export interface FsPort {
@@ -97,6 +104,17 @@ export interface ExecuteToolDeps {
    * rather than quietly degrading into one more search.
    */
   deepResearch?: (question: string, context?: ToolExecutionContext) => Promise<string>
+  /** Closed conversational controls. The app derives identity from context;
+   * model arguments can only select a typed operation and an opaque handle. */
+  listSessions?: (context: ToolExecutionContext) => Promise<string> | string
+  configureAgent?: (input: {
+    operation: string
+    target: string
+    value?: string
+  }, context: ToolExecutionContext) => Promise<
+    | { ok: true; output: string; outcome: AgentControlOutcome }
+    | { ok: false; output: string }
+  >
   /**
    * Tools contributed by native extension hooks (ADR-0077). They are dispatched
    * only after every built-in name failed to match, so a hook can never shadow
@@ -323,6 +341,45 @@ export function makeToolExecutor(
           return { ok: false, output: 'deep_research: нужен вопрос текстом' }
         }
         return { ok: true, output: await deps.deepResearch(question, context) }
+      }
+
+      case 'list_sessions': {
+        if (deps.listSessions === undefined) {
+          return { ok: false, output: 'list_sessions: unavailable' }
+        }
+        if (context === undefined) {
+          return { ok: false, output: 'list_sessions: turn context required' }
+        }
+        return { ok: true, output: await deps.listSessions(context) }
+      }
+
+      case 'configure_agent': {
+        if (deps.configureAgent === undefined) {
+          return { ok: false, output: 'configure_agent: unavailable' }
+        }
+        if (context === undefined) {
+          return { ok: false, output: 'configure_agent: turn context required' }
+        }
+        if (context.turnId === undefined) {
+          return { ok: false, output: 'configure_agent: turn context required' }
+        }
+        const value = arg(call, 'value').trim()
+        const configured = await deps.configureAgent({
+          operation: arg(call, 'operation'),
+          target: arg(call, 'target'),
+          ...(value.length === 0 ? {} : { value }),
+        }, context)
+        if (!configured.ok) return configured
+        const operation = arg(call, 'operation')
+        if (operation !== 'session.rename' && operation !== 'session.request-delete') {
+          return { ok: false, output: 'configure_agent: unsupported operation' }
+        }
+        const controlReceipt = makeAgentControlReceipt({
+          operation,
+          outcome: configured.outcome,
+          turnId: context.turnId!,
+        })
+        return { ok: true, output: configured.output, verified: true, controlReceipt }
       }
 
       case 'goal_done':

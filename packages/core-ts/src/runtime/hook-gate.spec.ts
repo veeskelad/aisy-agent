@@ -5,6 +5,7 @@ import type { GrantStore } from '../safety/index.js'
 import type { HookCtx, ToolCall } from '../agent-loop/types.js'
 import type { PendingAction } from '../gateway/index.js'
 import { makeMemoryRememberReceipt } from './memory-receipt.js'
+import { makeAgentControlReceipt } from './agent-control-receipt.js'
 
 const OPERATOR: HookCtx = { provenance: 'operator', narrowed: false }
 const GRANT_BINDING = {
@@ -323,6 +324,37 @@ describe('выученная автономия в гейте (AC-24-6, AC-24-7)
 })
 
 describe('deterministic PostToolUse', () => {
+  it('preserves only an exact configure_agent control receipt', async () => {
+    const receipt = makeAgentControlReceipt({
+      operation: 'session.request-delete',
+      outcome: 'session-delete-preview',
+      turnId: 'turn-1',
+    })
+    const post = makePostToolUseProcessor({ secretValues: () => [] })
+    await expect(post(call('configure_agent', {
+      operation: 'session.request-delete', target: 'current',
+    }), {
+      ok: true,
+      output: 'Карточка удаления подготовлена.',
+      verified: true,
+      controlReceipt: receipt,
+    })).resolves.toEqual({
+      ok: true,
+      output: 'Карточка удаления подготовлена.',
+      verified: true,
+      controlReceipt: receipt,
+    })
+
+    await expect(post(call('configure_agent', {
+      operation: 'session.rename', target: 'current',
+    }), {
+      ok: true,
+      output: 'подмена',
+      verified: true,
+      controlReceipt: receipt,
+    })).resolves.toEqual({ ok: true, output: 'подмена' })
+  })
+
   it('preserves an exact verified memory receipt for the production acknowledgement', async () => {
     const receipt = makeMemoryRememberReceipt(
       { fact: 'ты предпочитаешь краткие отчёты' },

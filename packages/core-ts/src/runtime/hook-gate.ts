@@ -27,6 +27,7 @@ import {
   parseMemoryRememberReceipt,
   renderMemoryAcknowledgement,
 } from './memory-receipt.js'
+import { parseAgentControlReceipt } from './agent-control-receipt.js'
 
 export type ApprovalDecision =
   | { decision: 'confirmed'; scope?: GrantScope; proof?: ApprovalProof }
@@ -113,6 +114,15 @@ export function makePostToolUseProcessor(deps: PostToolUseDeps) {
         ? receipt
         : null
     })()
+    const controlReceipt = (() => {
+      if (_call.name !== 'configure_agent' || typeof result !== 'object' || result === null) return null
+      const value = result as Record<string, unknown>
+      const receipt = parseAgentControlReceipt(value['controlReceipt'])
+      return receipt !== null && value['ok'] === true && value['verified'] === true &&
+        receipt.operation === _call.args['operation']
+        ? receipt
+        : null
+    })()
     let text = raw.ok ? raw.output : `Tool error: ${raw.output}`
     let values: readonly string[]
     try {
@@ -143,9 +153,13 @@ export function makePostToolUseProcessor(deps: PostToolUseDeps) {
     // survived every safety transform byte-for-byte. If redaction/filtering
     // changed it, dropping the receipt prevents a later acknowledgement from
     // reconstructing and re-exposing the pre-filter value.
-    return memoryReceipt !== null && text === raw.output
-      ? { ok: true, output: text, verified: true, mutationReceipt: memoryReceipt }
-      : { ok: raw.ok, output: text }
+    if (text === raw.output && memoryReceipt !== null) {
+      return { ok: true, output: text, verified: true, mutationReceipt: memoryReceipt }
+    }
+    if (text === raw.output && controlReceipt !== null) {
+      return { ok: true, output: text, verified: true, controlReceipt }
+    }
+    return { ok: raw.ok, output: text }
   }
 }
 

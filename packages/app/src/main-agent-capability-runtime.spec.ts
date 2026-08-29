@@ -13,6 +13,8 @@ import { makeMainAgentCapabilityRuntime } from './main-agent-capability-runtime.
 const tools: AnthropicTool[] = [
   { name: 'read_file', description: 'read', input_schema: {} },
   { name: 'write_file', description: 'write', input_schema: {} },
+  { name: 'list_sessions', description: 'sessions', input_schema: {} },
+  { name: 'configure_agent', description: 'configure', input_schema: {} },
 ]
 
 function card(overrides: Partial<AgentCard> = {}): AgentCard {
@@ -29,13 +31,18 @@ function card(overrides: Partial<AgentCard> = {}): AgentCard {
   }
 }
 
-function runtime(value = card()) {
+function runtime(value = card(), platform = false) {
   return makeMainAgentCapabilityRuntime({
     card: value,
     toolCatalog: tools,
     activeSkillNames: new Set(['review-code', 'deploy']),
     activeMcpServers: new Set(),
-    minimumToolTiers: { read_file: 0, write_file: 2 },
+    minimumToolTiers: {
+      read_file: 0, write_file: 2, list_sessions: 0, configure_agent: 1,
+    },
+    ...(platform
+      ? { platformToolNames: new Set(['list_sessions', 'configure_agent']) }
+      : {}),
     activeSkills: {
       menu: () => [
         { name: 'review-code', description: 'Проверка кода' },
@@ -85,6 +92,30 @@ describe('makeMainAgentCapabilityRuntime', () => {
       output: 'executed',
     })
     expect(calls.map((call) => call.name)).toEqual(['read_file'])
+  })
+
+  it('keeps only closed platform controls visible across an older main AgentCard', async () => {
+    const resolved = runtime(card(), true)
+    expect(resolved.matrix.tools.map((tool) => tool.name)).toEqual([
+      'read_file', 'list_sessions', 'configure_agent',
+    ])
+    expect(resolved.matrix.toolTiers).toEqual({
+      read_file: 0, list_sessions: 0, configure_agent: 1,
+    })
+
+    const calls: string[] = []
+    const execute = resolved.bindToolExecutor(async (call) => {
+      calls.push(call.name)
+      return { ok: true, output: 'ok' }
+    })
+    await execute({ name: 'list_sessions', args: {} })
+    await execute({ name: 'configure_agent', args: {
+      operation: 'session.rename', target: 'current', value: 'Работа',
+    } })
+    await expect(execute({ name: 'write_file', args: {} })).resolves.toEqual({
+      ok: false, output: 'capability denied',
+    })
+    expect(calls).toEqual(['list_sessions', 'configure_agent'])
   })
 
   it('forwards execution identity only for an allowed tool', async () => {

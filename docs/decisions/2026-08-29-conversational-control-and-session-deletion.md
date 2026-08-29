@@ -30,7 +30,10 @@
    policy или каталог полномочий.
 2. Для надёжных повседневных операций Telegram сохраняет code-owned кнопки и
    короткие прямые команды как fallback. LLM и кнопка вызывают один и тот же
-   service API; параллельного «разговорного» хранилища нет.
+   service API; параллельного «разговорного» хранилища нет. `list_sessions` и
+   `configure_agent` являются обязательными platform-controls основного агента:
+   старая AgentCard не может случайно скрыть их, но это исключение не добавляет
+   карте файловые, сетевые, MCP или execution-возможности.
 3. Новая Session получает временное имя. Во время первого содержательного хода
    модель может предложить короткое название через exact typed proposal. Оно
    хранится pending и применяется code-owned callback только после успешной
@@ -38,7 +41,7 @@
    оператора всегда имеет приоритет и запрещает последующее auto-rename.
 4. Карточка Session содержит `Продолжить`, `Переименовать` и `Удалить`.
    Удаление — отдельная purpose-bound lifecycle operation. Перед ней
-   показывается одна карточка: какая Session удаляется и что её переписку нельзя
+   показывается ровно одна terminal-карточка: какая Session удаляется и что её переписку нельзя
    восстановить. Active Session сначала атомарно получает replacement selection,
    затем её registry row и transcript удаляются под quiescence; после завершения
    выполняется один controlled restart.
@@ -76,6 +79,11 @@
    обычные renderers не могут публиковать закрытый служебный словарь; debug и
    doctor проверяются отдельно. Model reply дополнительно получает instruction
    не обсуждать внутренний provenance/control protocol без прямого вопроса.
+10. Успешный `configure_agent` возвращает внутренний typed control receipt.
+    Action-contract принимает его как доказательство exact rename либо выдачи
+    delete-preview и не запускает лишний recovery-round. Receipt остаётся
+    server-side; preview не считается физическим удалением и не создаёт deletion
+    authority до authenticated Telegram tap.
 
 ## Последствия
 

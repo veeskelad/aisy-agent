@@ -53,6 +53,10 @@ export function makeMainAgentCapabilityRuntime(input: {
   activeSkillNames: ReadonlySet<string>
   activeMcpServers: ReadonlySet<string>
   minimumToolTiers?: Readonly<Record<string, ToolTier>>
+  /** Platform conversation controls remain available to the main agent even
+   * when an older AgentCard predates them. They are code-owned closed tools,
+   * not workload capabilities delegated by the card. */
+  platformToolNames?: ReadonlySet<string>
 }): MainAgentCapabilityRuntime {
   const card: AgentCard = Object.freeze({
     ...input.card,
@@ -67,13 +71,23 @@ export function makeMainAgentCapabilityRuntime(input: {
     activeMcpServers: input.activeMcpServers,
     ...(input.minimumToolTiers === undefined ? {} : { minimumToolTiers: input.minimumToolTiers }),
   })
+  const platformTools = input.toolCatalog.filter((tool) =>
+    input.platformToolNames?.has(tool.name) === true &&
+    !resolved.tools.some((candidate) => candidate.name === tool.name))
+  const resolvedTools = [...resolved.tools, ...platformTools]
+  const resolvedTiers = { ...resolved.toolTiers }
+  for (const tool of platformTools) {
+    const tier = input.minimumToolTiers?.[tool.name]
+    if (tier === undefined) throw new Error('PLATFORM_TOOL_TIER_UNAVAILABLE')
+    resolvedTiers[tool.name] = tier
+  }
   const matrix: AgentCapabilityMatrix = Object.freeze({
     ...resolved,
-    tools: Object.freeze(resolved.tools.map((tool) => Object.freeze({
+    tools: Object.freeze(resolvedTools.map((tool) => Object.freeze({
       ...tool,
       input_schema: freezeJson(structuredClone(tool.input_schema)) as Record<string, unknown>,
     }))) as unknown as AnthropicTool[],
-    toolTiers: Object.freeze({ ...resolved.toolTiers }),
+    toolTiers: Object.freeze(resolvedTiers),
     skills: Object.freeze([...resolved.skills]) as unknown as string[],
     mcpServers: Object.freeze([...resolved.mcpServers]) as unknown as string[],
   })

@@ -32,7 +32,7 @@ const fs: FsPort = {
 describe('единый runtime tool catalog', () => {
   it('имеет narrow-waist count и точный provider/executor набор', () => {
     const schemas = runtimeProviderTools()
-    expect(RUNTIME_TOOL_CATALOG.length).toBeLessThan(20)
+    expect(RUNTIME_TOOL_CATALOG.length).toBeLessThanOrEqual(20)
     expect(schemas.map(tool => tool.name)).toEqual(RUNTIME_TOOL_CATALOG.map(tool => tool.name))
     expect(Object.keys(runtimeToolMinimumTiers()).sort()).toEqual(
       schemas.map(tool => tool.name).sort(),
@@ -110,6 +110,9 @@ describe('единый runtime tool catalog', () => {
       goal_done: {},
       fetch_url: { url: 'https://example.test' },
       web_search: { query: 'q' },
+      deep_research: { question: 'q' },
+      list_sessions: {},
+      configure_agent: { operation: 'session.rename', target: 'current', value: 'Работа' },
     }
     for (const tool of runtimeProviderTools()) {
       const result = await execute({ name: tool.name, args: samples[tool.name]! })

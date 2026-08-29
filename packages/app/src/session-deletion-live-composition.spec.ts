@@ -30,7 +30,7 @@ describe('live Session deletion composition', () => {
     const repair = index('await sessionDeletionCoordinator.repair()')
     const nightlyCreate = index('const nightlySession = projectRegistry.createSession(')
     const provider = index('const primaryAdapter: ProviderAdapter =')
-    const telegram = index('sessionControls: makeTelegramSessionControls({')
+    const telegram = index('const telegramSessionControls = makeTelegramSessionControls({')
 
     expect(media).toBeLessThan(coordinator)
     expect(restart).toBeLessThan(coordinator)
@@ -57,10 +57,10 @@ describe('live Session deletion composition', () => {
     expect(production.slice(coordinator, provider).match(
       /assertExactSessionDeletionRestartIntent\(intent, reason\)/gu,
     )).toHaveLength(2)
-    expect(production.slice(telegram, telegram + 700)).toContain(
+    expect(production.slice(telegram, telegram + 900)).toContain(
       'deletion: sessionDeletionCoordinator',
     )
-    expect(production.slice(telegram, telegram + 700)).toContain(
+    expect(production.slice(telegram, telegram + 900)).toContain(
       'transcript: sessionTranscriptMaintenance',
     )
   })

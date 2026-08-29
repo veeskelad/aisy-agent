@@ -210,6 +210,7 @@ describe('Telegram Project lifecycle controls transport', () => {
         handle: () => { throw new Error('not used') },
         create: () => { throw new Error('not used') },
         rename: () => { throw new Error('not used') },
+        requestDeletePreview: () => { throw new Error('not used') },
         handleAuthenticatedText: () => {
           order.push('session')
           return {

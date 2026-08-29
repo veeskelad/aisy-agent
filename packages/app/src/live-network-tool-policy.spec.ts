@@ -31,12 +31,14 @@ describe('live network tool policy', () => {
     const actual = liveProviderTools().map((tool) => tool.name)
 
     expect(actual).toEqual(catalog)
-    expect(actual).toHaveLength(17)
+    expect(actual).toHaveLength(19)
     expect(actual).toContain('web_search')
     expect(actual).toContain('fetch_url')
     expect(actual).toContain('deep_research')
     expect(actual).toContain('set_trigger')
     expect(actual).toContain('set_goal')
+    expect(actual).toContain('list_sessions')
+    expect(actual).toContain('configure_agent')
   })
 
   it('freezes live catalog membership and top-level tool names', () => {

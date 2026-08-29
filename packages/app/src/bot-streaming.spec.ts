@@ -89,7 +89,8 @@ function harness(
   failFinalEdit = false,
   extraDeps: Pick<
     TelegramBotDeps,
-    'getStaging' | 'grammaticalGender' | 'observeAuthenticatedOperatorText'
+    'getStaging' | 'grammaticalGender' | 'observeAuthenticatedOperatorText' |
+    'takeConversationalSessionView'
   > = {},
 ) {
   let untrustedContext = false
@@ -521,6 +522,39 @@ describe('Telegram structured reply streaming', () => {
     await waitFor(() => observed.length === 1)
 
     expect(observed).toEqual(['true:Основной ответ'])
+  })
+
+  it('delivers a conversational delete preview as the only terminal message', async () => {
+    let taken = false
+    const h = harness({
+      async handle(input) {
+        await input.onProgress?.({ type: 'outbound-lockout', locked: false })
+        return { state: 'ok', reply: 'Служебное подтверждение модели', narrowed: false }
+      },
+    }, false, undefined, undefined, undefined, undefined, undefined, false, {
+      takeConversationalSessionView: () => {
+        if (taken) return null
+        taken = true
+        return {
+          text: 'Удалить сессию «Работа»? В Aisy её нельзя будет восстановить.',
+          projectId: 'project-a',
+          generation: 3,
+          sessions: [],
+          buttons: [[{ text: 'Удалить', data: 'session:code-owned-delete' }]],
+        }
+      },
+    })
+
+    await h.bot.handleUpdate(textUpdate(1, 'Удали эту сессию'))
+    await waitFor(() => h.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === 'Удалить сессию «Работа»? В Aisy её нельзя будет восстановить.'))
+
+    const terminal = h.calls.filter(call => call.method === 'sendMessage' &&
+      (call.payload['text'] === 'Служебное подтверждение модели' ||
+        call.payload['text'] === 'Удалить сессию «Работа»? В Aisy её нельзя будет восстановить.'))
+    expect(terminal).toHaveLength(1)
+    expect(JSON.stringify(terminal[0]?.payload['reply_markup']))
+      .toContain('session:code-owned-delete')
   })
 
   it('does not confirm learning when the final Telegram edit is delivery-uncertain', async () => {

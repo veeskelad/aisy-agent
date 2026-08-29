@@ -85,6 +85,21 @@ describe('Action Contract', () => {
     expect(evaluateActionContract(contract, [receipt]).satisfied).toBe(true)
   })
 
+  it('treats session listing as inspection and only supported controls as mutations', () => {
+    const inspect = classifyActionContract(operator('Покажи прошлые сессии'))
+    expect(evaluateActionContract(inspect, [
+      actionEvidence(call('list_sessions'), { ok: true }),
+    ])).toEqual({ satisfied: true, missing: 'none' })
+
+    const mutate = classifyActionContract(operator('Переименуй текущую сессию'))
+    expect(evaluateActionContract(mutate, [actionEvidence(call('configure_agent', {
+      operation: 'session.rename', target: 'current',
+    }), { ok: true, verified: true })])).toEqual({ satisfied: true, missing: 'none' })
+    expect(actionEvidence(call('configure_agent', {
+      operation: 'source.rewrite', target: 'current',
+    }), { ok: false }).successful).toBe(false)
+  })
+
   it('requires an executed delegation result', () => {
     const contract = classifyActionContract(operator('Use a subagent for this'))
     expect(evaluateActionContract(contract, [actionEvidence(call('spawn_subagent'), undefined)]).satisfied).toBe(false)

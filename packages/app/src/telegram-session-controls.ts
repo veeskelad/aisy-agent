@@ -66,6 +66,8 @@ export interface TelegramSessionControls {
   }): Promise<TelegramSessionTap>
   create(name?: string, requestKey?: string): TelegramSessionControlOutcome
   rename(sessionId: string, name: string): TelegramSessionControlOutcome
+  /** Build the same code-owned destructive preview used by a Telegram tap. */
+  requestDeletePreview(sessionId: string, expectedGeneration: number): Promise<TelegramSessionView>
   handleAuthenticatedText(input: {
     text: string
     chatId: number
@@ -457,6 +459,15 @@ export function makeTelegramSessionControls(input: {
     },
     create,
     rename,
+    requestDeletePreview(sessionId, expectedGeneration) {
+      const selection = active()
+      return deletionPreview({
+        kind: 'request-delete',
+        projectId: selection.projectId,
+        sessionId,
+        expectedGeneration,
+      })
+    },
     handleAuthenticatedText(authenticated) {
       assertAuthenticated(authenticated.chatId, authenticated.updateId)
       if (pendingRename !== null) {

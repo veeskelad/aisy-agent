@@ -115,6 +115,39 @@ describe('makeToolExecutor', () => {
     expect(r.output).toContain('unsupported tool: telepathy')
   })
 
+  it('routes closed conversational controls only with code-owned turn context', async () => {
+    const listSessions = vi.fn(() => 'Текущая: Работа')
+    const configureAgent = vi.fn(async () => ({
+      ok: true as const,
+      output: 'Переименовал сессию в «Работа».',
+      outcome: 'session-renamed' as const,
+    }))
+    const e = exec({ listSessions, configureAgent })
+    const context = Object.freeze({ sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 })
+
+    expect(await e(call('list_sessions'), context)).toEqual({
+      ok: true, output: 'Текущая: Работа',
+    })
+    expect(await e(call('configure_agent', {
+      operation: 'session.rename', target: 'current', value: ' Работа ',
+    }), context)).toMatchObject({
+      ok: true,
+      output: 'Переименовал сессию в «Работа».',
+      verified: true,
+      controlReceipt: {
+        kind: 'agent.control/v1',
+        operation: 'session.rename',
+        outcome: 'session-renamed',
+        turnId: 'turn-a',
+      },
+    })
+    expect(configureAgent).toHaveBeenCalledWith({
+      operation: 'session.rename', target: 'current', value: 'Работа',
+    }, context)
+    expect((await e(call('list_sessions'))).ok).toBe(false)
+    expect(listSessions).toHaveBeenCalledOnce()
+  })
+
   it('spawn_subagent dispatches to the injected delegation runner and returns observations', async () => {
     const seen: string[] = []
     const contexts: Array<ToolExecutionContext | undefined> = []

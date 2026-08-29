@@ -122,7 +122,10 @@ import type { TelegramProjectControls } from './telegram-project-controls.js'
 import type {
   TelegramProjectLifecycleControls,
 } from './telegram-project-lifecycle-controls.js'
-import type { TelegramSessionControls } from './telegram-session-controls.js'
+import type {
+  TelegramSessionControls,
+  TelegramSessionView,
+} from './telegram-session-controls.js'
 import type { TelegramSkillControls } from './telegram-skill-controls.js'
 import type { TelegramMcpControls } from './telegram-mcp-controls.js'
 import type {
@@ -549,6 +552,11 @@ export interface TelegramBotDeps {
   projectLifecycleControls?: TelegramProjectLifecycleControls
   /** Optional authenticated Session create/rename/search controls. */
   sessionControls?: TelegramSessionControls
+  /** One code-owned conversational card bound to the exact completed turn. */
+  takeConversationalSessionView?: (input: Readonly<{
+    sessionId: string
+    turnId?: string
+  }>) => TelegramSessionView | null
   /** Skills folder screen: paging, card, enable/disable, install, delete. */
   skillControls?: TelegramSkillControls
   mcpControls?: TelegramMcpControls
@@ -1688,6 +1696,7 @@ let pendingFormUntilMs = 0
     const abort = new AbortController()
     currentAbort = abort
     let executionCardId: number | null = null
+    let terminalSessionView: TelegramSessionView | null = null
     let terminalCardDeliveryFailed = false
     const makeReplyStream = (
       checkpoint?: NonNullable<Parameters<typeof makeTelegramReplyStream>[0]['checkpoint']>,
@@ -1700,7 +1709,9 @@ let pendingFormUntilMs = 0
         async sendText(html) {
           const sent = await bot.api.sendMessage(deps.allowedChatId, html, {
             parse_mode: 'HTML',
-            ...takeMenuKeyboard(),
+            ...(terminalSessionView === null
+              ? takeMenuKeyboard()
+              : { reply_markup: toInlineKeyboard(terminalSessionView.buttons) }),
           })
           return sent.message_id
         },
@@ -1708,7 +1719,12 @@ let pendingFormUntilMs = 0
           deps.allowedChatId,
           messageId,
           html,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...(terminalSessionView === null
+              ? {}
+              : { reply_markup: toInlineKeyboard(terminalSessionView.buttons) }),
+          },
         ).then(() => undefined),
         sendDocument: (document) => bot.api.sendDocument(
           deps.allowedChatId,
@@ -2020,6 +2036,11 @@ let pendingFormUntilMs = 0
         return false
       }
       const { result } = turn
+      terminalSessionView = deps.takeConversationalSessionView?.({
+        sessionId: turn.sessionId,
+        ...(authority?.turnId === undefined ? {} : { turnId: authority.turnId }),
+      }) ?? null
+      const terminalReply = terminalSessionView?.text ?? result.reply
       try {
         await execution.current?.complete(result)
         // A turn that worked needs no receipt: the answer is the receipt. The
@@ -2070,7 +2091,7 @@ let pendingFormUntilMs = 0
       } else {
         const durableReplyState = durableReply.current
         if (durableReplyState !== null && deps.durableReply !== undefined) {
-          const finalized = await replyStream.finalizeWithReceipt(result.reply)
+          const finalized = await replyStream.finalizeWithReceipt(terminalReply)
           const lease = executionAuthority.lease
           if (!isGenuineExecutionSupervisorLease(lease) || !lease.isHeld() ||
             finalized.kind !== 'delivered' || finalized.durability !== 'durable') {
@@ -2117,10 +2138,15 @@ let pendingFormUntilMs = 0
           // Legacy rollback keeps its historical ordering: the final answer is
           // not emitted when the ordinary release itself failed.
           await releaseLegacyAuthority()
-          const finalized = await replyStream.finalizeWithReceipt(result.reply)
+          const finalized = await replyStream.finalizeWithReceipt(terminalReply)
           if (finalized.kind === 'delivered') terminalReplyDelivered = true
           if (finalized.kind === 'fallback-safe') {
-            await sendReply(result.reply)
+            if (terminalSessionView === null) await sendReply(terminalReply)
+            else {
+              await bot.api.sendMessage(deps.allowedChatId, terminalReply, {
+                reply_markup: toInlineKeyboard(terminalSessionView.buttons),
+              })
+            }
             terminalReplyDelivered = true
           }
         }

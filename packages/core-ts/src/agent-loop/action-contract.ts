@@ -183,6 +183,7 @@ const INSPECT_TOOLS = new Set([
   'fetch_url',
   'fetch_web',
   'web_search',
+  'list_sessions',
 ])
 const MUTATE_TOOLS = new Set(['write_file', 'edit_file', 'remember', 'send_message'])
 const DELEGATE_TOOLS = new Set(['spawn_subagent'])
@@ -221,6 +222,10 @@ export function classifyActionContract(spans: ContextSpan[]): ActionContract {
 }
 
 export function actionToolFamily(call: ToolCall): ActionToolFamily {
+  // The closed executor rejects unsupported operations before effects. Family
+  // membership is name-stable so provider-owned evidence can be snapshotted
+  // without serializing model arguments into the attestation channel.
+  if (call.name === 'configure_agent') return 'mutate'
   if (DELEGATE_TOOLS.has(call.name)) return 'delegate'
   if (INSPECT_TOOLS.has(call.name)) return 'inspect'
   if (MUTATE_TOOLS.has(call.name)) return 'mutate'

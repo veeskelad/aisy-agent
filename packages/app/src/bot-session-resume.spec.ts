@@ -75,6 +75,7 @@ function harness(input: {
       : { kind: 'stale', view: VIEW }),
     create: () => { throw new Error('not used') },
     rename: () => { throw new Error('not used') },
+    requestDeletePreview: () => { throw new Error('not used') },
     handleAuthenticatedText: () => null,
   }
   const gateway: Gateway = {

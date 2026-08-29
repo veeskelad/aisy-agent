@@ -171,6 +171,9 @@ zero-I/O preflight; durable fence, provider purge и изменение зави
 Модель получает закрытые инструменты `list_sessions` и `configure_agent` с
 версионированным набором операций. `list_sessions` возвращает не id, а bounded
 one-turn opaque handles, привязанные к trusted owner/project/generation.
+Для main Agent это обязательные code-owned platform-controls: при включённой
+AgentCard они добавляются сверх её workload allowlist с фиксированными
+минимальными tiers, не открывая ни одного другого отсутствующего в карте tool.
 `configure_agent` первого среза принимает `session.rename`,
 `session.request-delete` и строгий policy overlay. Для current target допустим
 literal `current`; inactive target задаётся только выданным handle. Resolver
@@ -180,7 +183,11 @@ literal `current`; inactive target задаётся только выданны�
 `session.request-delete` не удаляет данные и не является approval: операция
 только создаёт code-owned preview с одноразовым Telegram token. Exact deletion
 authority появляется лишь после authenticated tap. Button, direct command и
-LLM используют один preview resolver.
+LLM используют один preview resolver. Preview подменяет terminal model reply и
+доставляется тем же durable reply stream как одно сообщение с кнопками; отдельное
+«карточка подготовлена» пользователю не отправляется. Exact rename и выпуск
+preview дают operation-aware typed receipt для action-contract, однако receipt
+preview доказывает только показ подтверждения, а не удаление Session.
 
 Project/path overlay выражает только narrowing: `ask-before-delete`,
 `read-only`, `no-egress`, `confirm-writes`. Код сравнивает overlay с baseline и
@@ -300,6 +307,9 @@ minimum-readable-release marker.
 8. ordinary grant переживает daily rotation и delete, Project/path narrowing
    по-прежнему спрашивает;
 9. попытка configure source/prompt/safety даёт zero-I/O typed отказ;
+   AgentCard без новых имён всё равно получает только два platform-controls;
+   rename/delete-preview завершают action-contract без recovery-round, а preview
+   приходит одним terminal сообщением с кнопками;
 10. каждый code-owned обычный renderer проходит forbidden-diagnostic-copy
     corpus; debug/doctor — отдельный allowlist; provider replay/eval различает
     обычную реплику и прямой технический вопрос;

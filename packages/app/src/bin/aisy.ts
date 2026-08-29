@@ -300,7 +300,10 @@ import {
   makeNodeDailySessionRotationStore,
 } from '../daily-session-rotation.js'
 import { makeTelegramProjectControls } from '../telegram-project-controls.js'
-import { makeTelegramSessionControls } from '../telegram-session-controls.js'
+import {
+  makeTelegramSessionControls,
+} from '../telegram-session-controls.js'
+import { makeConversationalSessionControl } from '../conversational-session-control.js'
 import { makeTelegramSkillControls } from '../telegram-skill-controls.js'
 import { makeNewSessionRunner, makeResumeSessionRunner } from '../telegram-new-session.js'
 import { makeNodeSessionLabelStore } from '../session-label-store.js'
@@ -2689,6 +2692,7 @@ const mainCapabilityRuntime = (() => {
       activeSkillNames,
       activeMcpServers,
       minimumToolTiers: TOOL_MINIMUM_TIERS,
+      platformToolNames: new Set(['list_sessions', 'configure_agent']),
     })
   } catch {
     process.stderr.write('aisy run: configured main AgentCard failed capability validation.\n')
@@ -3333,6 +3337,27 @@ const hostBash = makeHostBash({
   bypass: () => executionMode.bypassesHostBash(),
 })
 
+const telegramSessionControls = makeTelegramSessionControls({
+  runtime: projectRuntime,
+  owner: registryOwner,
+  creation: sessionCreation,
+  labels: sessionLabels,
+  ...(sessionDeletionCoordinator === null || sessionTranscriptMaintenance === null
+    ? {}
+    : {
+        deletion: sessionDeletionCoordinator,
+        transcript: sessionTranscriptMaintenance,
+      }),
+})
+const conversationalSessionControl = makeConversationalSessionControl({
+  runtime: projectRuntime,
+  owner: registryOwner,
+  controls: {
+    rename: telegramSessionControls.rename,
+    requestDeletePreview: telegramSessionControls.requestDeletePreview,
+  },
+})
+
 const durableSpawnByContext = new WeakMap<
   ToolExecutionContext,
   Readonly<{
@@ -3439,6 +3464,8 @@ const executeTool = makeLiveToolExecutor({
   webSearch: webSearchPort,
   // Wrapped: the port is declared further down, next to the delegation it uses.
   deepResearch: (question, context) => deepResearchPort(question, context),
+  listSessions: (context) => conversationalSessionControl.list(context),
+  configureAgent: (input, context) => conversationalSessionControl.configure(input, context),
 })
 // Execution modes (ADR-0083): a mode may only tighten what the code already
 // enforces. Plan Mode now uses the durable research→submit→execute protocol;
@@ -4473,18 +4500,8 @@ const {
     owner: registryOwner,
     displayRoot: (root) => root.replace(homedir(), '~'),
   }),
-  sessionControls: makeTelegramSessionControls({
-    runtime: projectRuntime,
-    owner: registryOwner,
-    creation: sessionCreation,
-    labels: sessionLabels,
-    ...(sessionDeletionCoordinator === null || sessionTranscriptMaintenance === null
-      ? {}
-      : {
-          deletion: sessionDeletionCoordinator,
-          transcript: sessionTranscriptMaintenance,
-        }),
-  }),
+  sessionControls: telegramSessionControls,
+  takeConversationalSessionView: (context) => conversationalSessionControl.takeView(context),
   projectLifecycleControls: makeTelegramProjectLifecycleControls({
     runtime: projectRuntime,
     authority: lifecycleRuntime.authority,
