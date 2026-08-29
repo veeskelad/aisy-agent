@@ -18,6 +18,7 @@ import type {
   SwitchAuthority,
 } from '@aisy/core'
 import type { NodeProjectServiceRuntime } from './project-service-runtime.js'
+import type { SessionCreationCoordinator } from './session-creation-coordinator.js'
 
 const RECEIPT_TTL_MS = 60_000
 
@@ -26,7 +27,7 @@ export type NewSessionResult =
   | { ok: false; errorCode: string }
 
 export interface NewSessionRunner {
-  (name?: string): Promise<NewSessionResult>
+  (input: { requestKey: string; name?: string }): Promise<NewSessionResult>
 }
 
 export interface ResumeSessionRunner {
@@ -38,6 +39,10 @@ interface SessionSwitchDeps {
   owner: ProjectRegistryV2Owner
   /** Distinguishes two taps of the same button; the receipt binds to it. */
   newRequestId: () => string
+}
+
+interface NewSessionDeps extends SessionSwitchDeps {
+  creation: Pick<SessionCreationCoordinator, 'create'>
 }
 
 /**
@@ -55,6 +60,9 @@ async function switchToSession(
   // receipt must match what the registry will compare it against, not what we
   // saw a moment ago.
   const current = deps.runtime.registry.getActive(deps.owner)
+  if (current.projectId === projectId && current.sessionId === session.id) {
+    return { ok: true, session, projectId }
+  }
   const sourceMessageHash = createHash('sha256')
     .update(`${label}\0${session.id}\0${deps.newRequestId()}`)
     .digest('hex')
@@ -82,14 +90,18 @@ function failureCode(error: unknown, fallback: string): { ok: false; errorCode: 
   return { ok: false, errorCode: typeof code === 'string' ? code : fallback }
 }
 
-export function makeNewSessionRunner(input: SessionSwitchDeps): NewSessionRunner {
-  return async (name?: string): Promise<NewSessionResult> => {
+export function makeNewSessionRunner(input: NewSessionDeps): NewSessionRunner {
+  return async (request): Promise<NewSessionResult> => {
     try {
       const active = input.runtime.registry.getActive(input.owner)
-      const session = input.runtime.service.createSession({
+      const session = input.creation.create({
         ...input.owner,
         projectId: active.projectId,
-        ...(name === undefined || name.trim().length === 0 ? {} : { name: name.trim() }),
+        expectedGeneration: active.generation,
+        requestKey: request.requestKey,
+        ...(request.name === undefined || request.name.trim().length === 0
+          ? {}
+          : { name: request.name.trim() }),
       })
       return await switchToSession(input, active.projectId, session, 'new-session')
     } catch (error) {

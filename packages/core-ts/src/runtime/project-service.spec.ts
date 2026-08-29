@@ -961,6 +961,29 @@ describe('ProjectService switch barrier', () => {
       ])
   })
 
+  it('passes a code-owned idempotent creation identity through to the registry', () => {
+    const { events, registry, service } = setup()
+    const active = registry.getActive(OWNER)
+    const createKeyHash = 'a'.repeat(64)
+    const input = {
+      ...OWNER,
+      projectId: active.projectId,
+      expectedGeneration: active.generation,
+      sessionId: 'session-deterministic',
+      createKeyHash,
+      name: 'Новая тема',
+    }
+
+    expect(service.createSession(input)).toMatchObject({
+      id: 'session-deterministic', createKeyHash, name: 'Новая тема',
+    })
+    expect(service.createSession(input)).toMatchObject({ id: 'session-deterministic' })
+    expect(service.searchSessions({ ...OWNER, projectId: active.projectId, query: 'новая' }))
+      .toHaveLength(1)
+    expect(events.filter((event) => event.kind === 'session.created' &&
+      event.sessionId === 'session-deterministic')).toHaveLength(1)
+  })
+
   it('keeps lifecycle disabled by default before any lease or registry effect', async () => {
     const { authority, leases, registry, target } = setup()
     const disabled = makeProjectService({ registry, leases, authority })

@@ -158,6 +158,9 @@ export interface ProjectService {
     projectId: string
     name?: string
     expectedGeneration?: number
+    /** Code-owned idempotent creation identity; both fields must be present together. */
+    sessionId?: string
+    createKeyHash?: string
   }): ProjectSessionRecord
   renameSession(input: ProjectRegistryV2Owner & {
     projectId: string
@@ -767,6 +770,21 @@ export function makeProjectService(deps: {
       const owner = { operatorId: input.operatorId, profileId: input.profileId }
       const endTransition = beginTransition(owner, { blockInteractive: false })
       try {
+        let alreadyCreated = false
+        if (input.sessionId !== undefined && input.createKeyHash !== undefined) {
+          try {
+            const existing = deps.registry.getSession({
+              ...owner,
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
+            alreadyCreated = existing.createKeyHash === input.createKeyHash
+          } catch (error) {
+            if (!(error instanceof ProjectRegistryV2Error) || error.code !== 'SESSION_NOT_FOUND') {
+              throw error
+            }
+          }
+        }
         const record = deps.registry.createSession({
           ...owner,
           projectId: input.projectId,
@@ -774,13 +792,17 @@ export function makeProjectService(deps: {
           ...(input.expectedGeneration === undefined
             ? {}
             : { expectedGeneration: input.expectedGeneration }),
+          ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+          ...(input.createKeyHash === undefined ? {} : { createKeyHash: input.createKeyHash }),
         })
-        deps.emit?.({
-          kind: 'session.created',
-          projectId: input.projectId,
-          sessionId: record.id,
-          generation: deps.registry.getActive(owner).generation,
-        })
+        if (!alreadyCreated) {
+          deps.emit?.({
+            kind: 'session.created',
+            projectId: input.projectId,
+            sessionId: record.id,
+            generation: deps.registry.getActive(owner).generation,
+          })
+        }
         return record
       } finally {
         endTransition()

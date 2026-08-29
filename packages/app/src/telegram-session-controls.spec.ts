@@ -11,6 +11,11 @@ import {
   makeTelegramSessionControls,
   TelegramSessionControlsError,
 } from './telegram-session-controls.js'
+import {
+  makeMemorySessionCreationStore,
+  makeSessionCreationCoordinator,
+} from './session-creation-coordinator.js'
+import { makeMemorySessionLabelStore } from './session-label-store.js'
 
 const OWNER = { operatorId: 'telegram:42', profileId: 'default' }
 const POLICY = {
@@ -19,7 +24,7 @@ const POLICY = {
   protectedRoots: ['/Users/operator/.aisy'],
 }
 
-function setup() {
+function setup(input: { labelSave?: () => void } = {}) {
   let id = 0
   const registry = makeProjectRegistryV2({
     state: makeFreshProjectRegistryV2({
@@ -47,16 +52,27 @@ function setup() {
     leases: makeContextLeaseCoordinator({ newId: () => `lease-${++id}` }),
   })
   const runtime = { registry, service } as Pick<NodeProjectServiceRuntime, 'registry' | 'service'>
+  const labels = makeMemorySessionLabelStore(
+    input.labelSave === undefined ? {} : { save: input.labelSave },
+  )
+  const creation = makeSessionCreationCoordinator({
+    registry,
+    service,
+    labels,
+    store: makeMemorySessionCreationStore(),
+  })
   return {
-    controls: makeTelegramSessionControls({ runtime, owner: OWNER }),
+    controls: makeTelegramSessionControls({ runtime, owner: OWNER, creation, labels }),
     registry,
     runtime,
+    labels,
+    creation,
   }
 }
 
 describe('makeTelegramSessionControls', () => {
   it('lists, creates, renames and searches through ProjectService without switching session', () => {
-    const { controls, registry } = setup()
+    const { controls, registry, labels } = setup()
     const before = registry.getActive(OWNER)
 
     const created = controls.handleAuthenticatedText({
@@ -69,6 +85,7 @@ describe('makeTelegramSessionControls', () => {
       text: 'rename current session to Main work', chatId: 42, updateId: 2,
     })
     expect(renamed).toMatchObject({ kind: 'renamed', session: { id: before.sessionId, name: 'Main work' } })
+    expect(labels.get(before.sessionId)).toMatchObject({ kind: 'explicit', revision: 1 })
 
     const found = controls.handleAuthenticatedText({
       text: 'найди сессии mcp', chatId: 42, updateId: 3,
@@ -89,6 +106,42 @@ describe('makeTelegramSessionControls', () => {
     expect(registry.snapshot()).toEqual(before)
   })
 
+  it('validates before publishing an explicit-name fence', () => {
+    const { controls, registry, labels } = setup()
+    const before = registry.getActive(OWNER)
+    const original = registry.getSession({ ...OWNER, ...before })
+    labels.markTemporary(before.sessionId)
+
+    expect(() => controls.rename(before.sessionId, '<b>Новое имя</b>'))
+      .toThrow('SESSION_NAME_INVALID')
+    expect(registry.getSession({ ...OWNER, ...before }).name).toBe(original.name)
+    expect(labels.get(before.sessionId)).toMatchObject({ kind: 'temporary', revision: 1 })
+  })
+
+  it('renames to exactly 64 astral symbols without stranding the explicit fence', () => {
+    const { controls, registry, labels } = setup()
+    const before = registry.getActive(OWNER)
+    const name = '😀'.repeat(64)
+    labels.markTemporary(before.sessionId)
+
+    expect(controls.rename(before.sessionId, name)).toMatchObject({
+      kind: 'renamed', session: { name },
+    })
+    expect(labels.get(before.sessionId)).toMatchObject({ kind: 'explicit', revision: 2 })
+  })
+
+  it('does not rename the registry when the explicit-name fence is not durable', () => {
+    const { controls, registry } = setup({
+      labelSave: () => { throw new Error('injected label persistence failure') },
+    })
+    const before = registry.getActive(OWNER)
+    const original = registry.getSession({ ...OWNER, ...before })
+
+    expect(() => controls.rename(before.sessionId, 'Новое имя'))
+      .toThrow('injected label persistence failure')
+    expect(registry.getSession({ ...OWNER, ...before }).name).toBe(original.name)
+  })
+
   it('does not consume ordinary dialogue and supports the default session name', () => {
     const { controls } = setup()
 
@@ -97,7 +150,7 @@ describe('makeTelegramSessionControls', () => {
     })).toBeNull()
     expect(controls.handleAuthenticatedText({
       text: 'новая сессия', chatId: 42, updateId: 6,
-    })).toMatchObject({ kind: 'created', session: { name: 'New session' } })
+    })).toMatchObject({ kind: 'created', session: { name: 'Новая сессия' } })
   })
 
   it('fails closed when selection generation changes after command capture', () => {
@@ -125,6 +178,28 @@ describe('makeTelegramSessionControls', () => {
           },
         },
       },
+      creation: makeSessionCreationCoordinator({
+        registry,
+        service: {
+          ...original,
+          createSession(input) {
+            if (!raced) {
+              raced = true
+              registry.createProject({
+                ...OWNER,
+                name: 'Concurrent switch',
+                slug: 'concurrent-switch',
+                root: '/Users/operator/projects/concurrent-switch',
+                origin: 'created',
+              })
+            }
+            return original.createSession(input)
+          },
+        },
+        labels: makeMemorySessionLabelStore(),
+        store: makeMemorySessionCreationStore(),
+      }),
+      labels: makeMemorySessionLabelStore(),
     })
 
     expect(() => controls.create('Must not land in the stale context')).toThrowError(
@@ -142,6 +217,8 @@ describe('makeTelegramSessionControls', () => {
     expect(() => makeTelegramSessionControls({
       runtime: { registry, service: {} as NodeProjectServiceRuntime['service'] },
       owner: { operatorId: '', profileId: 'default' },
+      creation: {} as never,
+      labels: {} as never,
     })).toThrowError(new TelegramSessionControlsError('INVALID_CONFIGURATION'))
   })
 })
@@ -219,10 +296,12 @@ describe('session buttons', () => {
   })
 
   it('offers a new session even when the list is empty', () => {
-    const { controls, runtime } = setup()
+    const { controls, runtime, creation, labels } = setup()
     const empty = makeTelegramSessionControls({
       owner: OWNER,
       runtime: { ...runtime, service: { ...runtime.service, searchSessions: () => [] } },
+      creation,
+      labels,
     })
     void controls
 

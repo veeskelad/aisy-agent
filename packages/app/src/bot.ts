@@ -663,7 +663,7 @@ export interface TelegramBotDeps {
   /** Reset the brain choice and hand the process back to setup mode. */
   reconnectBrain?: () => Promise<void>
   /** Create a session and make it current; the process restarts into it. */
-  startNewSession?: () => Promise<
+  startNewSession?: (updateId: number) => Promise<
     { ok: true; name: string } | { ok: false; errorCode: string }
   >
   /** Enter an existing session of the active project; the bot restarts into it. */
@@ -1488,7 +1488,7 @@ let pendingFormUntilMs = 0
       await bot.api.sendMessage(deps.allowedChatId, NOT_WIRED)
       return
     }
-    const result = await deps.startNewSession()
+    const result = await deps.startNewSession(updateId)
     if (!result.ok) {
       await bot.api.sendMessage(deps.allowedChatId, `❌ Не удалось начать сессию (${result.errorCode}).`)
       return

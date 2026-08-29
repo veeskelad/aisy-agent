@@ -19,6 +19,11 @@ import {
   type DailySessionRotationRecord,
   type DailySessionRotationStore,
 } from './daily-session-rotation.js'
+import {
+  makeMemorySessionCreationStore,
+  makeSessionCreationCoordinator,
+} from './session-creation-coordinator.js'
+import { makeMemorySessionLabelStore } from './session-label-store.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -79,6 +84,13 @@ function setup(storeOverride?: DailySessionRotationStore) {
     authority: switchAuthority,
     rotationAuthority,
   })
+  const labels = makeMemorySessionLabelStore()
+  const creation = makeSessionCreationCoordinator({
+    registry,
+    service,
+    labels,
+    store: makeMemorySessionCreationStore(),
+  })
   let record: DailySessionRotationRecord | null = null
   const store = storeOverride ?? {
     load: () => record === null ? null : structuredClone(record),
@@ -91,12 +103,14 @@ function setup(storeOverride?: DailySessionRotationStore) {
     service,
     authority: rotationAuthority,
     store,
+    creation,
   })
   return {
     make,
     registry,
     record: () => record,
     setRecord: (next: DailySessionRotationRecord) => { record = next },
+    labels,
   }
 }
 
@@ -117,6 +131,7 @@ describe('daily Session rotation', () => {
       phase: 'switched',
       notice: { kind: 'session-only', sessionReset: true },
     })
+    expect(h.labels.get(after.sessionId)).toMatchObject({ kind: 'temporary' })
     await coordinator.rotate('2026-08-28', { kind: 'session-only' })
     expect(h.registry.snapshot().sessions.filter(item => item.createKeyHash !== undefined))
       .toHaveLength(1)

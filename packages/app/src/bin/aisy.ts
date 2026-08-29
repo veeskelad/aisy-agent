@@ -301,6 +301,11 @@ import { makeTelegramProjectControls } from '../telegram-project-controls.js'
 import { makeTelegramSessionControls } from '../telegram-session-controls.js'
 import { makeTelegramSkillControls } from '../telegram-skill-controls.js'
 import { makeNewSessionRunner, makeResumeSessionRunner } from '../telegram-new-session.js'
+import { makeNodeSessionLabelStore } from '../session-label-store.js'
+import {
+  makeNodeSessionCreationStore,
+  makeSessionCreationCoordinator,
+} from '../session-creation-coordinator.js'
 import { makeNodeProjectLifecycleAuthorityRuntime } from '../project-lifecycle-authority-runtime.js'
 import { makeTelegramProjectLifecycleControls } from '../telegram-project-lifecycle-controls.js'
 import { makeTranscriptCompactionSummarizer } from '../transcript-compaction.js'
@@ -1571,6 +1576,18 @@ const projectRuntime = makeNodeProjectServiceRuntime({
 if (projectRuntime.rotationAuthority === undefined) {
   throw new Error('SESSION_ROTATION_AUTHORITY_UNAVAILABLE')
 }
+const sessionLabels = makeNodeSessionLabelStore({
+  path: join(base, 'session-labels-v1.json'),
+})
+const sessionCreation = makeSessionCreationCoordinator({
+  registry: registryPair.registry,
+  service: projectRuntime.service,
+  labels: sessionLabels,
+  store: makeNodeSessionCreationStore(join(base, 'session-creations-v1.json')),
+})
+// Creation metadata is a bootstrap barrier: Telegram must not observe a new
+// registry row before its temporary/explicit naming semantics are repaired.
+sessionCreation.repair()
 const dailySessionRotation = makeDailySessionRotation({
   botId: activeBot?.id ?? 'telegram-primary',
   ...registryOwner,
@@ -1578,12 +1595,14 @@ const dailySessionRotation = makeDailySessionRotation({
   service: projectRuntime.service,
   authority: projectRuntime.rotationAuthority,
   store: makeNodeDailySessionRotationStore(join(base, 'daily-session-rotation.json')),
+  creation: sessionCreation,
 })
 const contextLeases = projectRuntime.leases
 const newSessionRunner = makeNewSessionRunner({
   runtime: projectRuntime,
   owner: registryOwner,
   newRequestId: () => randomUUID(),
+  creation: sessionCreation,
 })
 const resumeSessionRunner = makeResumeSessionRunner({
   runtime: projectRuntime,
@@ -4321,6 +4340,8 @@ const {
   sessionControls: makeTelegramSessionControls({
     runtime: projectRuntime,
     owner: registryOwner,
+    creation: sessionCreation,
+    labels: sessionLabels,
   }),
   projectLifecycleControls: makeTelegramProjectLifecycleControls({
     runtime: projectRuntime,
@@ -4339,8 +4360,8 @@ const {
     // does not run one yet — an approved server is approved, not connected.
     activeServerNames: () => activeMcpServers,
   }),
-  startNewSession: async () => {
-    const result = await newSessionRunner()
+  startNewSession: async (updateId) => {
+    const result = await newSessionRunner({ requestKey: `telegram-update:${updateId}` })
     return result.ok
       ? { ok: true as const, name: result.session.name }
       : { ok: false as const, errorCode: result.errorCode }

@@ -6,6 +6,11 @@ import type {
 } from '@aisy/core'
 import type { NodeProjectServiceRuntime } from './project-service-runtime.js'
 import { fitLabel } from '@aisy/telegram-gw'
+import {
+  normalizeSessionName,
+  type SessionCreationCoordinator,
+} from './session-creation-coordinator.js'
+import type { SessionLabelStore } from './session-label-store.js'
 
 export interface TelegramSessionButton {
   text: string
@@ -46,7 +51,7 @@ export interface TelegramSessionControls {
   resolvePrefix(prefix: string): TelegramSessionPrefixResolution
   /** Resolves a `session:` callback minted by `open`. */
   handle(data: string): TelegramSessionTap
-  create(name?: string): TelegramSessionControlOutcome
+  create(name?: string, requestKey?: string): TelegramSessionControlOutcome
   rename(sessionId: string, name: string): TelegramSessionControlOutcome
   handleAuthenticatedText(input: {
     text: string
@@ -109,6 +114,8 @@ function searchQuery(text: string): string | undefined {
 export function makeTelegramSessionControls(input: {
   runtime: Pick<NodeProjectServiceRuntime, 'registry' | 'service'>
   owner: ProjectRegistryV2Owner
+  creation: Pick<SessionCreationCoordinator, 'create'>
+  labels: Pick<SessionLabelStore, 'get' | 'markExplicit'>
   newTokenId?: () => string
 }): TelegramSessionControls {
   if (input.owner.operatorId.trim().length === 0 || input.owner.profileId.trim().length === 0) {
@@ -187,11 +194,12 @@ export function makeTelegramSessionControls(input: {
     }
   }
 
-  const create = (name?: string): TelegramSessionControlOutcome => {
+  const create = (name?: string, requestKey?: string): TelegramSessionControlOutcome => {
     const selection = active()
-    const session = input.runtime.service.createSession({
+    const session = input.creation.create({
       ...input.owner,
       projectId: selection.projectId,
+      requestKey: requestKey ?? `direct:${newTokenId()}`,
       ...(name === undefined ? {} : { name }),
       expectedGeneration: selection.generation,
     })
@@ -207,11 +215,21 @@ export function makeTelegramSessionControls(input: {
     sessionId: string,
     name: string,
   ): TelegramSessionControlOutcome => {
+    const normalizedName = normalizeSessionName(name)
+    // Publish the explicit-name fence before the registry rename. A crash must
+    // never leave an operator-authored name eligible for a later auto-rename.
+    input.runtime.registry.getSession({
+      ...input.owner,
+      projectId: selection.projectId,
+      sessionId,
+    })
+    const label = input.labels.get(sessionId)
+    input.labels.markExplicit(sessionId, label?.revision)
     const session = input.runtime.service.renameSession({
       ...input.owner,
       projectId: selection.projectId,
       sessionId,
-      name,
+      name: normalizedName,
       expectedGeneration: selection.generation,
     })
     return { kind: 'renamed', text: `✅ Сессия переименована в «${session.name}».`, session }
@@ -261,7 +279,10 @@ export function makeTelegramSessionControls(input: {
       assertAuthenticated(authenticated.chatId, authenticated.updateId)
       const requestedCreateName = createName(authenticated.text)
       if (requestedCreateName !== undefined) {
-        return create(requestedCreateName === null ? undefined : requestedCreateName)
+        return create(
+          requestedCreateName === null ? undefined : requestedCreateName,
+          `telegram-update:${authenticated.updateId}`,
+        )
       }
       const requestedRenameName = renameCurrentName(authenticated.text)
       if (requestedRenameName !== undefined) {

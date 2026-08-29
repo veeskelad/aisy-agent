@@ -9,6 +9,11 @@ import {
 
 import { makeNewSessionRunner, makeResumeSessionRunner } from './telegram-new-session.js'
 import type { NodeProjectServiceRuntime } from './project-service-runtime.js'
+import {
+  makeMemorySessionCreationStore,
+  makeSessionCreationCoordinator,
+} from './session-creation-coordinator.js'
+import { makeMemorySessionLabelStore } from './session-label-store.js'
 
 const OWNER = { operatorId: 'telegram:42', profileId: 'default' }
 const POLICY = {
@@ -56,12 +61,27 @@ function setup() {
     NodeProjectServiceRuntime, 'registry' | 'authority' | 'service'
   >
   let request = 0
+  const creation = makeSessionCreationCoordinator({
+    registry,
+    service,
+    labels: makeMemorySessionLabelStore(),
+    store: makeMemorySessionCreationStore(),
+  })
+  const newSession = makeNewSessionRunner({
+    runtime,
+    owner: OWNER,
+    newRequestId: () => `request-${++request}`,
+    creation,
+  })
   return {
     registry,
-    run: makeNewSessionRunner({
-      runtime,
-      owner: OWNER,
-      newRequestId: () => `request-${++request}`,
+    runWithKey: (requestKey: string, name?: string) => newSession({
+      requestKey,
+      ...(name === undefined ? {} : { name }),
+    }),
+    run: (name?: string) => newSession({
+      requestKey: `telegram-update:${++request}`,
+      ...(name === undefined ? {} : { name }),
     }),
     resume: makeResumeSessionRunner({
       runtime,
@@ -107,6 +127,23 @@ describe('new session', () => {
     expect(h.registry.getActive(OWNER).generation).toBe(3)
   })
 
+  it('does not create a duplicate when the same Telegram update replays after the switch', async () => {
+    const h = setup()
+    const projectId = h.registry.getActive(OWNER).projectId
+    const requestKey = 'telegram-update:replayed-after-switch'
+
+    const first = await h.runWithKey(requestKey)
+    const afterFirst = h.registry.getActive(OWNER)
+    const replay = await h.runWithKey(requestKey)
+
+    expect(first.ok).toBe(true)
+    expect(replay.ok).toBe(true)
+    if (first.ok && replay.ok) expect(replay.session.id).toBe(first.session.id)
+    expect(h.registry.getActive(OWNER)).toEqual(afterFirst)
+    expect(h.service.searchSessions({ ...OWNER, projectId, query: 'Новая сессия' }))
+      .toHaveLength(1)
+  })
+
   it('reports a stable code instead of registry internals', async () => {
     const h = setup()
     const broken = makeNewSessionRunner({
@@ -117,9 +154,11 @@ describe('new session', () => {
       } as never,
       owner: OWNER,
       newRequestId: () => 'request-x',
+      creation: { create: () => { throw Object.assign(new Error('x'), { code: 'NO' }) } },
     })
 
-    await expect(broken()).resolves.toEqual({ ok: false, errorCode: 'NO' })
+    await expect(broken({ requestKey: 'telegram-update:99' }))
+      .resolves.toEqual({ ok: false, errorCode: 'NO' })
   })
 })
 

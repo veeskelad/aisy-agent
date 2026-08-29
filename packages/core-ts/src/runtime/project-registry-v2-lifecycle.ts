@@ -98,7 +98,10 @@ function cloneState(state: ProjectRegistryStateV2): ProjectRegistryStateV2 {
 
 function cleanName(value: string, fallback?: string): string {
   const name = value.trim().replace(/\s+/g, ' ') || fallback
-  if (name === undefined || name.length === 0 || name.length > 120) {
+  // App-facing names are bounded to 64 Unicode code points. UTF-16 needs up
+  // to two code units per point, so the registry accepts the exact 128-unit
+  // storage envelope while higher layers enforce the visible-symbol policy.
+  if (name === undefined || name.length === 0 || name.length > 128) {
     throw new ProjectRegistryV2Error('INVALID_NAME')
   }
   return name

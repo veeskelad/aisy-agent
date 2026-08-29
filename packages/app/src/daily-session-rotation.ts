@@ -14,6 +14,7 @@ import { dirname } from 'node:path'
 import type { ProjectService, ProjectRegistryV2, SessionRotationAuthority } from '@aisy/core'
 
 import type { TelegramNightlyNotice } from './bot.js'
+import type { SessionCreationCoordinator } from './session-creation-coordinator.js'
 
 export type DailySessionRotationPhase =
   | 'preparing'
@@ -130,6 +131,7 @@ export function makeDailySessionRotation(input: {
   service: ProjectService
   authority: SessionRotationAuthority
   store: DailySessionRotationStore
+  creation: Pick<SessionCreationCoordinator, 'prepareExternal' | 'completeExternal'>
 }): DailySessionRotation {
   const owner = { operatorId: input.operatorId, profileId: input.profileId }
   let state = input.store.load()
@@ -142,6 +144,7 @@ export function makeDailySessionRotation(input: {
     const current = input.registry.getActive(owner)
     if (current.projectId === record.projectId && current.sessionId === record.newSessionId &&
       current.generation === record.expectedGeneration + 1) {
+      input.creation.completeExternal(record.createKeyHash)
       publish({ ...record, phase: 'switched' })
       return
     }
@@ -159,12 +162,22 @@ export function makeDailySessionRotation(input: {
       localDate: record.localDate,
       createKeyHash: record.createKeyHash,
     }
+    input.creation.prepareExternal({
+      ...owner,
+      projectId: record.projectId,
+      sessionId: record.newSessionId,
+      expectedGeneration: record.expectedGeneration,
+      createKeyHash: record.createKeyHash,
+      name: record.localDate,
+      labelKind: 'temporary',
+    })
     const receipt = input.authority.issue(binding, 60_000)
     await input.service.rotateSession({
       ...binding,
       receipt,
       name: record.localDate,
     })
+    input.creation.completeExternal(record.createKeyHash)
     publish({ ...record, phase: 'switched' })
   }
 
