@@ -15,22 +15,25 @@ function state(overrides?: Partial<ExecutionState>): ExecutionState {
 
 describe('renderExecution', () => {
   it('renders step icons and marks the active step', () => {
-    const { html } = renderExecution(state())
+    const { html } = renderExecution(state(), { debug: true })
     expect(html).toContain('✅ 1. Прочитать конфиг')
     expect(html).toContain('⏳ 2. Запустить линтер  ← текущий')
     expect(html).toContain('⬜ 3. Записать результат')
   })
 
   it('names where the work happens, not the session uuid', () => {
-    expect(renderExecution(state()).html).toContain('проект «Aisy»')
+    expect(renderExecution(state(), { debug: true }).html).toContain('проект «Aisy»')
     const { scope: _named, ...global } = state()
-    expect(renderExecution(global).html).toContain('общая папка')
+    expect(renderExecution(global, { debug: true }).html).toContain('общая папка')
   })
 
   it('runs one stopwatch for the whole turn, and none per step', () => {
     // Двое часов на экране — это одно и то же время, показанное дважды, причём
     // фазовые обнуляются после каждого инструмента и выглядят как сбой.
-    const { html } = renderExecution(state({ elapsedMs: 12_400, thinking: true, phaseMs: 3_100 }))
+    const { html } = renderExecution(
+      state({ elapsedMs: 12_400, thinking: true, phaseMs: 3_100 }),
+      { debug: true },
+    )
     // Секунды по-русски: «с», а не «s» — это читает человек, а не консоль.
     expect(html).toContain('12,4 с')
     expect(html).toContain('🧠 Думаю')
@@ -45,7 +48,7 @@ describe('renderExecution', () => {
       ],
       tool: { name: 'bash', status: 'running', arg: 'python build.py' },
       phaseMs: 1_500,
-    }))
+    }), { debug: true })
     // Инструменты названы по-человечески, время — только в заголовке.
     expect(html).toContain('✅ читаю файл: <code>src/app.ts</code>')
     expect(html).toContain('❌ выполняю команду: <code>pytest -q</code>')
@@ -59,14 +62,14 @@ describe('renderExecution', () => {
     // быть видимым, а не безымянным.
     const { html } = renderExecution(state({ tool: {
       name: 'bash_exec', status: 'running', arg: 'lint x', elapsedMs: 4200,
-    } }))
+    } }), { debug: true })
     expect(html).toContain('▶️ bash_exec: <code>lint x</code>')
   })
 
   it('renders a subagent lifecycle', () => {
     const { html } = renderExecution(state({
       tool: { name: 'spawn_subagent', kind: 'subagent', status: 'completed' },
-    }))
+    }), { debug: true })
     expect(html).toContain('✅ делегирую: spawn_subagent')
   })
 
@@ -83,24 +86,24 @@ describe('renderExecution', () => {
         status: 'recovering',
         missing: 'postcondition',
       },
-    })).html
+    }), { debug: true }).html
     expect(recovering).toContain('🎯 Действие: Изменение')
     expect(recovering).toContain('🔄 Не хватило доказательства — переспрашиваю')
     expect(recovering).toContain('Осталось: проверить состояние после изменения')
 
     const verified = renderExecution(state({
       action: { kind: 'delegate-required', status: 'verified' },
-    })).html
+    }), { debug: true }).html
     expect(verified).toContain('🎯 Действие: Передача помощнику')
     expect(verified).toContain('✅ Результат подтверждён')
   })
 
   it.each([
-    ['completed', '✅ Готово'],
-    ['stopped', '⏹ Остановлено'],
-    ['failed', '❌ Не получилось ответить'],
-    ['awaiting', '⏸ Жду решения'],
-    ['interrupted', '↻ Gateway перезапущен. Продолжаю.'],
+    ['completed', 'Готово.'],
+    ['stopped', 'Остановился.'],
+    ['failed', 'Не получилось ответить. Попробовать ещё раз?'],
+    ['awaiting', 'Жду решения.'],
+    ['interrupted', 'Снова на связи.'],
   ] as const)('renders terminal status %s', (status, expected) => {
     expect(renderExecution(state({ status, thinking: true })).html).toContain(expected)
     expect(renderExecution(state({ status, thinking: true })).html).not.toContain('Агент работает')
@@ -115,7 +118,7 @@ describe('renderExecution', () => {
       action: { kind: 'inspect-required', status: 'recovering', missing: 'observation' },
     })).html
 
-    expect(html).toBe('❌ Не получилось ответить')
+    expect(html).toBe('Не получилось ответить. Попробовать ещё раз?')
     expect(html).not.toContain('0,1 с')
     expect(html).not.toContain('общая папка')
     expect(html).not.toContain('private command')
@@ -130,7 +133,7 @@ describe('renderExecution', () => {
       tool: { name: 'bash', status: 'running', arg: 'private command' },
     })).html
 
-    expect(html).toBe('↻ Gateway перезапущен. Продолжаю.')
+    expect(html).toBe('Снова на связи.')
     expect(html).not.toContain('0,1 с')
     expect(html).not.toContain('общая папка')
     expect(html).not.toContain('private command')
@@ -141,14 +144,41 @@ describe('renderExecution', () => {
     expect(renderExecution(state({ note: STEER_ACK })).html).toContain(STEER_ACK)
   })
 
-  it('says what it is doing instead of that it is working', () => {
+  it('does not narrate hidden thinking in ordinary chat', () => {
     const html = renderExecution(state({ thinking: true })).html
     expect(html).not.toContain('Агент работает')
-    expect(html).toContain('🧠 Думаю')
+    expect(html).toBe('Работаю…')
+    expect(html).not.toContain('Думаю')
+  })
+
+  it('keeps ordinary progress free of runtime diagnostics', () => {
+    const html = renderExecution(state({
+      elapsedMs: 12_400,
+      thinking: true,
+      tool: { name: 'read_file', status: 'running', arg: '/private/source' },
+      action: { kind: 'inspect-required', status: 'recovering', missing: 'observation' },
+    })).html
+    expect(html).toBe('Работаю…\nЧитаю файл…')
+    for (const forbidden of [
+      '12,4', 'общая папка', 'проект «Aisy»', 'Думаю', 'доказатель',
+      'проверяем', '/private/source', 'read_file', 'Действие:',
+    ]) expect(html).not.toContain(forbidden)
+  })
+
+  it('does not claim success for an unverified action', () => {
+    const html = renderExecution(state({
+      status: 'completed',
+      action: { kind: 'mutate-required', status: 'unverified' },
+    })).html
+    expect(html).toBe('Не уверен, что всё получилось.')
+    expect(html).not.toContain('Готово')
   })
 
   it('escapes dynamic content', () => {
-    const { html } = renderExecution(state({ steps: [{ index: 1, title: '<b>x</b>', status: 'done' }] }))
+    const { html } = renderExecution(
+      state({ steps: [{ index: 1, title: '<b>x</b>', status: 'done' }] }),
+      { debug: true },
+    )
     expect(html).toContain('&lt;b&gt;x&lt;/b&gt;')
   })
 

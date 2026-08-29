@@ -84,7 +84,7 @@ export function renderEvent(ev: UiEvent): BotMessage | null {
 
     case 'error':
       return {
-        html: `❌ ${escapeHtml(ev.what)} · ${escapeHtml(ev.detail)}`,
+        html: `${escapeHtml(ev.what)}. ${escapeHtml(ev.detail)}`,
         buttons: [[btn('🔄 Повторить', 'error:retry')]],
       }
 

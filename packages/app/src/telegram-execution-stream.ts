@@ -60,6 +60,8 @@ export function makeTelegramExecutionStream(input: {
   /** How often the card refreshes while nothing happens, so the stopwatch on
    *  screen keeps moving during a long silent think. */
   heartbeatMs?: number
+  /** Explicit operator debug mode; ordinary Telegram stays redacted by default. */
+  debug?: boolean
   output: TelegramExecutionStreamOutput
   signal: AbortSignal
   editIntervalMs?: number
@@ -194,7 +196,7 @@ export function makeTelegramExecutionStream(input: {
     // clock, and a clock that only moves when something happens is a lie.
     state.elapsedMs = Math.max(0, nowMs() - turnStartedAt)
     state.phaseMs = Math.max(0, nowMs() - phaseStartedAt)
-    const html = renderExecution(state).html
+    const html = renderExecution(state, { debug: input.debug === true }).html
     if (html === lastHtml) return
     const phase = terminal ? 'terminal' : messageId === null ? 'prepared' : 'bound'
     saveCheckpoint(phase, 'pending', messageId)
@@ -386,7 +388,13 @@ export function makeTelegramExecutionStream(input: {
       clearTimer()
       stopHeartbeat()
       terminal = true
-      state.status = terminalStatus(result)
+      // A locked turn deliberately drops action identity, but it must not also
+      // erase the only trustworthy bit of terminal state. Reuse the existing
+      // schema-compatible failed status so old checkpoints cannot turn an
+      // unverified action into a durable success receipt after rollback.
+      state.status = locked && result.state === 'ok' && result.actionStatus === 'unverified'
+        ? 'failed'
+        : terminalStatus(result)
       state.thinking = false
       if (locked) {
         delete state.tool

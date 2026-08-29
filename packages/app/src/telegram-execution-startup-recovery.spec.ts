@@ -423,7 +423,7 @@ describe('Telegram execution startup recovery coordinator', () => {
     })).resolves.toEqual({ kind: 'incomplete', code: 'QUIESCENCE_RELEASE_FAILED' })
     expect(output.editText).toHaveBeenCalledWith(
       91,
-      '↻ Gateway перезапущен. Продолжаю.',
+      'Снова на связи.',
     )
     expect(store.load()).toMatchObject({
       status: 'ready',
@@ -538,7 +538,7 @@ describe('Telegram execution startup recovery coordinator', () => {
     if (edits === 1) {
       expect(output.editText).toHaveBeenCalledWith(
         91,
-        '↻ Gateway перезапущен. Продолжаю.',
+        'Снова на связи.',
       )
     }
     expect(readFileSync(path, 'utf8')).not.toContain('telegram:42:turn-a')

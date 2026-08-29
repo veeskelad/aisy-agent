@@ -66,6 +66,14 @@ const TITLE: Record<ExecutionStatus, string> = {
   awaiting: '⏸ Жду решения',
   interrupted: '↻ Gateway перезапущен. Продолжаю.',
 }
+const ORDINARY_TITLE: Record<ExecutionStatus, string> = {
+  running: 'Работаю…',
+  completed: 'Готово.',
+  stopped: 'Остановился.',
+  failed: 'Не получилось ответить. Попробовать ещё раз?',
+  awaiting: 'Жду решения.',
+  interrupted: 'Снова на связи.',
+}
 const ACTION_KIND: Record<ActionView['kind'], string> = {
   'inspect-required': 'Проверка',
   'mutate-required': 'Изменение',
@@ -147,11 +155,20 @@ export function renderExecution(
 ): BotMessage {
   const debug = opts?.debug === true
   const status = state.status ?? 'running'
-  // Ошибка в недебажном чате — не повод показывать пользователю таймер,
-  // workspace, внутренние шаги и tool history. Server-side checkpoint остаётся
-  // доступен диагностике, а Telegram хранит только человеческий исход.
-  if ((status === 'failed' || status === 'interrupted') && !debug) {
-    return { html: TITLE[status] }
+  // Ordinary Telegram is a conversation, not a runtime console. Detailed
+  // steps, scope, timers, tool history and proof state remain available only
+  // through the explicit debug renderer and the server-side checkpoint.
+  if (!debug) {
+    if (status === 'completed' && state.action?.status === 'unverified') {
+      return { html: 'Не уверен, что всё получилось.' }
+    }
+    const lines = [ORDINARY_TITLE[status]]
+    if (status === 'running' && state.tool !== undefined) {
+      const label = TOOL_LABEL[state.tool.name]?.now
+      if (label !== undefined) lines.push(`${label[0]?.toUpperCase() ?? ''}${label.slice(1)}…`)
+    }
+    if (status === 'running' && state.note === STEER_ACK) lines.push(STEER_ACK)
+    return { html: lines.join('\n') }
   }
   const lines: string[] = []
 

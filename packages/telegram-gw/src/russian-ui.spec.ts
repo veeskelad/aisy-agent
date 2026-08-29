@@ -229,8 +229,9 @@ describe('интерфейс говорит по-русски', () => {
   })
 
   it('секунды считаются по-русски', () => {
-    const html = renderExecution({ steps: [], elapsedMs: 4_000 }).html
+    const html = renderExecution({ steps: [], elapsedMs: 4_000 }, { debug: true }).html
     expect(html).toContain('4,0 с')
     expect(html).not.toMatch(/\d+\.\ds/)
+    expect(renderExecution({ steps: [], elapsedMs: 4_000 }).html).not.toContain('4,0 с')
   })
 })

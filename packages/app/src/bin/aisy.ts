@@ -4170,6 +4170,13 @@ const {
   serverAccess,
   serverStatus: () => renderServerStatus(readServerStatus({ root: base, version: harnessVersion() })),
   onAgentState: (state) => { liveTurns = state === 'running' ? 1 : 0 },
+  reportTurnFailure: (failure) => {
+    void journal.append('provider', 'provider.turn_failed', {
+      code: failure.code,
+      errorName: failure.errorName,
+      model: modelLabel,
+    })
+  },
   restartRuntime: runtimeRestart,
   ...(durableTurnState === null
     ? {}

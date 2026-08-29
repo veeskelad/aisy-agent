@@ -6,7 +6,7 @@ import {
 } from './telegram-execution-checkpoint.js'
 import { makeTelegramExecutionStream } from './telegram-execution-stream.js'
 
-function harness() {
+function harness(debug = false) {
   const calls: string[] = []
   let now = 100
   const abort = new AbortController()
@@ -14,6 +14,7 @@ function harness() {
     sessionId: 'session-a',
     signal: abort.signal,
     editIntervalMs: 0,
+    debug,
     nowMs: () => now,
     output: {
       async sendText(html) { calls.push(`send:${html}`); return 9 },
@@ -24,7 +25,20 @@ function harness() {
 }
 
 describe('Telegram execution stream', () => {
-  it('keeps the clock moving while nothing happens', async () => {
+  it('shows technical lifecycle only in explicit debug mode', async () => {
+    const h = harness(true)
+    await h.stream.handle({ type: 'outbound-lockout', locked: false })
+    await h.stream.handle({ type: 'turn-started' })
+    await h.stream.handle({
+      type: 'tool-started', sequence: 1, name: 'read_file', category: 'tool', arg: 'src/app.ts',
+    })
+
+    const visible = h.calls.join('\n')
+    expect(visible).toContain('[отладка]')
+    expect(visible).toContain('▶️ читаю файл: <code>src/app.ts</code>')
+  })
+
+  it('does not churn the Telegram card just to show a clock', async () => {
     vi.useFakeTimers()
     try {
       const h = harness()
@@ -38,14 +52,14 @@ describe('Telegram execution stream', () => {
       h.advance(2_000)
       await vi.advanceTimersByTimeAsync(2_000)
 
-      expect(h.calls.length).toBeGreaterThan(before)
-      expect(h.calls.at(-1)).toContain('4,0 с')
+      expect(h.calls).toHaveLength(before)
+      expect(h.calls.at(-1)).toBe('send:Работаю…')
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('shows the command a tool was given, and keeps finished steps on screen', async () => {
+  it('shows only a human activity label without command or history', async () => {
     const h = harness()
     await h.stream.handle({ type: 'outbound-lockout', locked: false })
     await h.stream.handle({ type: 'turn-started' })
@@ -61,9 +75,9 @@ describe('Telegram execution stream', () => {
     })
 
     const last = h.calls.at(-1) ?? ''
-    expect(last).toContain('pytest -q')
-    expect(last).toContain('src/app.ts')
-    expect(last.indexOf('pytest -q')).toBeLessThan(last.indexOf('src/app.ts'))
+    expect(last).toBe('edit:9:Работаю…\nЧитаю файл…')
+    expect(h.calls.join('\n')).not.toContain('pytest -q')
+    expect(h.calls.join('\n')).not.toContain('src/app.ts')
   })
 
   it('renders code-owned tool lifecycle and a terminal status in one message', async () => {
@@ -76,12 +90,11 @@ describe('Telegram execution stream', () => {
     await h.stream.handle({ type: 'tool-completed', sequence: 1, name: 'read_file', category: 'tool' })
     await h.stream.complete({ state: 'ok', reply: 'done', narrowed: false })
 
-    expect(h.calls[0]).toContain('send:⚙️ Работаю')
-    expect(h.calls.some(call => call.includes('читаю файл') &&
-      call.includes('▶️'))).toBe(true)
-    // Время живёт в заголовке хода, а не на каждой строке.
-    expect(h.calls.some(call => call.includes('✅ читаю файл'))).toBe(true)
-    expect(h.calls.at(-1)).toContain('✅ Готово')
+    expect(h.calls[0]).toBe('send:Работаю…')
+    expect(h.calls).toContain('edit:9:Работаю…\nЧитаю файл…')
+    expect(h.calls.join('\n')).not.toContain('▶️')
+    expect(h.calls.join('\n')).not.toContain('✅ читаю файл')
+    expect(h.calls.at(-1)).toBe('edit:9:Готово.')
   })
 
   it('renders bridge calls of a subscription brain with their elapsed time', async () => {
@@ -96,11 +109,9 @@ describe('Telegram execution stream', () => {
     await h.stream.handle({ type: 'tool-result', toolCallId: 'mcp-1', result: 'notes.md' })
     await h.stream.complete({ state: 'ok', reply: 'готово', narrowed: false })
 
-    expect(h.calls.some(call => call.includes('смотрю папку') &&
-      call.includes('▶️'))).toBe(true)
-    expect(h.calls.some(call => call.includes('✅ смотрю папку'))).toBe(true)
-    // Ход всё равно под часами — иначе не отличить медленный шаг от зависшего.
-    expect(h.calls.some(call => call.includes('2,0 с'))).toBe(true)
+    expect(h.calls).toContain('edit:9:Работаю…\nСмотрю папку…')
+    expect(h.calls.join('\n')).not.toContain('▶️')
+    expect(h.calls.join('\n')).not.toContain('2,0 с')
     // Arguments and results stay out of the card, exactly as for native tools.
     expect(h.calls.some(call => call.includes('notes.md'))).toBe(false)
   })
@@ -127,7 +138,8 @@ describe('Telegram execution stream', () => {
       type: 'tool-completed', sequence: 1, name: 'spawn_subagent', category: 'subagent',
     })
 
-    expect(h.calls.some(call => call.includes('делегирую: spawn_subagent'))).toBe(true)
+    expect(h.calls).toContain('edit:9:Работаю…\nДелегирую…')
+    expect(h.calls.join('\n')).not.toContain('spawn_subagent')
   })
 
   it('renders only the code-owned cumulative usage event', async () => {
@@ -147,7 +159,7 @@ describe('Telegram execution stream', () => {
     expect(h.calls.join('\n')).not.toContain('Токены')
   })
 
-  it('renders code-owned action recovery and terminal verification', async () => {
+  it('keeps action recovery and verification in the private checkpoint', async () => {
     const h = harness()
     await h.stream.handle({ type: 'outbound-lockout', locked: false })
     await h.stream.handle({ type: 'turn-started' })
@@ -156,8 +168,9 @@ describe('Telegram execution stream', () => {
       type: 'action-recovery', kind: 'inspect-required', missing: 'observation',
     })
 
-    expect(h.calls.at(-1)).toContain('🔄 Не хватило доказательства — переспрашиваю')
-    expect(h.calls.at(-1)).toContain('Осталось: увидеть результат')
+    expect(h.calls.at(-1)).toBe('send:Работаю…')
+    expect(h.calls.join('\n')).not.toContain('доказательства')
+    expect(h.calls.join('\n')).not.toContain('Осталось:')
 
     await h.stream.complete({
       state: 'ok',
@@ -166,7 +179,7 @@ describe('Telegram execution stream', () => {
       actionContractKind: 'inspect-required',
       actionStatus: 'verified',
     })
-    expect(h.calls.at(-1)).toContain('✅ Результат подтверждён')
+    expect(h.calls.at(-1)).toBe('edit:9:Готово.')
     expect(h.calls.at(-1)).not.toContain('Нужно:')
   })
 
@@ -189,7 +202,8 @@ describe('Telegram execution stream', () => {
     expect(h.calls.join('\n')).not.toContain('provider_supplied_tool')
     expect(h.calls.join('\n')).not.toContain('Изменение')
     expect(h.calls.join('\n')).not.toContain('не подтверждён')
-    expect(h.calls.at(-1)).toContain('✅ Готово')
+    expect(h.calls.at(-1)).toBe('edit:9:Не получилось ответить. Попробовать ещё раз?')
+    expect(h.calls.at(-1)).not.toContain('Готово')
   })
 
   it('drops later events after cancellation', async () => {
@@ -276,7 +290,7 @@ describe('Telegram execution stream', () => {
     expect(content).not.toContain('not persisted in execution checkpoint')
     expect(content).not.toContain('arg')
     expect(content).not.toContain('result')
-    expect(calls.at(-1)).toContain('✅ Результат подтверждён')
+    expect(calls.at(-1)).toBe('Готово.')
   })
 
   it('adopts the exact active checkpoint under recovery instead of beginning a second turn', async () => {

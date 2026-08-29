@@ -149,6 +149,20 @@ const CUSTOM_SERVICE = '\u0000custom'
 const STALE_SCREEN = 'Экран устарел — открой раздел заново.'
 const NOT_WIRED = 'Раздел ещё не подключён.'
 const TELEGRAM_RESTART_REASON = /^telegram-update:(0|[1-9]\d*) · /u
+const PROVIDER_FAILURE_KINDS = new Set(['rate-limit', 'server-error', 'timeout', 'all-exhausted'])
+
+function classifyTurnFailure(error: unknown): Readonly<{ code: string; errorName: string }> {
+  if (typeof error === 'object' && error !== null && 'kind' in error) {
+    const kind = (error as { kind?: unknown }).kind
+    if (typeof kind === 'string' && PROVIDER_FAILURE_KINDS.has(kind)) {
+      return Object.freeze({ code: `provider.${kind}`, errorName: 'ProviderError' })
+    }
+  }
+  return Object.freeze({
+    code: 'turn.unclassified',
+    errorName: error instanceof Error ? 'Error' : 'UnknownError',
+  })
+}
 
 function restartReasonForTelegramUpdate(updateId: number, reason: string): string {
   if (!Number.isSafeInteger(updateId) || updateId < 0) throw new Error('INVALID_TELEGRAM_UPDATE_ID')
@@ -160,6 +174,12 @@ function restartTelegramUpdateId(reason: string): number | null {
   if (match?.[1] === undefined) return null
   const updateId = Number(match[1])
   return Number.isSafeInteger(updateId) ? updateId : null
+}
+
+function telegramMessageId(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || !('message_id' in value)) return null
+  const messageId = (value as { message_id?: unknown }).message_id
+  return Number.isSafeInteger(messageId) && Number(messageId) > 0 ? Number(messageId) : null
 }
 
 const SERVICE_KEY_ERRORS: Record<string, string> = {
@@ -476,6 +496,8 @@ export interface TelegramBotDeps {
     turnId?: string
     result: TurnResult
   }>) => void | Promise<void>
+  /** Content-free server-side classification for failed turns. Never receives error messages. */
+  reportTurnFailure?: (failure: Readonly<{ code: string; errorName: string }>) => void
   /** Authenticated operator wording observed for typed communication preferences. */
   observeAuthenticatedOperatorText?: (input: Readonly<{
     text: string
@@ -869,14 +891,14 @@ export function makeTelegramBot(deps: TelegramBotDeps) {
   // next one. The supervisor still handles real crashes; this handles the
   // ordinary ones, and says so in the chat rather than dying silently.
   bot.catch(async (error) => {
-    const detail = error.error instanceof Error ? error.error.message : String(error.error)
-    process.stderr.write(`aisy bot: ход не доставлен: ${detail}\n`)
+    const diagnostic = classifyTurnFailure(error.error)
+    process.stderr.write(`aisy bot: delivery failed: ${diagnostic.code}/${diagnostic.errorName}\n`)
     try {
       // Plain text: the failure may well *be* the HTML parser, so a reply that
       // needs parsing could fail the same way and lose the report too.
       await bot.api.sendMessage(
         deps.allowedChatId,
-        '⚠️ Не смог доставить ответ на это сообщение. Попробуй ещё раз — я на месте.',
+        'Не смог отправить ответ. Попробуй ещё раз.',
       )
     } catch { /* the chat is unreachable; the log above is the record */ }
   })
@@ -1471,12 +1493,9 @@ let pendingFormUntilMs = 0
       await bot.api.sendMessage(deps.allowedChatId, `❌ Не удалось начать сессию (${result.errorCode}).`)
       return
     }
-    await bot.api.sendMessage(
-      deps.allowedChatId,
-      `🆕 Новая сессия «${result.name}». Перезапускаюсь, чтобы разговор начался с чистого листа — память о тебе остаётся.`,
-    )
     await runRestart('новая сессия', (message) =>
-      bot.api.sendMessage(deps.allowedChatId, message), updateId)
+      bot.api.sendMessage(deps.allowedChatId, message), updateId,
+      `Новая сессия «${result.name}». Перезапускаюсь — память о тебе остаётся.`)
   }
 
   /** The sessions screen, reached both from the menu and from a project card. */
@@ -1521,8 +1540,12 @@ let pendingFormUntilMs = 0
         : 'Не удалось вернуться в эту сессию.')
       return
     }
-    await ctx.reply(`↩️ Возвращаюсь в сессию «${target.name}».`)
-    await runRestart('возврат в сессию', (message) => ctx.reply(message), ctx.update.update_id)
+    await runRestart(
+      'возврат в сессию',
+      (message) => ctx.reply(message),
+      ctx.update.update_id,
+      `Возвращаюсь в сессию «${target.name}».`,
+    )
   })
 
   const handleMenu = async (action: MenuAction, updateId: number): Promise<void> => {
@@ -1663,6 +1686,7 @@ let pendingFormUntilMs = 0
     const abort = new AbortController()
     currentAbort = abort
     let executionCardId: number | null = null
+    let terminalCardDeliveryFailed = false
     const makeReplyStream = (
       checkpoint?: NonNullable<Parameters<typeof makeTelegramReplyStream>[0]['checkpoint']>,
     ) => makeTelegramReplyStream({
@@ -1799,6 +1823,7 @@ let pendingFormUntilMs = 0
             ...(deps.activeProjectName?.() === undefined
               ? {}
               : { scope: deps.activeProjectName()! }),
+            debug: deps.settings?.get().debug === true,
             signal: abort.signal,
             ...(deps.streamEditIntervalMs === undefined
               ? {}
@@ -1998,7 +2023,8 @@ let pendingFormUntilMs = 0
         // A turn that worked needs no receipt: the answer is the receipt. The
         // card stays only when it carries something the operator must act on —
         // a failure, a stop, a pending decision.
-        if (result.state === 'ok' && executionCardId !== null) {
+        if (result.state === 'ok' && result.actionStatus !== 'unverified' &&
+          executionCardId !== null) {
           await bot.api.deleteMessage(deps.allowedChatId, executionCardId).catch(() => {})
           executionCardId = null
         }
@@ -2165,6 +2191,7 @@ let pendingFormUntilMs = 0
         if (propagateErrors) throw err
         return false
       }
+      try { deps.reportTurnFailure?.(classifyTurnFailure(err)) } catch { /* best-effort diagnostics */ }
       if (!executionAuthorityReleased) {
         try {
           await execution.current?.fail()
@@ -2174,12 +2201,15 @@ let pendingFormUntilMs = 0
             executionAuthorityReleased = true
           }
         } catch {
+          terminalCardDeliveryFailed = true
           if (executionAuthority.lease !== null && executionAuthority.lease.isHeld()) {
             executionAuthorityFatal = true
             executionAuthority.lease.failClosed()
           }
           if (propagateErrors) throw err
-          return false
+          // The terminal checkpoint is already pending. Continue into the
+          // single-card retry path below: it gets one more chance to edit the
+          // same card, then replaces it only after confirmed deletion.
         }
       }
       if (propagateErrors) throw err
@@ -2191,7 +2221,7 @@ let pendingFormUntilMs = 0
       const msg = renderEvent({
         kind: 'error',
         what: 'Не получилось ответить',
-        detail: 'Попробуй ещё раз.',
+        detail: 'Попробовать ещё раз?',
       })
       if (msg) {
         // Copy the spans: the caller's array must not be able to change what a
@@ -2200,21 +2230,42 @@ let pendingFormUntilMs = 0
           ? spanSource.map((span) => ({ ...span }))
           : null
         let retryMessageId: number | null = null
-        if (executionCardId !== null && msg.buttons && replayable !== null) {
+        let correctiveReplacementNeeded = false
+        if (executionCardId !== null && msg.buttons &&
+          (replayable !== null || terminalCardDeliveryFailed)) {
           const existingMessageId = executionCardId
-          const attached = await bot.api.editMessageReplyMarkup(
+          const attached = await bot.api.editMessageText(
             deps.allowedChatId,
             existingMessageId,
-            { reply_markup: toInlineKeyboard(msg.buttons) },
+            msg.html,
+            {
+              parse_mode: 'HTML',
+              ...(replayable === null
+                ? {}
+                : { reply_markup: toInlineKeyboard(msg.buttons) }),
+            },
           ).then(() => true).catch(() => false)
           if (attached) {
-            retryMessageId = existingMessageId
-            // The card now intentionally outlives the turn with its retry
-            // button; finally must not strip that markup.
-            executionCardId = null
+            if (replayable !== null) {
+              retryMessageId = existingMessageId
+              // The card now intentionally outlives the turn with its retry
+              // button; finally must not strip that markup.
+              executionCardId = null
+            }
+          } else {
+            const deleted = await bot.api.deleteMessage(
+              deps.allowedChatId,
+              existingMessageId,
+            ).then(() => true).catch(() => false)
+            if (deleted) executionCardId = null
+            // A running card that Telegram refuses to edit and delete cannot
+            // be made truthful in place. A corrective retry card is preferable
+            // to leaving the operator with a permanent false "Работаю…".
+            else correctiveReplacementNeeded = true
           }
         }
-        if (retryMessageId === null) {
+        if (retryMessageId === null &&
+          (executionCardId === null || correctiveReplacementNeeded)) {
           const sent = await bot.api
             .sendMessage(deps.allowedChatId, msg.html, {
               parse_mode: 'HTML',
@@ -2756,28 +2807,30 @@ let pendingFormUntilMs = 0
     reason: string,
     say: (message: string) => Promise<unknown>,
     updateId: number,
+    startingMessage = 'Перезапускаюсь. Скоро вернусь.',
   ): Promise<void> => {
-    if (!deps.restartRuntime) { await say('❌ Перезапуск не настроен.'); return }
+    if (!deps.restartRuntime) { await say('Перезапуск сейчас недоступен.'); return }
     const result = deps.restartRuntime.prepare(restartReasonForTelegramUpdate(updateId, reason))
     if (result === 'not-supervised') {
-      await say('❌ Некому запустить процесс обратно — перезапуск был бы просто остановкой.')
+      await say('Не могу перезапуститься: меня некому запустить обратно. Я остаюсь на связи.')
       return
     }
     if (result === 'busy') {
-      await say('❌ Сейчас я занят другой задачей. Дождись ответа и повтори.')
+      await say('Сначала закончу текущую задачу. Потом попробуй ещё раз.')
       return
     }
     if (result === 'intent-not-durable') {
-      await say('❌ Не удалось надёжно записать намерение перезапуска. Процесс оставлен запущенным.')
+      await say('Не получилось перезапуститься. Я остаюсь на связи.')
       return
     }
     if (result === 'restart-state-ambiguous') {
-      await say('❌ Состояние перезапуска неоднозначно. Безопасно продолжить нельзя; текущий процесс оставлен запущенным.')
+      await say('Не получилось перезапуститься. Я остаюсь на связи.')
       return
     }
     restartPending = true
+    let startReply: unknown
     try {
-      await say('♻️ Намерение перезапуска надёжно записано.')
+      startReply = await say(startingMessage)
     } catch {
       try { deps.restartRuntime.cancel(result) } catch { /* process remains alive */ }
       restartPending = false
@@ -2793,13 +2846,28 @@ let pendingFormUntilMs = 0
     restartPending = false
 
     const corrective: Record<Exclude<typeof committed, 'committed'>, string> = {
-      'already-committed': 'ℹ️ Завершение уже было подтверждено; повторная команда не выполнялась.',
-      'not-supervised': '❌ Связь с наблюдателем пропала. Завершение отменено, я остался запущенным.',
-      busy: '❌ Пока шло завершение, началась новая задача. Завершение отменено, я остался запущенным.',
-      'restart-state-ambiguous': '❌ Не удалось подтвердить завершение. Автоматически повторять команду не буду.',
+      'already-committed': 'Перезапуск уже начался.',
+      'not-supervised': 'Перезапуск отменился. Я остаюсь на связи.',
+      busy: 'Перезапуск отменился: началась новая задача. Я остаюсь на связи.',
+      'restart-state-ambiguous': 'Перезапуск не завершился. Я остаюсь на связи.',
     }
     try {
-      await say(corrective[committed])
+      const message = corrective[committed]
+      const messageId = telegramMessageId(startReply)
+      if (messageId !== null) {
+        const edited = await bot.api.editMessageText(
+          deps.allowedChatId,
+          messageId,
+          message,
+        ).then(() => true).catch(() => false)
+        if (!edited) {
+          const deleted = await bot.api.deleteMessage(
+            deps.allowedChatId,
+            messageId,
+          ).then(() => true).catch(() => false)
+          if (deleted) await say(message)
+        }
+      } else await say(message)
     } catch {
       // The original durable-intent acknowledgement was delivered. A failed
       // corrective reply must not re-enter commit or turn into an error loop.
@@ -3419,9 +3487,9 @@ let pendingFormUntilMs = 0
           deps.setBrainModel(model)
           // The adapter is built once at boot, so a live swap would lie about
           // which model answered. Restarting is honest and costs a few seconds.
-          await bot.api.sendMessage(deps.allowedChatId, `🧠 Модель: ${model}. Перезапускаюсь…`)
           await runRestart(`смена модели на ${model}`, (message) =>
-            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+            `Модель: ${model}. Перезапускаюсь.`)
           return
         }
         case 'custom-model':
@@ -3528,7 +3596,6 @@ let pendingFormUntilMs = 0
           return
         }
         case 'restart': {
-          await bot.api.sendMessage(deps.allowedChatId, '🔄 Перезапускаюсь…')
           await runRestart('перезапуск из настроек', (message) =>
             bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
           return
@@ -3539,12 +3606,9 @@ let pendingFormUntilMs = 0
             return
           }
           await deps.reconnectBrain()
-          await bot.api.sendMessage(
-            deps.allowedChatId,
-            '🔄 Сбрасываю мозг и перезапускаюсь в режиме настройки. Напиши /start через полминуты.',
-          )
           await runRestart('переподключение мозга', (message) =>
-            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+            bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+            'Переподключаю модель и перезапускаюсь. Скоро вернусь.')
           return
         }
       }
@@ -3812,12 +3876,12 @@ let pendingFormUntilMs = 0
             : `❌ Не удалось вернуться в сессию (${result.errorCode}).`)
           return
         }
-        await ctx.editMessageText(`↩️ Возвращаюсь в сессию «${tap.name}».`).catch(() => {})
         // Same reasoning as a project switch: the workspace root, memory scope,
         // transcript and approval port are derived once at boot, so the honest
         // way into another session is to come back up in it.
         await runRestart('возврат в сессию', (message) =>
-          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+          `Возвращаюсь в сессию «${tap.name}».`)
         return
       }
       await ctx.editMessageText(tap.view.text, {
@@ -3840,14 +3904,14 @@ let pendingFormUntilMs = 0
       }
       const outcome = await deps.projectControls.handle(data)
       if (outcome.kind === 'switched') {
-        await ctx.editMessageText(outcome.text).catch(() => {})
         // The workspace root, memory scope, transcript and approval port are
         // all derived once at boot. Re-deriving them mid-process would leave
         // six subsystems to keep in step; the selection is durable, so coming
         // back up in the new context is both simpler and impossible to get
         // half-right.
         await runRestart('переключение проекта', (message) =>
-          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+          bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+          `${outcome.text}\nПерезапускаюсь.`)
         return
       }
       if (outcome.kind === 'unavailable') {
@@ -3999,9 +4063,9 @@ let pendingFormUntilMs = 0
         return
       }
       deps.setBrainModel(model)
-      await bot.api.sendMessage(deps.allowedChatId, `🧠 Модель: ${model}. Перезапускаюсь…`)
       await runRestart(`смена модели на ${model}`, (message) =>
-        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+        `Модель: ${model}. Перезапускаюсь.`)
       return
     }
 
@@ -4013,12 +4077,9 @@ let pendingFormUntilMs = 0
         await bot.api.sendMessage(deps.allowedChatId, `❌ ${created.error}`)
         return
       }
-      await bot.api.sendMessage(
-        deps.allowedChatId,
-        `📁 Проект «${created.name}» создан: ${created.root}\nПерезапускаюсь в нём.`,
-      )
       await runRestart('новый проект', (message) =>
-        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
+        bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+        `Проект «${created.name}» создан. Перезапускаюсь в нём.`)
       return
     }
 
@@ -4172,11 +4233,11 @@ let pendingFormUntilMs = 0
         })
         if (outcome) {
           if (outcome.kind === 'switched' || outcome.kind === 'unavailable') {
-            await ctx.reply(outcome.text)
             if (outcome.kind === 'switched') {
               await runRestart('переключение проекта', (message) =>
-                bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id)
-            }
+                bot.api.sendMessage(deps.allowedChatId, message), ctx.update.update_id,
+                `${outcome.text}\nПерезапускаюсь.`)
+            } else await ctx.reply(outcome.text)
           } else if (outcome.kind === 'view' || outcome.kind === 'stale') {
             await ctx.reply(outcome.view.text, {
               reply_markup: toInlineKeyboard(outcome.view.buttons),
@@ -4237,7 +4298,7 @@ let pendingFormUntilMs = 0
         await ctx.reply('Правок уже нет.')
         return
       } catch {
-        await ctx.reply('Не смогла открыть правки памяти. Попробуй ещё раз.')
+        await ctx.reply('Не смог открыть правки памяти. Попробуй ещё раз.')
         return
       }
     }

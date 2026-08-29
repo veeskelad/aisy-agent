@@ -54,6 +54,7 @@ function harness(
       'cancel' | 'previous' | 'acknowledgePrevious'>>,
   options: {
     replyError?: Error
+    methodFailures?: Record<string, number>
     order?: string[]
     deps?: Partial<TelegramBotDeps>
   } = {},
@@ -78,12 +79,28 @@ function harness(
   bot.api.config.use(async (_previous, method, payload) => {
     options.order?.push('reply')
     if (options.replyError !== undefined) throw options.replyError
+    const failures = options.methodFailures?.[method] ?? 0
+    if (failures > 0) {
+      options.methodFailures![method] = failures - 1
+      throw new Error(`${method} unavailable`)
+    }
     calls.push({ method, payload: payload as Record<string, unknown> })
+    if (method === 'sendMessage') {
+      return {
+        ok: true,
+        result: { message_id: 77, date: 0, chat: { id: 42, type: 'private' }, text: '' },
+      } as never
+    }
     return { ok: true, result: true } as never
   })
   return {
     bot,
+    calls,
     replies: () => calls.map((call) => String(call.payload['text'] ?? '')).join('\n'),
+    sentReplies: () => calls.filter((call) => call.method === 'sendMessage')
+      .map((call) => String(call.payload['text'] ?? '')),
+    editedReplies: () => calls.filter((call) => call.method === 'editMessageText')
+      .map((call) => String(call.payload['text'] ?? '')),
   }
 }
 
@@ -97,8 +114,8 @@ describe('/restart command', () => {
 
     expect(prepare).toHaveBeenCalledWith('telegram-update:1 · после обновления')
     expect(commitExit).not.toHaveBeenCalled()
-    expect(h.replies()).toContain('Не удалось надёжно записать намерение перезапуска')
-    expect(h.replies()).toContain('Процесс оставлен запущенным')
+    expect(h.replies()).toBe('Не получилось перезапуститься. Я остаюсь на связи.')
+    expect(h.replies()).not.toContain('намерение')
     expect(h.replies()).not.toContain('Перезапускаюсь')
   })
 
@@ -110,8 +127,7 @@ describe('/restart command', () => {
 
     await h.bot.handleUpdate(update())
 
-    expect(h.replies()).toContain('Состояние перезапуска неоднозначно')
-    expect(h.replies()).toContain('текущий процесс оставлен запущенным')
+    expect(h.replies()).toBe('Не получилось перезапуститься. Я остаюсь на связи.')
     expect(h.replies()).not.toContain('Новая запись не создана')
     expect(h.replies()).not.toContain('Завершаю текущий процесс')
     expect(h.replies()).not.toContain('Вернусь')
@@ -132,16 +148,16 @@ describe('/restart command', () => {
 
     expect(order).toEqual(['prepare', 'reply', 'commit'])
     expect(commitExit).toHaveBeenCalledOnce()
-    expect(h.replies()).toContain('Намерение перезапуска надёжно записано')
-    expect(h.replies()).not.toContain('Вернусь')
+    expect(h.replies()).toBe('Перезапускаюсь. Скоро вернусь.')
+    expect(h.replies()).not.toContain('намерение')
     expect(h.replies()).not.toContain('перезапустился')
   })
 
   it.each([
-    ['already-committed', 'повторная команда не выполнялась'],
-    ['not-supervised', 'Завершение отменено'],
-    ['busy', 'началась новая задача'],
-    ['restart-state-ambiguous', 'Не удалось подтвердить завершение'],
+    ['already-committed', 'Перезапуск уже начался.'],
+    ['not-supervised', 'Перезапуск отменился. Я остаюсь на связи.'],
+    ['busy', 'Перезапуск отменился: началась новая задача. Я остаюсь на связи.'],
+    ['restart-state-ambiguous', 'Перезапуск не завершился. Я остаюсь на связи.'],
   ] as const)('handles commit result %s without a false exit claim', async (commitResult, expected) => {
     const h = harness({
       prepare: () => validRestartIntent(),
@@ -150,9 +166,39 @@ describe('/restart command', () => {
 
     await h.bot.handleUpdate(update())
 
-    expect(h.replies()).toContain('Намерение перезапуска надёжно записано')
+    expect(h.replies()).toContain('Перезапускаюсь. Скоро вернусь.')
     expect(h.replies()).toContain(expected)
-    expect(h.replies()).not.toContain('Завершаю текущий процесс')
+    expect(h.sentReplies()).toEqual(['Перезапускаюсь. Скоро вернусь.'])
+    expect(h.editedReplies()).toEqual([expected])
+    expect(h.replies()).not.toContain('намерение')
+    expect(h.replies()).not.toContain('подтвердить завершение')
+  })
+
+  it('replaces the start message only after a failed correction edit was deleted', async () => {
+    const h = harness({
+      prepare: () => validRestartIntent(),
+      commitExit: async () => 'not-supervised',
+    }, { methodFailures: { editMessageText: 1 } })
+
+    await h.bot.handleUpdate(update())
+
+    expect(h.sentReplies()).toEqual([
+      'Перезапускаюсь. Скоро вернусь.',
+      'Перезапуск отменился. Я остаюсь на связи.',
+    ])
+    expect(h.calls.some((call) => call.method === 'deleteMessage')).toBe(true)
+  })
+
+  it('does not add a contradictory reply when correction and deletion both fail', async () => {
+    const h = harness({
+      prepare: () => validRestartIntent(),
+      commitExit: async () => 'not-supervised',
+    }, { methodFailures: { editMessageText: 1, deleteMessage: 1 } })
+
+    await h.bot.handleUpdate(update())
+
+    expect(h.sentReplies()).toEqual(['Перезапускаюсь. Скоро вернусь.'])
+    expect(h.editedReplies()).toEqual([])
   })
 
   it('turns a throwing exit callback into a best-effort corrective reply', async () => {
@@ -162,7 +208,7 @@ describe('/restart command', () => {
     })
 
     await expect(h.bot.handleUpdate(update())).resolves.toBeUndefined()
-    expect(h.replies()).toContain('Не удалось подтвердить завершение')
+    expect(h.replies()).toContain('Перезапуск не завершился. Я остаюсь на связи.')
   })
 
   it('keeps the process alive when Telegram does not accept the reply', async () => {

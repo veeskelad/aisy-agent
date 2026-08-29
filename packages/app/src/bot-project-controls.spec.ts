@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Update, UserFromGetMe } from 'grammy/types'
 import type { Gateway } from '@aisy/core'
 import { makeTelegramBot } from './bot.js'
@@ -89,6 +89,7 @@ function harness(
     },
   }
   const calls: Array<{ method: string; payload: unknown }> = []
+  const commitExit = vi.fn(async () => 'committed' as const)
   const { bot } = makeTelegramBot({
     token: 'test-token',
     allowedChatId: 42,
@@ -100,6 +101,17 @@ function harness(
     } as Gateway,
     acquireTurnRuntime: async () => { throw new Error('turn runtime must not run') },
     projectControls,
+    restartRuntime: {
+      prepare: (reason) => ({
+        requestedAt: '2026-08-29T00:00:00.000Z',
+        reason,
+        activeTurns: 0,
+      }),
+      commitExit,
+      cancel: () => 'cancelled',
+      previous: () => null,
+      acknowledgePrevious: () => 'acknowledged',
+    },
     model: 'test-model',
     debounceMs: 1,
     registerCommands: false,
@@ -109,7 +121,7 @@ function harness(
     calls.push({ method, payload })
     return { ok: true, result: true } as never
   })
-  return { bot, calls, opened, handled, authenticatedTexts }
+  return { bot, calls, opened, handled, authenticatedTexts, commitExit }
 }
 
 describe('Telegram project controls transport', () => {
@@ -141,8 +153,12 @@ describe('Telegram project controls transport', () => {
 
     await h.bot.handleUpdate(callbackUpdate(2, 42, 'project:workspace'))
     expect(h.handled).toEqual(['project:workspace'])
-    expect(h.calls.some((call) => call.method === 'editMessageText' &&
-      (call.payload as { text?: string }).text === '✅ Контекст: Workspace')).toBe(true)
+    expect(h.calls.filter((call) => call.method === 'sendMessage').map((call) =>
+      (call.payload as { text?: string }).text)).toEqual([
+      VIEW.text,
+      '✅ Контекст: Workspace\nПерезапускаюсь.',
+    ])
+    expect(h.commitExit).toHaveBeenCalledOnce()
   })
 
   it('re-renders a stale card with a toast and keeps unavailable actions code-owned', async () => {
@@ -186,7 +202,10 @@ describe('Telegram project controls transport', () => {
     await h.bot.handleUpdate(textUpdate(1, 42, 'switch to Project A'))
 
     expect(h.authenticatedTexts).toEqual(['switch to Project A'])
-    expect(h.calls.some((call) => call.method === 'sendMessage' &&
-      (call.payload as { text?: string }).text === '✅ Контекст: Project A')).toBe(true)
+    expect(h.calls.filter((call) => call.method === 'sendMessage').map((call) =>
+      (call.payload as { text?: string }).text)).toEqual([
+      '✅ Контекст: Project A\nПерезапускаюсь.',
+    ])
+    expect(h.commitExit).toHaveBeenCalledOnce()
   })
 })

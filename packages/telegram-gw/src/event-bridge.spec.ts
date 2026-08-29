@@ -50,7 +50,7 @@ describe('renderEvent', () => {
 
   it('error renders a retry button', () => {
     const msg = renderEvent({ kind: 'error', what: 'Провайдер недоступен', detail: 'timeout' })!
-    expect(msg.html).toContain('❌ Провайдер недоступен · timeout')
+    expect(msg.html).toBe('Провайдер недоступен. timeout')
     expect(msg.buttons?.[0]?.[0]?.data).toBe('error:retry')
   })
 

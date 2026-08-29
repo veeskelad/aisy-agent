@@ -39,15 +39,22 @@ function voiceUpdate(): Update {
   } as Update
 }
 
-function harness(input: {
+function harness(options: {
   selectedProvider?: { id: string } | null
   ingress?: TelegramVoiceIngress
+  failure?: Error
+  methodFailures?: Record<string, number>
 } = {}) {
   const sent: string[] = []
   const seen: string[] = []
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = []
   const runner: AgentRunner = {
     async handle(input) {
       seen.push(...input.spans.map((span) => span.text))
+      if (options.failure !== undefined) {
+        await input.onProgress?.({ type: 'turn-started' })
+        throw options.failure
+      }
       return { state: 'ok', reply: 'услышал', narrowed: false }
     },
   }
@@ -71,7 +78,7 @@ function harness(input: {
     registerCommands: false,
     debounceMs: 1,
     captureWorkBinding: async () => ({ ...BINDING }),
-    voiceIngress: input.ingress ?? {
+    voiceIngress: options.ingress ?? {
       handle: vi.fn(async () => ({
         kind: 'transcribed' as const,
         binding: { ...BINDING },
@@ -87,14 +94,20 @@ function harness(input: {
     transcription: {
       list: () => [],
       select: () => ({ id: 'deepgram-cloud', label: 'Deepgram', audioLeavesHost: true }),
-      selected: () => input.selectedProvider === undefined
+      selected: () => options.selectedProvider === undefined
         ? { id: 'deepgram-cloud' }
-        : input.selectedProvider,
+        : options.selectedProvider,
     },
   })
   bot.botInfo = BOT_INFO
   let messageId = 100
   bot.api.config.use(async (_previous, method, payload) => {
+    const failures = options.methodFailures?.[method] ?? 0
+    if (failures > 0) {
+      options.methodFailures![method] = failures - 1
+      throw new Error(`${method} unavailable`)
+    }
+    calls.push({ method, payload: payload as Record<string, unknown> })
     if (method === 'sendMessage') {
       sent.push(String((payload as { text?: unknown }).text ?? ''))
       return {
@@ -107,7 +120,7 @@ function harness(input: {
     }
     return { ok: true, result: true } as never
   })
-  return { bot, sent, seen }
+  return { bot, sent, seen, calls }
 }
 
 async function settle(): Promise<void> {
@@ -135,5 +148,22 @@ describe('voice without the v2 turn runtime', () => {
     // a bug instead of into the settings screen.
     expect(h.seen).toEqual([])
     expect(h.sent.join('\n')).toContain('Расшифровка ещё не выбрана')
+  })
+
+  it('corrects a failed voice turn even when its running card cannot be edited or deleted', async () => {
+    const h = harness({
+      failure: new Error('private provider detail'),
+      methodFailures: { editMessageText: 2, deleteMessage: 1 },
+    })
+
+    await h.bot.handleUpdate(voiceUpdate())
+    await settle()
+
+    expect(h.sent).toEqual([
+      'Работаю…',
+      'Не получилось ответить. Попробовать ещё раз?',
+    ])
+    expect(JSON.stringify(h.calls)).not.toContain('private provider detail')
+    expect(JSON.stringify(h.calls)).not.toContain('error:retry')
   })
 })

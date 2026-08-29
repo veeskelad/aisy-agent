@@ -670,11 +670,12 @@ describe('Telegram structured reply streaming', () => {
 
     await h.bot.handleUpdate(textUpdate(1, 'Делегируй'))
     await waitFor(() => h.calls.some(call => call.method === 'editMessageText' &&
-      String(call.payload['text'] ?? '').includes('делегирую: spawn_subagent')))
+      String(call.payload['text'] ?? '').includes('Делегирую…')))
 
     const status = h.calls.filter(call => call.method === 'editMessageText')
       .map(call => String(call.payload['text'] ?? '')).join('\n')
-    expect(status).toContain('✅ делегирую: spawn_subagent')
+    expect(status).toContain('Делегирую…')
+    expect(status).not.toContain('spawn_subagent')
     expect(status).not.toContain('args')
     expect(status).not.toContain('result')
   })
@@ -917,7 +918,7 @@ describe('Telegram structured reply streaming', () => {
     await waitFor(() => handle.mock.calls.length === 1)
   })
 
-  it('renders action recovery and the authoritative unverified result', async () => {
+  it('keeps action recovery diagnostics out of ordinary Telegram', async () => {
     const h = harness({
       async handle(input) {
         await input.onProgress?.({ type: 'outbound-lockout', locked: false })
@@ -938,12 +939,16 @@ describe('Telegram structured reply streaming', () => {
 
     await h.bot.handleUpdate(textUpdate(1, 'Исправь файл'))
     await waitFor(() => h.calls.some(call => call.method === 'editMessageText' &&
-      String(call.payload['text'] ?? '').includes('⚠️ Результат не подтверждён')))
+      String(call.payload['text'] ?? '') === 'Не уверен, что всё получилось.'))
 
     const status = h.calls.filter(call => call.method === 'editMessageText')
       .map(call => String(call.payload['text'] ?? '')).join('\n')
-    expect(status).toContain('🎯 Действие: Изменение')
+    expect(status).not.toContain('Результат не подтверждён')
+    expect(status).not.toContain('Действие:')
+    expect(status).not.toContain('доказатель')
     expect(status).not.toContain('postcondition')
+    expect(status).not.toContain('Готово.')
+    expect(h.calls.some(call => call.method === 'deleteMessage')).toBe(false)
   })
 
   it('starts a durable redacted execution checkpoint before provider work', async () => {

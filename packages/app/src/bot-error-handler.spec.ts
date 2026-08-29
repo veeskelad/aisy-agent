@@ -89,6 +89,7 @@ function harness(options: { failWith?: Error } = {}) {
 
 describe('обработчик ошибок бота', () => {
   it('не даёт одной неудачной доставке уронить процесс', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true)
     // Ровно то, что случилось в проде: ответ с «<имя>» не прошёл HTML-разбор.
     const h = harness({
       failWith: new Error(
@@ -100,6 +101,10 @@ describe('обработчик ошибок бота', () => {
     // handleUpdates — именно этот путь использует polling, и именно он
     // применяет обработчик; handleUpdate в одиночку бросает по контракту grammY.
     await expect(h.deliver(textUpdate('/grants'))).resolves.toBeUndefined()
+    expect(stderr.mock.calls.some((call) => String(call[0]).includes('delivery failed'))).toBe(true)
+    expect(JSON.stringify(stderr.mock.calls)).not.toContain('имя')
+    expect(JSON.stringify(stderr.mock.calls)).not.toContain('byte offset')
+    stderr.mockRestore()
   })
 
   it('говорит оператору, что ход не доставлен, и остаётся на связи', async () => {
@@ -108,7 +113,7 @@ describe('обработчик ошибок бота', () => {
     await h.deliver(textUpdate('/grants'))
 
     const reported = h.texts().join('\n')
-    expect(reported).toContain('Не смог доставить ответ')
+    expect(reported).toContain('Не смог отправить ответ')
     // Отчёт идёт простым текстом: если сломался именно HTML-разбор, ответ с
     // разметкой утонул бы там же.
     const report = h.calls.find((c) => String(c.payload['text'] ?? '').includes('Не смог'))
