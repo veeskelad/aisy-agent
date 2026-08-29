@@ -214,6 +214,13 @@ function validManifest(value: unknown): value is SessionTranscriptManifestV1 {
       ID.test(item.migrationBoundaryFrom.sessionId) && HASH.test(item.migrationBoundaryFrom.legacyLogSha256))
 }
 
+/** Strict, side-effect-free parser shared by maintenance authority checks. */
+export function parseSessionTranscriptManifest(
+  value: unknown,
+): SessionTranscriptManifestV1 | null {
+  return validManifest(value) ? structuredClone(value) : null
+}
+
 function validRow(value: unknown): value is TranscriptEnvelope {
   if (!record(value) || !exactKeys(value, ROW_KEYS)) return false
   const row = value as unknown as TranscriptEnvelope

@@ -248,9 +248,11 @@ export type {
 export { makeProjectRegistryV2 } from './runtime/project-registry-v2-lifecycle.js'
 export type {
   ProjectRegistryV2,
+  ProjectRegistryV2DeletionReplacementResult,
   ProjectRegistryV2Event,
   ProjectRegistryV2Owner,
   ProjectRegistryV2PersistencePort,
+  ProjectRegistryV2SessionFence,
 } from './runtime/project-registry-v2-lifecycle.js'
 export { ContextLeaseError, makeContextLeaseCoordinator } from './runtime/context-lease.js'
 export type {
@@ -874,6 +876,7 @@ export type { ServiceOpts } from './runtime/service-files.js'
 export {
   computeTranscriptRowHash,
   makeSessionTranscript,
+  parseSessionTranscriptManifest,
   SessionTranscriptError,
   TranscriptCommitUncertainError,
   transcriptUpdatedAt,

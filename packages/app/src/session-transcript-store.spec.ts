@@ -1,5 +1,6 @@
 import {
   makeSessionTranscript,
+  parseSessionTranscriptManifest,
   TranscriptCommitUncertainError,
   type FrozenSnapshot,
   type TranscriptBinding,
@@ -16,7 +17,10 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { makeNodeSessionTranscriptPersistence } from './session-transcript-store.js'
+import {
+  makeNodeSessionTranscriptMaintenance,
+  makeNodeSessionTranscriptPersistence,
+} from './session-transcript-store.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -169,5 +173,73 @@ describe('Node session transcript persistence', () => {
     const store = makeNodeSessionTranscriptPersistence({ root: dir })
     await expect(store.loadManifest('../outside')).rejects.toThrow(/unsafe transcript identifier/)
     expect(existsSync(join(dir, 'outside'))).toBe(false)
+  })
+
+  it('rewrites only the deleted Session rows and removes controls in a later phase', async () => {
+    const dir = root()
+    const service = transcript(dir)
+    const other = { ...binding, sessionId: 'session-b' }
+    await service.createExactSession(binding, frozen, frozen.takenAt)
+    await service.createExactSession(other, frozen, frozen.takenAt)
+    await service.append(appendInput)
+    await service.append({
+      ...appendInput,
+      ...other,
+      eventId: 'event-b-1',
+      content: 'other session survives',
+    })
+    const maintenance = makeNodeSessionTranscriptMaintenance({ root: dir })
+    const persistence = makeNodeSessionTranscriptPersistence({ root: dir })
+    const persistedManifest = await persistence.loadManifest(binding.sessionId)
+    expect(await maintenance.currentHead(binding.sessionId))
+      .toBe(parseSessionTranscriptManifest(persistedManifest)?.hashHead)
+    let interleavedRead: Promise<unknown> | null = null
+
+    await expect(maintenance.purgeSession(binding.sessionId, () => {
+      interleavedRead = persistence.loadManifest(other.sessionId)
+    })).resolves
+      .toEqual({ removedRows: 1, retainedRows: 1 })
+    await expect(interleavedRead).rejects.toThrow('TRANSCRIPT_MAINTENANCE_IN_PROGRESS')
+    const bytes = readFileSync(join(dir, 'transcript-v2.jsonl'), 'utf8')
+    expect(bytes).not.toContain('full private dialogue')
+    expect(bytes).toContain('other session survives')
+    expect(existsSync(join(dir, 'sessions', binding.sessionId, 'manifest.json'))).toBe(true)
+    expect(existsSync(join(dir, 'sessions', other.sessionId, 'manifest.json'))).toBe(true)
+
+    await maintenance.removeSessionControls(binding.sessionId)
+    expect(existsSync(join(dir, 'sessions', binding.sessionId))).toBe(false)
+    expect(existsSync(join(dir, 'sessions', other.sessionId, 'manifest.json'))).toBe(true)
+    await expect(transcript(dir).append({
+      ...appendInput,
+      ...other,
+      eventId: 'event-b-2',
+      content: 'append after purge',
+    })).resolves.toMatchObject({ status: 'appended' })
+  })
+
+  it('keeps transcript bytes unchanged when any row is corrupt', async () => {
+    const dir = root()
+    const path = join(dir, 'transcript-v2.jsonl')
+    writeFileSync(path, '{"sessionId":"session-a","content":"private"}\n', { mode: 0o600 })
+    const before = readFileSync(path, 'utf8')
+
+    await expect(makeNodeSessionTranscriptMaintenance({ root: dir })
+      .purgeSession('session-a')).rejects.toThrow('SESSION_TRANSCRIPT_CORRUPT')
+    expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
+  it('drains the current writer before exclusive maintenance and blocks interleaving', async () => {
+    const dir = root()
+    const maintenance = makeNodeSessionTranscriptMaintenance({ root: dir })
+    let pendingPurge: Promise<unknown> | null = null
+    const service = transcript(dir, (point) => {
+      if (point !== 'after-wal') return
+      pendingPurge = maintenance.purgeSession(binding.sessionId)
+    })
+    await service.createExactSession(binding, frozen, frozen.takenAt)
+
+    await expect(service.append(appendInput)).resolves.toMatchObject({ status: 'appended' })
+    await expect(pendingPurge).resolves.toEqual({ removedRows: 1, retainedRows: 0 })
+    expect(readFileSync(join(dir, 'transcript-v2.jsonl'), 'utf8')).toBe('')
   })
 })

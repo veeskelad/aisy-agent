@@ -1,5 +1,6 @@
 import {
   computeTranscriptRowHash,
+  parseSessionTranscriptManifest,
   transcriptUpdatedAt,
   TranscriptCommitUncertainError,
   type SessionTranscriptManifestV1,
@@ -16,11 +17,13 @@ import {
   fsyncSync,
   ftruncateSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -46,6 +49,67 @@ const ROW_KEYS = new Set([
   'role', 'provenance', 'content', 'ts', 'loadBearing',
   'loadBearingClassifierVersion', 'prevSessionHash', 'rowHash',
 ])
+
+interface TranscriptMaintenanceGate {
+  enterWriter(): () => void
+  beginExclusive(): Promise<() => void>
+}
+
+const transcriptGates = new Map<string, TranscriptMaintenanceGate>()
+
+function gateFor(root: string): TranscriptMaintenanceGate {
+  const existing = transcriptGates.get(root)
+  if (existing !== undefined) return existing
+  let writers = 0
+  let exclusive = false
+  let exclusivePending = false
+  let releaseDrain: (() => void) | null = null
+  const gate: TranscriptMaintenanceGate = {
+    enterWriter() {
+      if (exclusive || exclusivePending) {
+        throw new Error('TRANSCRIPT_MAINTENANCE_IN_PROGRESS')
+      }
+      writers += 1
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        writers -= 1
+        if (writers === 0 && releaseDrain !== null) {
+          const resolve = releaseDrain
+          releaseDrain = null
+          resolve()
+        }
+      }
+    },
+    async beginExclusive() {
+      if (exclusive || exclusivePending) throw new Error('TRANSCRIPT_MAINTENANCE_BUSY')
+      exclusivePending = true
+      if (writers !== 0) {
+        await new Promise<void>((resolve) => { releaseDrain = resolve })
+      }
+      exclusive = true
+      exclusivePending = false
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        exclusive = false
+      }
+    },
+  }
+  transcriptGates.set(root, gate)
+  return gate
+}
+
+export interface NodeSessionTranscriptMaintenance {
+  currentHead(sessionId: string): Promise<string>
+  purgeSession(
+    sessionId: string,
+    afterRewrite?: () => void,
+  ): Promise<{ removedRows: number; retainedRows: number }>
+  removeSessionControls(sessionId: string): Promise<void>
+}
 
 function hasExactKeys(value: object, keys: ReadonlySet<string>): boolean {
   const actual = Object.keys(value)
@@ -145,6 +209,11 @@ export function makeNodeSessionTranscriptPersistence(input: {
   lease?: { assertOwned(): void }
 }): SessionTranscriptPersistencePort {
   const owned = (): void => { input.lease?.assertOwned() }
+  const gate = gateFor(input.root)
+  const asWriter = <T>(operation: () => T): T => {
+    const leave = gate.enterWriter()
+    try { return operation() } finally { leave() }
+  }
   owned()
   mkdirSync(input.root, { recursive: true, mode: 0o700 })
   chmodSync(input.root, 0o700)
@@ -265,74 +334,189 @@ export function makeNodeSessionTranscriptPersistence(input: {
     }
   }
 
-  owned()
-  for (const name of readdirSync(sessionsRoot)) {
-    if (!ID.test(name)) continue
-    try { recoverSession(name) } catch { /* marker is the durable startup result */ }
-  }
+  asWriter(() => {
+    owned()
+    for (const name of readdirSync(sessionsRoot)) {
+      if (!ID.test(name)) continue
+      try { recoverSession(name) } catch { /* marker is the durable startup result */ }
+    }
+  })
 
   return {
     async loadManifest(sessionId) {
-      owned()
-      safeId(sessionId)
-      recoverSession(sessionId)
-      assertNotQuarantined(sessionId)
-      return readManifestRaw(sessionId)
+      return asWriter(() => {
+        owned()
+        safeId(sessionId)
+        recoverSession(sessionId)
+        assertNotQuarantined(sessionId)
+        return readManifestRaw(sessionId)
+      })
     },
     async listRows(sessionId) {
-      owned()
-      safeId(sessionId)
-      recoverSession(sessionId)
-      assertNotQuarantined(sessionId)
-      return parseRows().filter(row => row.sessionId === sessionId)
+      return asWriter(() => {
+        owned()
+        safeId(sessionId)
+        recoverSession(sessionId)
+        assertNotQuarantined(sessionId)
+        return parseRows().filter(row => row.sessionId === sessionId)
+      })
     },
     async findEvent(eventId) {
-      owned()
-      safeId(eventId)
-      return parseRows().find(row => row.eventId === eventId) ?? null
+      return asWriter(() => {
+        owned()
+        safeId(eventId)
+        return parseRows().find(row => row.eventId === eventId) ?? null
+      })
     },
     async createManifest(manifest) {
-      owned()
-      safeId(manifest.sessionId)
-      const target = paths(manifest.sessionId)
-      assertNotQuarantined(manifest.sessionId)
-      createAtomic(target.manifest, JSON.stringify(manifest, null, 2) + '\n')
+      asWriter(() => {
+        owned()
+        safeId(manifest.sessionId)
+        const target = paths(manifest.sessionId)
+        assertNotQuarantined(manifest.sessionId)
+        createAtomic(target.manifest, JSON.stringify(manifest, null, 2) + '\n')
+      })
     },
     async commit(commit) {
-      owned()
-      safeId(commit.row.sessionId)
-      const target = paths(commit.row.sessionId)
-      recoverSession(commit.row.sessionId)
-      assertNotQuarantined(commit.row.sessionId)
-      if (!validWal(commit, commit.row.sessionId)) throw new Error('invalid transcript commit')
-      const current = readManifestRaw(commit.row.sessionId)
-      if (!current || !sameBinding(current, commit.nextManifest) ||
-        validManifestTransition(current, commit) !== 'expected') {
-        throw new Error('transcript manifest CAS conflict')
-      }
-      const existing = parseRows().find(row => row.eventId === commit.row.eventId)
-      if (existing && existing.rowHash !== commit.row.rowHash) throw new Error('transcript event id conflict')
+      asWriter(() => {
+        owned()
+        safeId(commit.row.sessionId)
+        const target = paths(commit.row.sessionId)
+        recoverSession(commit.row.sessionId)
+        assertNotQuarantined(commit.row.sessionId)
+        if (!validWal(commit, commit.row.sessionId)) throw new Error('invalid transcript commit')
+        const current = readManifestRaw(commit.row.sessionId)
+        if (!current || !sameBinding(current, commit.nextManifest) ||
+          validManifestTransition(current, commit) !== 'expected') {
+          throw new Error('transcript manifest CAS conflict')
+        }
+        const existing = parseRows().find(row => row.eventId === commit.row.eventId)
+        if (existing && existing.rowHash !== commit.row.rowHash) throw new Error('transcript event id conflict')
 
-      let walPublished = false
-      try {
-        saveAtomic(target.wal, JSON.stringify(commit, null, 2) + '\n')
-        walPublished = true
-        input.faultAt?.('after-wal')
-        if (!existing) appendRow(commit.row)
-        input.faultAt?.('after-row')
-        saveAtomic(target.manifest, JSON.stringify(commit.nextManifest, null, 2) + '\n')
-        input.faultAt?.('after-manifest')
-        unlinkSync(target.wal)
-        syncPath(target.directory)
-      } catch (error) {
-        if (walPublished) throw new TranscriptCommitUncertainError()
-        throw error
-      }
+        let walPublished = false
+        try {
+          saveAtomic(target.wal, JSON.stringify(commit, null, 2) + '\n')
+          walPublished = true
+          input.faultAt?.('after-wal')
+          if (!existing) appendRow(commit.row)
+          input.faultAt?.('after-row')
+          saveAtomic(target.manifest, JSON.stringify(commit.nextManifest, null, 2) + '\n')
+          input.faultAt?.('after-manifest')
+          unlinkSync(target.wal)
+          syncPath(target.directory)
+        } catch (error) {
+          if (walPublished) throw new TranscriptCommitUncertainError()
+          throw error
+        }
+      })
     },
     async quarantine(sessionId, reason) {
-      owned()
-      safeId(sessionId)
-      quarantineSync(sessionId, reason)
+      asWriter(() => {
+        owned()
+        safeId(sessionId)
+        quarantineSync(sessionId, reason)
+      })
     },
   }
+}
+
+export function makeNodeSessionTranscriptMaintenance(input: {
+  root: string
+  lease?: { assertOwned(): void }
+}): NodeSessionTranscriptMaintenance {
+  const gate = gateFor(input.root)
+  const transcriptPath = join(input.root, 'transcript-v2.jsonl')
+  const sessionsRoot = join(input.root, 'sessions')
+  const owned = (): void => { input.lease?.assertOwned() }
+
+  return Object.freeze<NodeSessionTranscriptMaintenance>({
+    async currentHead(sessionId) {
+      safeId(sessionId)
+      owned()
+      const releaseWriter = gate.enterWriter()
+      try {
+        const manifestPath = join(sessionsRoot, sessionId, 'manifest.json')
+        if (!existsSync(manifestPath)) throw new Error('SESSION_TRANSCRIPT_MANIFEST_MISSING')
+        let manifest: SessionTranscriptManifestV1
+      try {
+          const parsed = parseSessionTranscriptManifest(
+            JSON.parse(readBounded(manifestPath, MAX_CONTROL_BYTES)) as unknown,
+          )
+          if (parsed === null) throw new Error('invalid manifest')
+          manifest = parsed
+        } catch {
+          throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
+        }
+        const targetDirectory = join(sessionsRoot, sessionId)
+        if (manifest.sessionId !== sessionId ||
+          existsSync(join(targetDirectory, 'append.wal.json')) ||
+          existsSync(join(targetDirectory, 'quarantine.json'))) {
+          throw new Error('SESSION_TRANSCRIPT_MANIFEST_CORRUPT')
+        }
+        return manifest.hashHead
+      } finally {
+        releaseWriter()
+      }
+    },
+    async purgeSession(sessionId, afterRewrite) {
+      safeId(sessionId)
+      owned()
+      const release = await gate.beginExclusive()
+      try {
+        let removedRows = 0
+        let retainedRows = 0
+        if (existsSync(transcriptPath)) {
+          const text = readBounded(transcriptPath, MAX_TRANSCRIPT_BYTES)
+          if (text.length !== 0 && !text.endsWith('\n')) {
+            throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+          }
+          const retained: string[] = []
+          for (const line of text.split('\n')) {
+            if (line.length === 0) continue
+            if (Buffer.byteLength(line, 'utf8') > MAX_ROW_BYTES) {
+              throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+            }
+            let row: TranscriptEnvelope
+            try {
+              row = JSON.parse(line) as TranscriptEnvelope
+              if (typeof row !== 'object' || row === null || !hasExactKeys(row, ROW_KEYS) ||
+                typeof row.sessionId !== 'string' || !ID.test(row.sessionId) ||
+                typeof row.rowHash !== 'string' || !HASH.test(row.rowHash) ||
+                computeTranscriptRowHash(row) !== row.rowHash) {
+                throw new Error('invalid row')
+              }
+            } catch {
+              throw new Error('SESSION_TRANSCRIPT_CORRUPT')
+            }
+            if (row.sessionId === sessionId) removedRows += 1
+            else {
+              retained.push(line)
+              retainedRows += 1
+            }
+          }
+          saveAtomic(transcriptPath, retained.length === 0 ? '' : retained.join('\n') + '\n')
+        }
+        afterRewrite?.()
+        return { removedRows, retainedRows }
+      } finally {
+        release()
+      }
+    },
+    async removeSessionControls(sessionId) {
+      safeId(sessionId)
+      owned()
+      const release = await gate.beginExclusive()
+      try {
+        const directory = join(sessionsRoot, sessionId)
+        if (!existsSync(directory)) return
+        if (lstatSync(directory).isSymbolicLink()) {
+          throw new Error('SESSION_TRANSCRIPT_CONTROLS_UNSAFE')
+        }
+        rmSync(directory, { recursive: true, force: false })
+        syncPath(sessionsRoot)
+      } finally {
+        release()
+      }
+    },
+  })
 }

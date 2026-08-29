@@ -16,7 +16,7 @@ const POLICY = {
 }
 const OWNER = { operatorId: 'telegram:42', profileId: 'default' }
 
-function setup(initial?: ProjectRegistryStateV2) {
+function setup(initial?: ProjectRegistryStateV2, fenced = new Set<string>()) {
   let id = 0
   let tick = 0
   let durable = initial ?? makeFreshProjectRegistryV2({
@@ -41,6 +41,10 @@ function setup(initial?: ProjectRegistryStateV2) {
         durable = state
       },
     },
+    sessionFence: {
+      isFenced: ({ operatorId, profileId, projectId, sessionId }) =>
+        fenced.has(`${operatorId}\0${profileId}\0${projectId}\0${sessionId}`),
+    },
     emit: (event) => events.push(event),
   })
   return {
@@ -49,6 +53,9 @@ function setup(initial?: ProjectRegistryStateV2) {
     durable: () => durable,
     saves: () => saves,
     failNextSave: () => { failSave = true },
+    fence: (projectId: string, sessionId: string) => {
+      fenced.add(`${OWNER.operatorId}\0${OWNER.profileId}\0${projectId}\0${sessionId}`)
+    },
   }
 }
 
@@ -263,6 +270,134 @@ describe('ProjectRegistry v2 lifecycle', () => {
       query: '',
       includeArchived: false,
     })).toHaveLength(1)
+  })
+
+  it('physically deletes a fenced inactive Session without changing selection', () => {
+    const { registry, fence, saves } = setup()
+    const active = registry.getActive(OWNER)
+    const target = registry.createSession({
+      ...OWNER, projectId: active.projectId, name: 'Удалить меня',
+    })
+    const before = saves()
+    fence(active.projectId, target.id)
+
+    const deleted = registry.deleteSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: target.id,
+      expectedGeneration: active.generation,
+    })
+
+    expect(deleted.id).toBe(target.id)
+    expect(registry.getActive(OWNER)).toEqual(active)
+    expect(registry.snapshot().sessions.some((item) => item.id === target.id)).toBe(false)
+    expect(saves() - before).toBe(1)
+  })
+
+  it('selects an existing replacement before physically deleting the fenced active Session', () => {
+    const { registry, fence, saves } = setup()
+    const active = registry.getActive(OWNER)
+    const replacement = registry.createSession({
+      ...OWNER, projectId: active.projectId, name: 'Остаться',
+    })
+    const before = saves()
+    fence(active.projectId, active.sessionId)
+
+    const replacementResult = registry.selectSessionDeletionReplacement({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+    })
+
+    expect(replacementResult.selection).toMatchObject({
+      sessionId: replacement.id, generation: active.generation + 1,
+    })
+    expect(registry.snapshot().sessions.some((item) => item.id === active.sessionId)).toBe(true)
+    registry.deleteSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: active.sessionId,
+      expectedGeneration: replacementResult.selection.generation,
+    })
+    expect(registry.getActive(OWNER)).toEqual(replacementResult.selection)
+    expect(registry.snapshot().sessions.some((item) => item.id === active.sessionId)).toBe(false)
+    expect(saves() - before).toBe(2)
+  })
+
+  it('creates one exact replacement before deleting the only active Session', () => {
+    const { registry, fence, saves } = setup()
+    const active = registry.getActive(OWNER)
+    const before = saves()
+    fence(active.projectId, active.sessionId)
+
+    const result = registry.selectSessionDeletionReplacement({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      replacement: {
+        sessionId: 'delete-replacement-session',
+        createKeyHash: 'd'.repeat(64),
+        name: 'Новая сессия',
+      },
+    })
+
+    expect(result.replacementCreated).toMatchObject({
+      id: 'delete-replacement-session', createKeyHash: 'd'.repeat(64),
+    })
+    expect(result.selection).toMatchObject({
+      sessionId: 'delete-replacement-session', generation: active.generation + 1,
+    })
+    expect(registry.snapshot().sessions.map((item) => item.id).sort())
+      .toEqual(['delete-replacement-session', active.sessionId].sort())
+    registry.deleteSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: active.sessionId,
+      expectedGeneration: result.selection.generation,
+    })
+    expect(registry.snapshot().sessions.map((item) => item.id))
+      .toEqual(['delete-replacement-session'])
+    expect(saves() - before).toBe(2)
+  })
+
+  it('hides fenced Sessions and refuses unfenced deletion or tombstone resurrection', () => {
+    const { registry, fence, saves } = setup()
+    const active = registry.getActive(OWNER)
+    const target = registry.createSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: 'session-to-delete',
+      createKeyHash: 'e'.repeat(64),
+      name: 'Скрытая',
+    })
+    const beforeFence = saves()
+
+    expect(() => registry.deleteSession({
+      ...OWNER, projectId: active.projectId, sessionId: target.id,
+      expectedGeneration: active.generation,
+    })).toThrowError(expect.objectContaining({ code: 'SESSION_DELETE_NOT_FENCED' }))
+    expect(saves()).toBe(beforeFence)
+
+    fence(active.projectId, target.id)
+    expect(() => registry.getSession({
+      ...OWNER, projectId: active.projectId, sessionId: target.id,
+    })).toThrowError(expect.objectContaining({ code: 'SESSION_DELETED' }))
+    expect(registry.searchSessions({ ...OWNER, projectId: active.projectId, query: '' })
+      .some((item) => item.id === target.id)).toBe(false)
+
+    registry.deleteSession({
+      ...OWNER, projectId: active.projectId, sessionId: target.id,
+      expectedGeneration: active.generation,
+    })
+    expect(() => registry.createSession({
+      ...OWNER,
+      projectId: active.projectId,
+      sessionId: target.id,
+      createKeyHash: 'e'.repeat(64),
+      name: 'Воскресшая',
+    })).toThrowError(expect.objectContaining({ code: 'SESSION_DELETED' }))
   })
 
   it('restore revalidates overlap and never selects the restored Project', () => {

@@ -23,6 +23,7 @@ export interface ProjectRegistryV2Event {
     | 'session.created'
     | 'session.renamed'
     | 'session.archived'
+    | 'session.deleted'
     | 'session.restored'
   projectId: string
   sessionId?: string
@@ -31,6 +32,15 @@ export interface ProjectRegistryV2Event {
 
 export interface ProjectRegistryV2PersistencePort {
   saveAtomic(state: ProjectRegistryStateV2): void
+}
+
+export interface ProjectRegistryV2SessionFence {
+  isFenced(input: ProjectRegistryV2Owner & { projectId: string; sessionId: string }): boolean
+}
+
+export interface ProjectRegistryV2DeletionReplacementResult {
+  selection: ProjectSelectionV2
+  replacementCreated?: ProjectSessionRecord
 }
 
 export interface ProjectRegistryV2 {
@@ -74,6 +84,21 @@ export interface ProjectRegistryV2 {
     projectId: string
     sessionId: string
     expectedGeneration?: number
+  }): ProjectSessionRecord
+  selectSessionDeletionReplacement(input: ProjectRegistryV2Owner & {
+    projectId: string
+    sessionId: string
+    expectedGeneration: number
+    replacement?: {
+      sessionId: string
+      createKeyHash: string
+      name: string
+    }
+  }): ProjectRegistryV2DeletionReplacementResult
+  deleteSession(input: ProjectRegistryV2Owner & {
+    projectId: string
+    sessionId: string
+    expectedGeneration: number
   }): ProjectSessionRecord
   restoreSession(input: ProjectRegistryV2Owner & {
     projectId: string
@@ -126,6 +151,7 @@ export function makeProjectRegistryV2(deps: {
   nowIso: () => string
   newId: () => string
   persistence?: ProjectRegistryV2PersistencePort
+  sessionFence?: ProjectRegistryV2SessionFence
   emit?: (event: ProjectRegistryV2Event) => void
 }): ProjectRegistryV2 {
   let state = validateProjectRegistryStateV2(deps.state, deps.policy)
@@ -170,6 +196,16 @@ export function makeProjectRegistryV2(deps: {
     return found
   }
 
+  const assertNotFenced = (
+    owner: ProjectRegistryV2Owner,
+    projectId: string,
+    sessionId: string,
+  ): void => {
+    if (deps.sessionFence?.isFenced({ ...owner, projectId, sessionId }) === true) {
+      throw new ProjectRegistryV2Error('SESSION_DELETED')
+    }
+  }
+
   const allocateId = (candidate: ProjectRegistryStateV2): string => {
     const id = deps.newId().trim()
     if (id.length === 0 || candidate.projects.some((item) => item.id === id) ||
@@ -196,6 +232,9 @@ export function makeProjectRegistryV2(deps: {
           }
           return requested
         })()
+    const parent = candidate.projects.find((item) => item.id === projectId)
+    if (parent === undefined) throw new ProjectRegistryV2Error('PROJECT_NOT_FOUND')
+    assertNotFenced(parent, projectId, id)
     const record: ProjectSessionRecord = {
       id,
       projectId,
@@ -213,10 +252,14 @@ export function makeProjectRegistryV2(deps: {
 
   const latestActiveSession = (
     candidate: ProjectRegistryStateV2,
+    owner: ProjectRegistryV2Owner,
     projectId: string,
     excluding?: string,
   ): ProjectSessionRecord | undefined => candidate.sessions
-    .filter((item) => item.projectId === projectId && item.status === 'active' && item.id !== excluding)
+    .filter((item) => item.projectId === projectId && item.status === 'active' &&
+      item.id !== excluding && deps.sessionFence?.isFenced({
+        ...owner, projectId, sessionId: item.id,
+      }) !== true)
     .sort((left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id),
     )[0]
@@ -242,12 +285,16 @@ export function makeProjectRegistryV2(deps: {
     },
 
     getActive(rawOwner) {
-      return { ...selection(state, cleanOwner(rawOwner)) }
+      const owner = cleanOwner(rawOwner)
+      const current = selection(state, owner)
+      assertNotFenced(owner, current.projectId, current.sessionId)
+      return { ...current }
     },
 
     getSession(input) {
       const owner = cleanOwner(input)
       project(state, owner, input.projectId)
+      assertNotFenced(owner, input.projectId, input.sessionId)
       return { ...session(state, input.projectId, input.sessionId) }
     },
 
@@ -308,12 +355,13 @@ export function makeProjectRegistryV2(deps: {
         const target = project(candidate, owner, input.projectId)
         const events: ProjectRegistryV2Event[] = []
         let targetSession = input.sessionId === undefined
-          ? latestActiveSession(candidate, target.id)
+          ? latestActiveSession(candidate, owner, target.id)
           : session(candidate, target.id, input.sessionId)
         if (!targetSession) {
           targetSession = createSession(candidate, target.id, undefined)
           events.push({ kind: 'session.created', projectId: target.id, sessionId: targetSession.id })
         }
+        assertNotFenced(owner, target.id, targetSession.id)
         const next: ProjectSelectionV2 = {
           ...owner,
           projectId: target.id,
@@ -348,7 +396,7 @@ export function makeProjectRegistryV2(deps: {
           const workspace = candidate.projects.find(
             (item) => sameOwner(item, owner) && item.kind === 'workspace',
           )!
-          let targetSession = latestActiveSession(candidate, workspace.id)
+          let targetSession = latestActiveSession(candidate, owner, workspace.id)
           if (!targetSession) {
             targetSession = createSession(candidate, workspace.id, undefined)
             events.push({ kind: 'session.created', projectId: workspace.id, sessionId: targetSession.id })
@@ -400,6 +448,7 @@ export function makeProjectRegistryV2(deps: {
           ? undefined
           : candidate.sessions.find((item) => item.createKeyHash === input.createKeyHash)
         if (existing !== undefined) {
+          assertNotFenced(owner, input.projectId, existing.id)
           if (existing.projectId !== input.projectId || existing.id !== input.sessionId) {
             throw new ProjectRegistryV2Error('CORRUPT_STATE')
           }
@@ -409,6 +458,7 @@ export function makeProjectRegistryV2(deps: {
           ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
           ...(input.createKeyHash === undefined ? {} : { createKeyHash: input.createKeyHash }),
         })
+        assertNotFenced(owner, input.projectId, created.id)
         return {
           result: { ...created },
           events: [{ kind: 'session.created', projectId: input.projectId, sessionId: created.id }],
@@ -425,6 +475,7 @@ export function makeProjectRegistryV2(deps: {
           throw new ProjectRegistryV2Error('STALE_GENERATION')
         }
         project(candidate, owner, input.projectId)
+        assertNotFenced(owner, input.projectId, input.sessionId)
         const target = session(candidate, input.projectId, input.sessionId)
         target.name = cleanName(input.name)
         target.updatedAt = deps.nowIso()
@@ -444,6 +495,7 @@ export function makeProjectRegistryV2(deps: {
           throw new ProjectRegistryV2Error('STALE_GENERATION')
         }
         project(candidate, owner, input.projectId)
+        assertNotFenced(owner, input.projectId, input.sessionId)
         const target = session(candidate, input.projectId, input.sessionId)
         target.status = 'archived'
         target.updatedAt = deps.nowIso()
@@ -451,7 +503,7 @@ export function makeProjectRegistryV2(deps: {
           { kind: 'session.archived', projectId: input.projectId, sessionId: target.id },
         ]
         if (current.sessionId === target.id) {
-          let replacement = latestActiveSession(candidate, input.projectId, target.id)
+          let replacement = latestActiveSession(candidate, owner, input.projectId, target.id)
           if (!replacement) {
             replacement = createSession(candidate, input.projectId, undefined)
             events.push({ kind: 'session.created', projectId: input.projectId, sessionId: replacement.id })
@@ -469,8 +521,88 @@ export function makeProjectRegistryV2(deps: {
       })
     },
 
+    selectSessionDeletionReplacement(input) {
+      const owner = cleanOwner(input)
+      return publish((candidate) => {
+        const current = selection(candidate, owner)
+        if (current.generation !== input.expectedGeneration) {
+          throw new ProjectRegistryV2Error('STALE_GENERATION')
+        }
+        project(candidate, owner, input.projectId)
+        if (deps.sessionFence?.isFenced({
+          ...owner, projectId: input.projectId, sessionId: input.sessionId,
+        }) !== true) {
+          throw new ProjectRegistryV2Error('SESSION_DELETE_NOT_FENCED')
+        }
+        // Purposefully bypass assertNotFenced for the exact target: this
+        // code-owned operation must move selection away from a fenced Session.
+        const target = session(candidate, input.projectId, input.sessionId)
+        const events: ProjectRegistryV2Event[] = []
+        let replacementCreated: ProjectSessionRecord | undefined
+        if (current.projectId === input.projectId && current.sessionId === target.id) {
+          let replacement = latestActiveSession(candidate, owner, input.projectId, target.id)
+          if (replacement === undefined) {
+            if (input.replacement === undefined ||
+              !/^[a-f0-9]{64}$/u.test(input.replacement.createKeyHash)) {
+              throw new ProjectRegistryV2Error('CORRUPT_STATE')
+            }
+            assertNotFenced(owner, input.projectId, input.replacement.sessionId)
+            replacement = createSession(candidate, input.projectId, input.replacement.name, {
+              sessionId: input.replacement.sessionId,
+              createKeyHash: input.replacement.createKeyHash,
+            })
+            replacementCreated = { ...replacement }
+            events.push({
+              kind: 'session.created', projectId: input.projectId, sessionId: replacement.id,
+            })
+          }
+          current.sessionId = replacement.id
+          current.generation++
+          events.push({
+            kind: 'context.selected', projectId: input.projectId,
+            sessionId: replacement.id, generation: current.generation,
+          })
+        }
+        return {
+          result: {
+            selection: { ...current },
+            ...(replacementCreated === undefined ? {} : { replacementCreated }),
+          },
+          events,
+        }
+      })
+    },
+
+    deleteSession(input) {
+      const owner = cleanOwner(input)
+      return publish((candidate) => {
+        const current = selection(candidate, owner)
+        if (current.generation !== input.expectedGeneration) {
+          throw new ProjectRegistryV2Error('STALE_GENERATION')
+        }
+        project(candidate, owner, input.projectId)
+        if (deps.sessionFence?.isFenced({
+          ...owner, projectId: input.projectId, sessionId: input.sessionId,
+        }) !== true) {
+          throw new ProjectRegistryV2Error('SESSION_DELETE_NOT_FENCED')
+        }
+        const target = session(candidate, input.projectId, input.sessionId)
+        if (current.projectId === input.projectId && current.sessionId === target.id) {
+          throw new ProjectRegistryV2Error('CORRUPT_STATE')
+        }
+        candidate.sessions = candidate.sessions.filter((item) => item.id !== target.id)
+        return {
+          result: { ...target },
+          events: [{
+            kind: 'session.deleted', projectId: input.projectId, sessionId: target.id,
+          }],
+        }
+      })
+    },
+
     restoreSession(input) {
       const owner = cleanOwner(input)
+      assertNotFenced(owner, input.projectId, input.sessionId)
       return publish((candidate) => {
         project(candidate, owner, input.projectId)
         const target = session(candidate, input.projectId, input.sessionId, true)
@@ -489,6 +621,9 @@ export function makeProjectRegistryV2(deps: {
       const needle = input.query.trim().toLocaleLowerCase()
       return state.sessions
         .filter((item) => item.projectId === target.id &&
+          deps.sessionFence?.isFenced({
+            ...owner, projectId: target.id, sessionId: item.id,
+          }) !== true &&
           (input.includeArchived || item.status === 'active') &&
           (needle.length === 0 || item.name.toLocaleLowerCase().includes(needle)))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))

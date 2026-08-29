@@ -124,6 +124,16 @@ export interface ProjectService {
   isBindingActive(binding: WorkBinding): boolean
   releaseTurnContext(lease: TurnContextLease): Promise<void>
   releaseMaintenanceContext(lease: TurnContextLease): Promise<void>
+  /**
+   * Serializes the destructive publication for one exact Session with every
+   * context switch and lease acquisition owned by this service. The callback
+   * may perform read-only preflight, but must publish the durable fence and the
+   * replacement selection without an await between those two writes.
+   */
+  runSessionDeletionTransition<T>(input: ProjectRegistryV2Owner & {
+    projectId: string
+    sessionId: string
+  }, operation: () => Promise<T> | T): Promise<T>
   publishPreparedProject(input: ProjectRegistryV2Owner & {
     name: string
     slug?: string
@@ -192,6 +202,7 @@ export class ProjectServiceError extends Error {
       | 'TARGET_CONTEXT_NOT_FOUND'
       | 'PROJECT_LIFECYCLE_DISABLED'
       | 'CONTEXT_TRANSITION_IN_PROGRESS'
+      | 'CONTEXT_BUSY'
       | 'MAINTENANCE_LEASE_INVALID'
       | 'RESTORE_ROOT_INVALID',
   ) {
@@ -526,6 +537,24 @@ export function makeProjectService(deps: {
         throw new ProjectServiceError('MAINTENANCE_LEASE_INVALID')
       }
       await release(lease)
+    },
+
+    async runSessionDeletionTransition(input, operation) {
+      const owner = { operatorId: input.operatorId, profileId: input.profileId }
+      const endTransition = beginTransition(owner, {
+        blockInteractive: true,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+      })
+      try {
+        const targetBusy = [...(activeLeases.get(ownerKey(owner))?.values() ?? [])]
+          .some(({ lease }) => lease.projectId === input.projectId &&
+            lease.sessionId === input.sessionId)
+        if (targetBusy) throw new ProjectServiceError('CONTEXT_BUSY')
+        return await operation()
+      } finally {
+        endTransition()
+      }
     },
 
     async publishPreparedProject(input) {

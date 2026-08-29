@@ -118,6 +118,8 @@ export class ProjectRegistryV2Error extends Error {
       | 'PROJECT_ARCHIVED'
       | 'PROJECT_NOT_ARCHIVED'
       | 'SESSION_NOT_FOUND'
+      | 'SESSION_DELETED'
+      | 'SESSION_DELETE_NOT_FENCED'
       | 'SESSION_ARCHIVED'
       | 'SESSION_PROJECT_MISMATCH'
       | 'WORKSPACE_IMMUTABLE'
