@@ -308,6 +308,9 @@ import { makeTelegramSkillControls } from '../telegram-skill-controls.js'
 import { makeNewSessionRunner, makeResumeSessionRunner } from '../telegram-new-session.js'
 import { makeNodeSessionLabelStore } from '../session-label-store.js'
 import {
+  recoverNodeSessionAutoNameStore,
+} from '../session-auto-name-store.js'
+import {
   makeNodeSessionCreationStore,
   makeSessionCreationCoordinator,
 } from '../session-creation-coordinator.js'
@@ -1334,6 +1337,9 @@ if (projectRuntime.rotationAuthority === undefined) {
 const sessionLabels = makeNodeSessionLabelStore({
   path: join(base, 'session-labels-v1.json'),
 })
+const sessionAutoNames = recoverNodeSessionAutoNameStore({
+  path: join(base, 'session-auto-names-v1.json'),
+})
 const sessionCreation = makeSessionCreationCoordinator({
   registry: registryPair.registry,
   service: projectRuntime.service,
@@ -1861,6 +1867,12 @@ const sessionDeletionCoordinator = sessionTranscriptMaintenance === null
       journal: sessionDeletionJournal,
       creation: sessionCreation,
       labels: sessionLabels,
+      autoNames: {
+        assertAvailable: () => {
+          if (sessionAutoNames === null) throw new Error('SESSION_AUTO_NAME_PURGE_UNAVAILABLE')
+        },
+        removeSession: (sessionId) => sessionAutoNames!.removeSession(sessionId),
+      },
       transcript: sessionTranscriptMaintenance,
       activity: sessionDependants,
       attachments: {
@@ -3356,6 +3368,12 @@ const conversationalSessionControl = makeConversationalSessionControl({
     rename: telegramSessionControls.rename,
     requestDeletePreview: telegramSessionControls.requestDeletePreview,
   },
+  ...(sessionAutoNames === null ? {} : {
+    autoName: {
+      labels: sessionLabels,
+      proposals: sessionAutoNames,
+    },
+  }),
 })
 
 const durableSpawnByContext = new WeakMap<
@@ -4324,22 +4342,23 @@ const {
   settings,
   spend,
   budget,
-  ...(autoSkillRuntime === null
-    ? {}
-    : {
-        afterReplyDelivered: ({ sessionId, turnId, result }) => {
-          // Telegram has confirmed the main reply here. Only the supervised
-          // path supplies durable turnId and may count learning evidence.
-          if (turnId !== undefined && result.verifiedWorkflowDelivery !== undefined) {
-            autoSkillRuntime.confirmReply({
-              sessionId,
-              turnId,
-              evidenceId: result.verifiedWorkflowDelivery.evidenceId,
-            })
-          }
-          void autoSkillRuntime.drainAfterReply()
-        },
-      }),
+  afterReplyDelivered: ({ sessionId, turnId, result }) => {
+    if (turnId !== undefined) {
+      conversationalSessionControl.confirmReplyDelivered({ sessionId, turnId })
+    }
+    if (autoSkillRuntime !== null) {
+      // Telegram has confirmed the main reply here. Only the supervised
+      // path supplies durable turnId and may count learning evidence.
+      if (turnId !== undefined && result.verifiedWorkflowDelivery !== undefined) {
+        autoSkillRuntime.confirmReply({
+          sessionId,
+          turnId,
+          evidenceId: result.verifiedWorkflowDelivery.evidenceId,
+        })
+      }
+      void autoSkillRuntime.drainAfterReply()
+    }
+  },
   dailyBudget,
   executionMode,
   transcription,
@@ -4466,6 +4485,9 @@ const {
       sessionId,
       evidenceId: `telegram-update:${updateId}`,
     })
+  },
+  observeAuthenticatedOperatorTurn: ({ text, sessionId, turnId }) => {
+    conversationalSessionControl.observeAuthenticatedTurn({ text, sessionId, turnId })
   },
   captureWorkBinding: async () => staticWorkBinding,
   ...(mediaInbox === null ? {} : { attachmentInbox: mediaInbox.inbox }),

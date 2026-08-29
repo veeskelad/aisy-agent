@@ -507,6 +507,12 @@ export interface TelegramBotDeps {
     sessionId: string
     updateId: number
   }>) => void
+  /** Exact durable turn observed after Telegram authentication and batching. */
+  observeAuthenticatedOperatorTurn?: (input: Readonly<{
+    text: string
+    sessionId: string
+    turnId: string
+  }>) => void
   /** Selected first-person Russian gender for code-owned Telegram notices. */
   grammaticalGender?: () => 'masculine' | 'feminine' | 'neutral'
   /**
@@ -1930,6 +1936,23 @@ let pendingFormUntilMs = 0
           const firstOp = exactReplay?.spans.find(span =>
             span.role === 'user' && span.provenance === 'operator') ??
             spans?.find((s) => s.provenance === 'operator')
+          if (exactReplay === undefined && authority !== undefined && spans !== null) {
+            const operatorText = spans
+              .filter((span) => span.provenance === 'operator')
+              .map((span) => span.text)
+              .join('\n')
+            if (operatorText.length > 0) {
+              try {
+                deps.observeAuthenticatedOperatorTurn?.({
+                  text: operatorText,
+                  sessionId: runtime.sessionId,
+                  turnId: authority.turnId,
+                })
+              } catch {
+                // Session naming is optional metadata and cannot block a turn.
+              }
+            }
+          }
           if (firstOp !== undefined) lastLang = detectLanguage(firstOp.text) ?? lastLang
           const lang = firstOp !== undefined ? replyLanguageInstruction(firstOp.text, lastLang) : ''
           if (durableExecution !== undefined) {

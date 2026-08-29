@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Update, UserFromGetMe } from 'grammy/types'
 
 import { makeGateway, type AgentRunner } from '@aisy/core'
-import { makeTelegramBot, type TelegramBotDeps } from './bot.js'
+import {
+  makeTelegramBot,
+  makeTelegramTurnAuthority,
+  type TelegramBotDeps,
+} from './bot.js'
 import {
   authenticateExecutionSupervisorChild,
   encodeExecutionSupervisorFrame,
@@ -90,6 +94,7 @@ function harness(
   extraDeps: Pick<
     TelegramBotDeps,
     'getStaging' | 'grammaticalGender' | 'observeAuthenticatedOperatorText' |
+    'observeAuthenticatedOperatorTurn' |
     'takeConversationalSessionView'
   > = {},
 ) {
@@ -396,6 +401,7 @@ describe('Telegram structured reply streaming', () => {
       ]),
     })
     const seen: unknown[] = []
+    const observeTurn = vi.fn()
     const h = harness({
       async handle() { throw new Error('legacy-must-not-run') },
     }, true, authority, store, (_approve, _lease, turn) => {
@@ -406,12 +412,15 @@ describe('Telegram structured reply streaming', () => {
           return { state: 'ok', reply: 'recovered', narrowed: false }
         },
       }
+    }, undefined, undefined, false, {
+      observeAuthenticatedOperatorTurn: observeTurn,
     })
 
     await expect(h.resumeDurableTurn(exact)).resolves.toBe(true)
 
     expect(order).toEqual(['adopt', 'release'])
     expect(seen).toEqual([exact, exact.spans])
+    expect(observeTurn).not.toHaveBeenCalled()
   })
 
   it('adopts a checkpoint-bound recovery lease and the exact existing execution card', async () => {
@@ -571,6 +580,22 @@ describe('Telegram structured reply streaming', () => {
     await waitFor(() => h.calls.some(call => call.method === 'editMessageText'))
 
     expect(afterReplyDelivered).not.toHaveBeenCalled()
+  })
+
+  it('confirms the exact turn only after a successful terminal delivery', async () => {
+    const afterReplyDelivered = vi.fn()
+    const result = { state: 'ok' as const, reply: 'Готово.', narrowed: false }
+    const h = harness({ handle: vi.fn().mockResolvedValue(result) },
+      false, undefined, undefined, undefined, undefined, afterReplyDelivered)
+
+    await h.bot.handleUpdate(textUpdate(23, 'Подготовь план запуска'))
+    await waitFor(() => afterReplyDelivered.mock.calls.length === 1)
+
+    expect(afterReplyDelivered).toHaveBeenCalledWith({
+      sessionId: 'session-a',
+      turnId: makeTelegramTurnAuthority(42, [{ updateId: 23, unixSeconds: 23 }]).turnId,
+      result,
+    })
   })
 
   it('delivers the answer of a narrowed turn instead of holding it for a tap', async () => {
@@ -810,6 +835,26 @@ describe('Telegram structured reply streaming', () => {
       text: 'Говори короче',
       sessionId: '42',
       updateId: 17,
+    })
+  })
+
+  it('observes the exact authenticated batched turn before the runner starts', async () => {
+    const observeTurn = vi.fn()
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue({
+      state: 'ok', reply: 'Готово.', narrowed: false,
+    })
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { observeAuthenticatedOperatorTurn: observeTurn },
+    )
+
+    await h.bot.handleUpdate(textUpdate(19, 'Спланируй запуск нового продукта'))
+    await waitFor(() => handle.mock.calls.length === 1)
+
+    expect(observeTurn).toHaveBeenCalledWith({
+      text: 'Спланируй запуск нового продукта',
+      sessionId: 'session-a',
+      turnId: makeTelegramTurnAuthority(42, [{ updateId: 19, unixSeconds: 19 }]).turnId,
     })
   })
 

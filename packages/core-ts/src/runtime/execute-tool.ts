@@ -371,7 +371,8 @@ export function makeToolExecutor(
         }, context)
         if (!configured.ok) return configured
         const operation = arg(call, 'operation')
-        if (operation !== 'session.rename' && operation !== 'session.request-delete') {
+        if (operation !== 'session.rename' && operation !== 'session.request-delete' &&
+          operation !== 'session.propose-name') {
           return { ok: false, output: 'configure_agent: unsupported operation' }
         }
         const controlReceipt = makeAgentControlReceipt({

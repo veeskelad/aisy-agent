@@ -50,7 +50,9 @@ temporary bytes. Startup repair завершается до Telegram polling, п
 между registry create и label write не оставляет Session с потерянной семантикой
 имени. Все три пути создания обязаны использовать coordinator.
 
-Первый eligible turn может выпустить typed proposal с `turnId`, opaque target,
+Первый eligible turn может вызвать
+`configure_agent(operation=session.propose-name, target=current, value=…)`.
+Runtime превращает вызов в typed proposal с `turnId`, opaque target,
 expected generation/name revision и коротким именем. Eligible означает:
 authenticated operator text, не команда/кнопка, после NFKC содержит не менее
 трёх word tokens или 12 Unicode code points. Proposal атомарно сохраняется как
@@ -58,7 +60,14 @@ authenticated operator text, не команда/кнопка, после NFKC �
 Только existing `afterReplyDelivered` callback переводит exact proposal в
 `committed` и вызывает rename, пока label остаётся `temporary`. Failed,
 interrupted или ambiguous delivery не переименовывает Session; startup удаляет
-orphan pending после terminal turn recovery. Имя нормализуется, ограничивается
+orphan pending до Telegram polling после terminal turn recovery. Это
+conservative cleanup: после restart runtime не пытается угадать, был ли ответ
+доставлен. Повреждённый или неоднозначный optional proposal store целиком
+retire-ится с `fsync` каталога и открывается пустым. Если даже durable retire
+невозможен, auto-name отключается до ремонта, но Telegram polling и обычные turns
+запускаются. Физическое удаление Session в таком degraded-состоянии отказывается
+до durable cleanup store и не публикует deletion fence.
+Имя нормализуется, ограничивается
 64 видимыми символами и не содержит control/markup. Явное переименование
 публикует `explicit`; auto-rename больше его не меняет.
 
@@ -85,6 +94,9 @@ single-writer `session-deletions/` root, и проходит фазы:
 provider-purge-pending → provider-purged → transcript-rewrite-prepared → transcript-rewritten →
 registry-removed → target-controls-removed → terminal → restart-requested →
 restart-acknowledged`.
+
+`target-controls-removed` удаляет также любой pending auto-name exact Session;
+после физического удаления metadata предложения не остаётся в runtime state.
 
 Durable marker `prepared-and-fenced` устанавливает `SessionLifecycleFence`.
 Его publication и любая `list/get/switch/resume`, `acquireTurnContext`,

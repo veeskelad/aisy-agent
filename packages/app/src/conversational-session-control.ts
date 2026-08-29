@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 
 import type { ProjectRegistryV2Owner, ToolExecutionContext } from '@aisy/core'
 import type { NodeProjectServiceRuntime } from './project-service-runtime.js'
+import { normalizeSessionName } from './session-creation-coordinator.js'
+import type { SessionAutoNameStore } from './session-auto-name-store.js'
+import type { SessionLabelStore } from './session-label-store.js'
 import type {
   TelegramSessionControls,
   TelegramSessionView,
@@ -21,10 +24,34 @@ export interface ConversationalSessionControl {
     target: string
     value?: string
   }, context: ToolExecutionContext): Promise<
-    | { ok: true; output: string; outcome: 'session-renamed' | 'session-delete-preview' }
+    | {
+        ok: true
+        output: string
+        outcome: 'session-renamed' | 'session-delete-preview' | 'session-name-proposed'
+      }
     | { ok: false; output: string }
   >
   takeView(context: Pick<ToolExecutionContext, 'sessionId' | 'turnId'>): TelegramSessionView | null
+  observeAuthenticatedTurn(input: Readonly<{
+    text: string
+    sessionId: string
+    turnId: string
+  }>): void
+  confirmReplyDelivered(input: Readonly<{ sessionId: string; turnId: string }>): boolean
+  recoverPendingAutoNames(): number
+}
+
+interface EligibleAutoNameTurn extends HandleRecord {
+  labelRevision: number
+}
+
+export function isEligibleSessionAutoNameText(text: string): boolean {
+  const normalized = text.normalize('NFKC').trim()
+  if (normalized.length === 0 || normalized.startsWith('/') || /[\p{Cc}\p{Cf}]/u.test(normalized)) {
+    return false
+  }
+  const words = normalized.match(/[\p{L}\p{N}]+/gu)?.length ?? 0
+  return words >= 3 || Array.from(normalized).length >= 12
 }
 
 export function makeConversationalSessionControl(input: {
@@ -34,11 +61,17 @@ export function makeConversationalSessionControl(input: {
     rename(sessionId: string, name: string): ReturnType<TelegramSessionControls['rename']>
     requestDeletePreview(sessionId: string, expectedGeneration: number): Promise<TelegramSessionView>
   }
+  autoName?: {
+    labels: Pick<SessionLabelStore, 'get'>
+    proposals: SessionAutoNameStore
+    nowIso?: () => string
+  }
   newHandle?: () => string
   maxSessions?: number
 }): ConversationalSessionControl {
   const handles = new Map<string, HandleRecord>()
   const pendingViews = new Map<string, { sessionId: string; view: TelegramSessionView }>()
+  const eligibleAutoNameTurns = new Map<string, EligibleAutoNameTurn>()
   const maxSessions = Math.min(Math.max(input.maxSessions ?? 12, 1), 20)
   const newHandle = input.newHandle ?? (() => randomUUID())
 
@@ -138,9 +171,49 @@ export function makeConversationalSessionControl(input: {
           return { ok: false, output: 'Не удалось открыть карточку удаления. Открой список и попробуй ещё раз.' }
         }
       }
+      if (request.operation === 'session.propose-name') {
+        const turnId = contextTurn(context)
+        const eligible = turnId === null ? undefined : eligibleAutoNameTurns.get(turnId)
+        eligibleAutoNameTurns.delete(turnId ?? '')
+        if (input.autoName === undefined || turnId === null || request.target !== 'current' ||
+          eligible === undefined || eligible.sessionId !== target.sessionId ||
+          eligible.projectId !== target.projectId || eligible.generation !== target.generation) {
+          return { ok: false, output: 'Автоматическое название сейчас не требуется.' }
+        }
+        let name: string
+        try {
+          name = normalizeSessionName(request.value ?? '')
+        } catch {
+          return { ok: false, output: 'Предложи короткое название без разметки.' }
+        }
+        const label = input.autoName.labels.get(target.sessionId)
+        if (label?.kind !== 'temporary' || label.revision !== eligible.labelRevision) {
+          return { ok: false, output: 'У этой сессии уже есть название.' }
+        }
+        try {
+          input.autoName.proposals.put({
+            schemaVersion: 1,
+            projectId: target.projectId,
+            sessionId: target.sessionId,
+            turnId,
+            expectedGeneration: target.generation,
+            expectedLabelRevision: label.revision,
+            name,
+            state: 'pending-delivery',
+            createdAt: (input.autoName.nowIso ?? (() => new Date().toISOString()))(),
+          })
+        } catch {
+          return { ok: false, output: 'Не удалось сохранить название. Продолжу без него.' }
+        }
+        return {
+          ok: true,
+          output: 'Название будет применено после доставки ответа.',
+          outcome: 'session-name-proposed',
+        }
+      }
       return {
         ok: false,
-        output: 'Эта настройка недоступна. Я могу переименовать сессию или открыть карточку удаления.',
+        output: 'Эта настройка недоступна.',
       }
     },
 
@@ -150,6 +223,56 @@ export function makeConversationalSessionControl(input: {
       if (pending === undefined || pending.sessionId !== context.sessionId) return null
       pendingViews.delete(context.turnId)
       return pending.view
+    },
+
+    observeAuthenticatedTurn(observed) {
+      if (input.autoName === undefined || !isEligibleSessionAutoNameText(observed.text)) return
+      const selection = active()
+      if (selection.sessionId !== observed.sessionId) return
+      const label = input.autoName.labels.get(observed.sessionId)
+      if (label?.kind !== 'temporary') return
+      if (eligibleAutoNameTurns.size >= 1_000) eligibleAutoNameTurns.clear()
+      eligibleAutoNameTurns.set(observed.turnId, {
+        turnId: observed.turnId,
+        projectId: selection.projectId,
+        sessionId: selection.sessionId,
+        generation: selection.generation,
+        labelRevision: label.revision,
+      })
+    },
+
+    confirmReplyDelivered(delivered) {
+      const proposals = input.autoName?.proposals
+      if (proposals === undefined) return false
+      const proposal = proposals.get(delivered.sessionId, delivered.turnId)
+      if (proposal === null) return false
+      const selection = active()
+      const label = input.autoName!.labels.get(proposal.sessionId)
+      if (selection.projectId !== proposal.projectId ||
+        selection.sessionId !== proposal.sessionId ||
+        selection.generation !== proposal.expectedGeneration ||
+        label?.kind !== 'temporary' || label.revision !== proposal.expectedLabelRevision) {
+        proposals.remove(proposal.sessionId, proposal.turnId)
+        return false
+      }
+      try {
+        const outcome = input.controls.rename(proposal.sessionId, proposal.name)
+        if (outcome.kind !== 'renamed') return false
+        proposals.remove(proposal.sessionId, proposal.turnId)
+        return true
+      } catch {
+        // If the explicit fence reached disk but the registry rename did not,
+        // retire the proposal. Replaying it could overwrite a later user name.
+        if (input.autoName!.labels.get(proposal.sessionId)?.kind === 'explicit') {
+          proposals.remove(proposal.sessionId, proposal.turnId)
+        }
+        return false
+      }
+    },
+
+    recoverPendingAutoNames() {
+      eligibleAutoNameTurns.clear()
+      return input.autoName?.proposals.clearPending() ?? 0
     },
   })
 }

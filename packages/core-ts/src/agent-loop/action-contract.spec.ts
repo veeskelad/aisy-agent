@@ -98,6 +98,14 @@ describe('Action Contract', () => {
     expect(actionEvidence(call('configure_agent', {
       operation: 'source.rewrite', target: 'current',
     }), { ok: false }).successful).toBe(false)
+
+    const foreignMutation = classifyActionContract(operator('Исправь файл конфигурации'))
+    expect(evaluateActionContract(foreignMutation, [actionEvidence(call('configure_agent', {
+      operation: 'session.propose-name', target: 'current', value: 'Настройка проекта',
+    }), { ok: true, verified: true })])).toEqual({
+      satisfied: false,
+      missing: 'mutation',
+    })
   })
 
   it('requires an executed delegation result', () => {

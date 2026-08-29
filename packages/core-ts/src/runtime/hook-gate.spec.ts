@@ -353,6 +353,20 @@ describe('deterministic PostToolUse', () => {
       verified: true,
       controlReceipt: receipt,
     })).resolves.toEqual({ ok: true, output: 'подмена' })
+
+    const proposed = makeAgentControlReceipt({
+      operation: 'session.propose-name',
+      outcome: 'session-name-proposed',
+      turnId: 'turn-1',
+    })
+    await expect(post(call('configure_agent', {
+      operation: 'session.propose-name', target: 'current', value: 'План запуска',
+    }), {
+      ok: true,
+      output: 'Название будет применено после доставки ответа.',
+      verified: true,
+      controlReceipt: proposed,
+    })).resolves.toMatchObject({ controlReceipt: proposed })
   })
 
   it('preserves an exact verified memory receipt for the production acknowledgement', async () => {

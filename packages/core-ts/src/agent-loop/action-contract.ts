@@ -222,10 +222,15 @@ export function classifyActionContract(spans: ContextSpan[]): ActionContract {
 }
 
 export function actionToolFamily(call: ToolCall): ActionToolFamily {
-  // The closed executor rejects unsupported operations before effects. Family
-  // membership is name-stable so provider-owned evidence can be snapshotted
-  // without serializing model arguments into the attestation channel.
-  if (call.name === 'configure_agent') return 'mutate'
+  // Background metadata must never satisfy an unrelated operator mutation.
+  // Only the two user-visible controls have mutation semantics here; the
+  // closed executor still rejects every unsupported operation before effects.
+  if (call.name === 'configure_agent') {
+    const operation = call.args['operation']
+    return operation === 'session.rename' || operation === 'session.request-delete'
+      ? 'mutate'
+      : 'unknown'
+  }
   if (DELEGATE_TOOLS.has(call.name)) return 'delegate'
   if (INSPECT_TOOLS.has(call.name)) return 'inspect'
   if (MUTATE_TOOLS.has(call.name)) return 'mutate'

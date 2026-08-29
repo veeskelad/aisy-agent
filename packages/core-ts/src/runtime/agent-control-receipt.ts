@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto'
 
-export type AgentControlOutcome = 'session-renamed' | 'session-delete-preview'
+export type AgentControlOutcome =
+  | 'session-renamed'
+  | 'session-delete-preview'
+  | 'session-name-proposed'
 
 export interface VerifiedAgentControlReceiptV1 {
   kind: 'agent.control/v1'
-  operation: 'session.rename' | 'session.request-delete'
+  operation: 'session.rename' | 'session.request-delete' | 'session.propose-name'
   outcome: AgentControlOutcome
   turnId: string
   receiptId: string
@@ -30,15 +33,19 @@ export function parseAgentControlReceipt(value: unknown): VerifiedAgentControlRe
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const candidate = value as Partial<VerifiedAgentControlReceiptV1>
   if (candidate.kind !== 'agent.control/v1' ||
-    (candidate.operation !== 'session.rename' && candidate.operation !== 'session.request-delete') ||
-    (candidate.outcome !== 'session-renamed' && candidate.outcome !== 'session-delete-preview') ||
+    (candidate.operation !== 'session.rename' && candidate.operation !== 'session.request-delete' &&
+      candidate.operation !== 'session.propose-name') ||
+    (candidate.outcome !== 'session-renamed' && candidate.outcome !== 'session-delete-preview' &&
+      candidate.outcome !== 'session-name-proposed') ||
     typeof candidate.turnId !== 'string' || candidate.turnId.length === 0 || candidate.turnId.length > 256 ||
     typeof candidate.receiptId !== 'string' || !/^[a-f0-9]{64}$/u.test(candidate.receiptId) ||
     Object.keys(candidate).some((key) =>
       !['kind', 'operation', 'outcome', 'turnId', 'receiptId'].includes(key))) return null
   const expectedOutcome = candidate.operation === 'session.rename'
     ? 'session-renamed'
-    : 'session-delete-preview'
+    : candidate.operation === 'session.request-delete'
+      ? 'session-delete-preview'
+      : 'session-name-proposed'
   if (candidate.outcome !== expectedOutcome) return null
   const normalized = {
     kind: candidate.kind,

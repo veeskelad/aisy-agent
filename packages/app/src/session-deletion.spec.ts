@@ -56,6 +56,7 @@ afterEach(() => {
 function setup(input: {
   failDeletionSaveAt?: number
   activityError?: Error
+  autoNameError?: Error
   attachmentError?: Error
   providerPreflightError?: Error
   failProviderPurgeOnce?: boolean
@@ -110,6 +111,7 @@ function setup(input: {
     store: makeMemorySessionCreationStore(),
   })
   const calls: string[] = []
+  const removedAutoNames: string[] = []
   const purged = new Set<string>()
   const controlsRemoved = new Set<string>()
   const providerHandles: unknown[] = []
@@ -122,6 +124,12 @@ function setup(input: {
     journal,
     creation,
     labels,
+    autoNames: {
+      assertAvailable: () => {
+        if (input.autoNameError !== undefined) throw input.autoNameError
+      },
+      removeSession: (sessionId) => { removedAutoNames.push(sessionId) },
+    },
     activity: {
       assertIdle: () => {
         calls.push('activity.preflight')
@@ -193,6 +201,7 @@ function setup(input: {
     deletionSaves: () => deletionSaves,
     journal,
     labels,
+    removedAutoNames,
     makeCoordinator,
     purged,
     providerHandles,
@@ -284,6 +293,7 @@ describe('Session deletion coordinator', () => {
     expect(h.registry.getActive(OWNER)).toEqual(active)
     expect(h.registry.snapshot().sessions.some((session) => session.id === target.id)).toBe(false)
     expect(h.labels.get(target.id)).toBeNull()
+    expect(h.removedAutoNames).toEqual([target.id])
     expect(existsSync(join(transcriptRoot, 'sessions', target.id))).toBe(false)
     expect(readFileSync(join(transcriptRoot, 'transcript-v2.jsonl'), 'utf8'))
       .not.toContain('удаляемый приватный диалог')
@@ -380,6 +390,7 @@ describe('Session deletion coordinator', () => {
   it('refuses busy or unsupported deletion before publishing a fence', async () => {
     for (const failure of [
       { activityError: new Error('SESSION_BUSY') },
+      { autoNameError: new Error('SESSION_AUTO_NAME_PURGE_UNAVAILABLE') },
       { attachmentError: new Error('ATTACHMENT_PURGE_UNAVAILABLE') },
       { providerPreflightError: new Error('PROVIDER_PURGE_UNSUPPORTED') },
       { restartError: new Error('SESSION_RESTART_UNAVAILABLE') },
@@ -398,7 +409,8 @@ describe('Session deletion coordinator', () => {
         transcriptHead: HEAD,
       })).rejects.toThrow(
         failure.activityError?.message ?? failure.providerPreflightError?.message ??
-        failure.attachmentError?.message ?? failure.restartError?.message,
+        failure.autoNameError?.message ?? failure.attachmentError?.message ??
+        failure.restartError?.message,
       )
 
       expect(h.registry.snapshot()).toEqual(beforeRegistry)

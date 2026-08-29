@@ -23,6 +23,7 @@ import {
 } from '@aisy/core'
 
 import type { SessionCreationCoordinator } from './session-creation-coordinator.js'
+import type { SessionAutoNameStore } from './session-auto-name-store.js'
 import type { SessionLabelStore } from './session-label-store.js'
 import type { NodeSessionTranscriptMaintenance } from './session-transcript-store.js'
 
@@ -543,6 +544,7 @@ export function makeSessionDeletionCoordinator(input: {
   journal: SessionDeletionJournal
   creation: Pick<SessionCreationCoordinator, 'prepareExternal' | 'completeExternal'>
   labels: Pick<SessionLabelStore, 'remove'>
+  autoNames: Pick<SessionAutoNameStore, 'removeSession'> & { assertAvailable(): void }
   transcript: NodeSessionTranscriptMaintenance
   activity: { assertIdle(target: ProjectRegistryV2Owner & { projectId: string; sessionId: string }): void }
   attachments: {
@@ -638,6 +640,7 @@ export function makeSessionDeletionCoordinator(input: {
       }
       if (record.phase === 'registry-removed') {
         await input.attachments.purgeSession(target)
+        input.autoNames.removeSession(record.sessionId)
         input.labels.remove(record.sessionId)
         await input.transcript.removeSessionControls(record.sessionId)
         record = input.journal.advance(record.operationHash, record.phase, 'target-controls-removed')
@@ -686,6 +689,7 @@ export function makeSessionDeletionCoordinator(input: {
       if (existing !== null) return resume(existing)
       const prepared = await input.service.runSessionDeletionTransition(target, async () => {
         input.registry.getSession(target)
+        input.autoNames.assertAvailable()
         input.activity.assertIdle(target)
         input.attachments.assertIdle(target)
         const providerPurge = input.provider.preflight(target)

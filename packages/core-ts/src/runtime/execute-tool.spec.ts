@@ -117,11 +117,12 @@ describe('makeToolExecutor', () => {
 
   it('routes closed conversational controls only with code-owned turn context', async () => {
     const listSessions = vi.fn(() => 'Текущая: Работа')
-    const configureAgent = vi.fn(async () => ({
-      ok: true as const,
+    const configureAgent = vi.fn<NonNullable<ExecuteToolDeps['configureAgent']>>()
+    configureAgent.mockResolvedValue({
+      ok: true,
       output: 'Переименовал сессию в «Работа».',
-      outcome: 'session-renamed' as const,
-    }))
+      outcome: 'session-renamed',
+    })
     const e = exec({ listSessions, configureAgent })
     const context = Object.freeze({ sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 })
 
@@ -144,6 +145,22 @@ describe('makeToolExecutor', () => {
     expect(configureAgent).toHaveBeenCalledWith({
       operation: 'session.rename', target: 'current', value: 'Работа',
     }, context)
+    configureAgent.mockResolvedValueOnce({
+      ok: true,
+      output: 'Название будет применено после доставки ответа.',
+      outcome: 'session-name-proposed',
+    })
+    expect(await e(call('configure_agent', {
+      operation: 'session.propose-name', target: 'current', value: 'План запуска',
+    }), context)).toMatchObject({
+      ok: true,
+      verified: true,
+      controlReceipt: {
+        operation: 'session.propose-name',
+        outcome: 'session-name-proposed',
+        turnId: 'turn-a',
+      },
+    })
     expect((await e(call('list_sessions'))).ok).toBe(false)
     expect(listSessions).toHaveBeenCalledOnce()
   })
