@@ -265,6 +265,14 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
    turn-wide latch и exact-turn resume ordinal high-water сохраняются между
    rounds/restart; delivery связан с exact evidence id, а verified `remember`
    остаётся exactly-once после restart protected-memory executor.
+10. **AC-21-21:** exact certified managed rollback barrier после read-only
+    проверки certificate и persisted state переводит только optional auto-skill
+    canary в paused независимо от canary-флага: writable store handle не
+    открывается, planning, observation, overlays и source-forget не исполняются,
+    но базовый Telegram runtime, память и обычные tools запускаются. Corrupt,
+    `preparing`, неизвестная ошибка store и barrier без rollback-aware
+    composition остаются startup failure; после roll-forward требуется explicit
+    resume.
 
 ## 8. Трассировка тестов
 
@@ -288,4 +296,9 @@ Provider/network/timeout всегда transient. Re-enable повторяет в
   `core/runtime/failover-provider.spec.ts`,
   `app/auto-skill-live-runtime.spec.ts`: AC-21-20, включая failed provider
   evidence, запрет failover после attempt, turn-wide buffering и resume ordinal;
+- `app/auto-skill-live-runtime.spec.ts`, `app/auto-skill-store.spec.ts` и
+  `app/doctor-live-composition.spec.ts`:
+  AC-21-21 — exact certified barrier отключает только canary даже при canary-off,
+  production wiring не открывает store повторно, а corrupt/`preparing` barrier
+  и остальные ошибки не скрываются;
 - `app/telegram-project-runtime.integration.spec.ts`: AC-21-15, 16.

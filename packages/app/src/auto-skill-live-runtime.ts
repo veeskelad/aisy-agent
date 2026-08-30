@@ -56,8 +56,27 @@ export interface AutoSkillLiveRuntime {
 }
 
 /** Feature-gate helper kept pure so canary-off can prove zero factory/store I/O. */
-export function selectAutoSkillCanary<T>(enabled: boolean, create: () => T): T | null {
-  return enabled ? create() : null
+export function selectAutoSkillCanary<T>(
+  enabled: boolean,
+  create: () => T,
+  options?: Readonly<{
+    rollbackBarrier: 'absent' | 'certified' | 'unsafe'
+    onRollbackBarrier(): void
+  }>,
+): T | null {
+  if (options?.rollbackBarrier === 'unsafe') {
+    throw new Error('AUTO_SKILL_ROLLBACK_BARRIER_INVALID')
+  }
+  if (options?.rollbackBarrier === 'certified') {
+    options.onRollbackBarrier()
+    return null
+  }
+  if (!enabled) return null
+  return create()
+}
+
+export function assertAutoSkillSourceLifecycleAvailable(pausedByRollback: boolean): void {
+  if (pausedByRollback) throw new Error('AUTO_SKILL_ROLLBACK_BARRIER')
 }
 
 /**

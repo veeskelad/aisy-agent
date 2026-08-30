@@ -264,6 +264,12 @@ remote output, environment, credential state или vendor detail.
     runtime-файл B даёт отказ до switch и не перехешируется. Non-descendant
     retained previous по-прежнему не проходит без rewrite authority и rollback
     certificate.
+17. **AC-28-17** — Release, запущенный после сертифицированного rollback,
+    остаётся доступен для Telegram, памяти, providers и обычных tools при exact
+    certified persistent auto-skill barrier: только optional auto-skill canary
+    переходит в paused без writable store handle, включая canary-off. Corrupt и
+    `preparing` barrier либо другая ошибка не маскируются; roll-forward и
+    explicit resume возвращают canary в ready.
 
 ## 8. Открытые вопросы
 

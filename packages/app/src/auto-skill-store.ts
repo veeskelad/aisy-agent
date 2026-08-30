@@ -193,6 +193,8 @@ export interface NodeAutoSkillRollbackAuthorization {
   readonly targetCommit: string
 }
 
+export type NodeAutoSkillRollbackBarrierStatus = 'absent' | 'certified' | 'unsafe'
+
 type NodeAutoSkillRollbackBarrier = Readonly<
   | { phase: 'preparing'; targetCommit: string }
   | {
@@ -371,6 +373,23 @@ function rollbackStateHash(state: StoreStateV2): string {
     ...state,
     rollbackCertificates: [],
   }))
+}
+
+function stateHasRollbackCertificate(
+  state: StoreStateV2,
+  certificateId: string,
+  targetCommit: string,
+): boolean {
+  if (!HASH.test(certificateId) || !SAFE_COMMIT.test(targetCommit)) return false
+  const dependencies = state.evidence.length + state.jobs.filter(item =>
+    item.phase !== 'forgotten').length + state.revisions.filter(item =>
+    item.phase !== 'tombstoned').length + state.pointers.length
+  if (dependencies !== 0 || state.forgetClaims.some(item => item.phase !== 'tombstoned')) {
+    return false
+  }
+  const stateHash = rollbackStateHash(state)
+  return state.rollbackCertificates.some(item => item.certificateId === certificateId &&
+    item.targetCommit === targetCommit && item.stateHash === stateHash)
 }
 
 type MutationMarker = Readonly<
@@ -1320,16 +1339,7 @@ export function makeNodeAutoSkillStoreV2(input: {
     },
 
     verifyRollbackCertificate(certificateId, targetCommit) {
-      if (!HASH.test(certificateId) || !SAFE_COMMIT.test(targetCommit)) return false
-      const dependencies = state.evidence.length + state.jobs.filter(item =>
-        item.phase !== 'forgotten').length + state.revisions.filter(item =>
-        item.phase !== 'tombstoned').length + state.pointers.length
-      if (dependencies !== 0 || state.forgetClaims.some(item => item.phase !== 'tombstoned')) {
-        return false
-      }
-      const stateHash = rollbackStateHash(state)
-      return state.rollbackCertificates.some(item => item.certificateId === certificateId &&
-        item.targetCommit === targetCommit && item.stateHash === stateHash)
+      return stateHasRollbackCertificate(state, certificateId, targetCommit)
     },
 
     claimNotification() {
@@ -1393,6 +1403,45 @@ function readRollbackBarrier(path: string): NodeAutoSkillRollbackBarrier | null 
     })
   }
   return null
+}
+
+/**
+ * Read-only startup classification. Only a complete certificate bound to the
+ * exact persisted state is safe to treat as a managed rollback pause.
+ */
+export function inspectNodeAutoSkillRollbackBarrier(input: {
+  root: string
+}): NodeAutoSkillRollbackBarrierStatus {
+  if (!isAbsolute(input.root)) return 'unsafe'
+  const root = resolve(input.root)
+  if (root === parse(root).root) return 'unsafe'
+  if (!existsSync(root)) return 'absent'
+  try {
+    const rootInfo = lstatSync(root)
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || (rootInfo.mode & 0o077) !== 0) {
+      return 'unsafe'
+    }
+    const barrierPath = join(root, ROLLBACK_BARRIER)
+    if (!existsSync(barrierPath)) return 'absent'
+    const barrier = readRollbackBarrier(barrierPath)
+    if (barrier === null || barrier.phase !== 'certified' ||
+      inspectMutationResidue(root) !== 'none' ||
+      inspectNodeAutoSkillStoreV2({ root, enabled: true }).state === 'corrupt') return 'unsafe'
+    const statePath = join(root, 'state-v2.json')
+    if (!existsSync(statePath)) return 'unsafe'
+    const stateInfo = lstatSync(statePath)
+    if (!stateInfo.isFile() || stateInfo.isSymbolicLink() || (stateInfo.mode & 0o077) !== 0) {
+      return 'unsafe'
+    }
+    const parsed: unknown = JSON.parse(readFileSync(statePath, 'utf8'))
+    if (!validState(parsed) ||
+      !stateHasRollbackCertificate(parsed, barrier.certificateId, barrier.targetCommit)) {
+      return 'unsafe'
+    }
+    return 'certified'
+  } catch {
+    return 'unsafe'
+  }
 }
 
 export function prepareNodeAutoSkillRollback(input: {

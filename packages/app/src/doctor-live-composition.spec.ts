@@ -14,6 +14,16 @@ describe('production doctor composition', () => {
     expect(cli).toContain('ownedDockerRecovery: makeNodeOwnedDockerProductionRecoveryDoctorProbe({')
     expect(cli).toContain('autoSkills: {')
     expect(cli).toContain('inspectNodeAutoSkillStoreV2({')
+    expect(cli).toContain(
+      'const autoSkillRollbackBarrier = inspectNodeAutoSkillRollbackBarrier({ root: autoSkillStateRoot })',
+    )
+    expect(cli).toContain('rollbackBarrier: autoSkillRollbackBarrier')
+    expect(cli).toContain("journal.append('auto-skill', 'auto_skill.rollback_paused', {})")
+    expect(cli.match(/assertAutoSkillSourceLifecycleAvailable\(autoSkillsPausedByRollback\)/gu))
+      .toHaveLength(2)
+    expect(cli).toContain(
+      '} else if (!autoSkillsPausedByRollback && existsSync(autoSkillStateRoot)) {',
+    )
     expect(cli).toContain('forgetAutoSkillsBySource?.(selector)')
     expect(cli).toContain('claimAutoSkillsBySource?.(selector)')
     expect(cli).toContain("if (!existsSync(autoSkillStateRoot)) return")

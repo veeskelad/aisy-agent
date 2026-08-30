@@ -118,6 +118,7 @@ import { makeServiceKeyStore } from '../service-keys.js'
 import { makeOnboardingBrief } from '../onboarding-brief.js'
 import { makeOnboardingProgress, TOPIC_LABEL } from '../onboarding-progress.js'
 import {
+  assertAutoSkillSourceLifecycleAvailable,
   makeAutoSkillLiveRuntime,
   makeAutoSkillPlanningProvider,
   MEMORY_AUTO_SKILL_REGISTRY,
@@ -125,6 +126,7 @@ import {
   type AutoSkillLiveRuntime,
 } from '../auto-skill-live-runtime.js'
 import {
+  inspectNodeAutoSkillRollbackBarrier,
   inspectNodeAutoSkillStoreV2,
   makeNodeAutoSkillStoreV2,
 } from '../auto-skill-store.js'
@@ -3002,11 +3004,13 @@ compactionProvider = adapterFor(providersCfg.tiers?.routine ?? defaultSel, [])
 // Keep the two literals in sync; the event-bridge spec asserts on this exact value.
 const modelLabel = providersCfg.tiers ? 'mixed (per-tier)' : defaultSel.model
 
-// Typed private auto-skills are an explicit production canary. With the flag
-// off this branch performs no store/artifact I/O and installs neither evidence
-// observation nor learned overlays.
+// Typed private auto-skills are an explicit production canary. Canary-off still
+// performs the read-only managed-rollback classification and source-forget
+// enforcement, but installs neither evidence observation nor learned overlays.
 const autoSkillsEnabled = cfg('AISY_AUTO_SKILLS') === '1'
 const autoSkillStateRoot = join(base, 'auto-skills-v2')
+const autoSkillRollbackBarrier = inspectNodeAutoSkillRollbackBarrier({ root: autoSkillStateRoot })
+let autoSkillsPausedByRollback = false
 const autoSkillSourceArchived = (source: Readonly<{
   kind: 'session' | 'project'
   id: string
@@ -3073,8 +3077,17 @@ const autoSkillRuntime: AutoSkillLiveRuntime | null = selectAutoSkillCanary(
       journal.append('auto-skill', 'auto_skill.canary_ready', runtime.doctor())
       return runtime
   },
+  {
+    rollbackBarrier: autoSkillRollbackBarrier,
+    onRollbackBarrier: () => {
+      autoSkillsPausedByRollback = true
+      void journal.append('auto-skill', 'auto_skill.rollback_paused', {})
+      process.stderr.write('aisy run: auto-skills paused during managed rollback.\n')
+    },
+  },
 )
 forgetAutoSkillsBySource = (selector) => {
+  assertAutoSkillSourceLifecycleAvailable(autoSkillsPausedByRollback)
   if (autoSkillRuntime !== null) {
     autoSkillRuntime.completeSourceForget(selector)
     return
@@ -3091,6 +3104,7 @@ forgetAutoSkillsBySource = (selector) => {
   })
 }
 claimAutoSkillsBySource = (selector) => {
+  assertAutoSkillSourceLifecycleAvailable(autoSkillsPausedByRollback)
   if (autoSkillRuntime !== null) {
     autoSkillRuntime.claimSource(selector)
     return
@@ -3100,7 +3114,7 @@ claimAutoSkillsBySource = (selector) => {
 }
 if (autoSkillRuntime !== null) {
   provider = makeAutoSkillPlanningProvider({ provider, runtime: autoSkillRuntime })
-} else if (existsSync(autoSkillStateRoot)) {
+} else if (!autoSkillsPausedByRollback && existsSync(autoSkillStateRoot)) {
   const recovered = makeNodeAutoSkillStoreV2({ root: autoSkillStateRoot })
     .recoverForgetClaims(autoSkillSourceArchived)
   if (recovered > 0) {

@@ -25,6 +25,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  inspectNodeAutoSkillRollbackBarrier,
   inspectNodeAutoSkillStoreV2,
   makeNodeAutoSkillStoreV2,
   prepareNodeAutoSkillRollback,
@@ -131,6 +132,33 @@ function confirm(
 }
 
 describe('private auto-skill v2 lifecycle', () => {
+  it('classifies only an exact certified rollback barrier as a safe startup pause', () => {
+    const certifiedRoot = root()
+    makeNodeAutoSkillStoreV2({ root: certifiedRoot })
+    expect(inspectNodeAutoSkillRollbackBarrier({ root: certifiedRoot })).toBe('absent')
+    prepareNodeAutoSkillRollback({ root: certifiedRoot, targetCommit: 'target-v1' })
+    expect(inspectNodeAutoSkillRollbackBarrier({ root: certifiedRoot })).toBe('certified')
+    const statePath = join(certifiedRoot, 'state-v2.json')
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      rollbackCertificates: Array<{ stateHash: string }>
+    }
+    state.rollbackCertificates[0]!.stateHash = '0'.repeat(64)
+    writeFileSync(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 })
+    expect(inspectNodeAutoSkillRollbackBarrier({ root: certifiedRoot })).toBe('unsafe')
+
+    const preparingRoot = root()
+    makeNodeAutoSkillStoreV2({ root: preparingRoot })
+    writeFileSync(join(preparingRoot, 'rollback-barrier-v1.json'), `${JSON.stringify({
+      schemaVersion: 1, phase: 'preparing', targetCommit: 'target-v1',
+    })}\n`, { mode: 0o600 })
+    expect(inspectNodeAutoSkillRollbackBarrier({ root: preparingRoot })).toBe('unsafe')
+
+    const corruptRoot = root()
+    makeNodeAutoSkillStoreV2({ root: corruptRoot })
+    writeFileSync(join(corruptRoot, 'rollback-barrier-v1.json'), '{broken\n', { mode: 0o600 })
+    expect(inspectNodeAutoSkillRollbackBarrier({ root: corruptRoot })).toBe('unsafe')
+  })
+
   it('keeps every ordinary writer blocked after rollback certification', () => {
     const directory = root()
     const runningStore = makeNodeAutoSkillStoreV2({ root: directory })

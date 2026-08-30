@@ -82,6 +82,18 @@ Retained release перед roll-forward проверяется по сущес�
 record до любого rebuild: updater не может перехешировать и тем самым узаконить
 изменённый ignored runtime-файл.
 
+Если active release при штатном managed rollback встречает exact persistent
+barrier, optional typed auto-skill canary не должен выводить из строя весь
+agent runtime. Composition фиксирует degraded-событие, не открывает store и
+запускает Telegram, память, providers и обычные tools без auto-skill planning,
+observation и overlays. Это исключение распознаёт только точный
+certified barrier после read-only проверки его phase, certificate и exact
+persisted state, независимо от canary-флага. Corrupt или crash-left `preparing`
+barrier, неизвестная ошибка store и запуск barrier вне rollback-aware
+composition остаются fail-closed. Source-forget во время паузы не объявляет
+очистку выполненной. Возврат к новой версии всё так же требует explicit
+`--resume-auto-skills`, после которого runtime открывает store заново.
+
 Store handle, который увидел barrier или ошибку durable persist, становится
 `poisoned`. Persistent epoch меняется при rollback и explicit resume, поэтому
 даже idle pre-barrier handle не может записать старый in-memory snapshot после

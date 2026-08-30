@@ -13,6 +13,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  assertAutoSkillSourceLifecycleAvailable,
   makeAutoSkillLiveRuntime,
   makeAutoSkillPlanningProvider,
   MEMORY_AUTO_SKILL_REGISTRY,
@@ -98,6 +99,39 @@ describe('LIVE typed auto-skill runtime', () => {
     const create = vi.fn(() => fixture().runtime)
     expect(selectAutoSkillCanary(false, create)).toBeNull()
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('pauses only the optional canary behind a certified rollback barrier', () => {
+    const paused = vi.fn()
+    const create = vi.fn(() => fixture().runtime)
+
+    expect(selectAutoSkillCanary(false, create, {
+      rollbackBarrier: 'certified', onRollbackBarrier: paused,
+    })).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+    expect(paused).toHaveBeenCalledOnce()
+
+    expect(selectAutoSkillCanary(true, create, {
+      rollbackBarrier: 'certified', onRollbackBarrier: paused,
+    })).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+    expect(paused).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not hide an unsafe rollback barrier or ordinary store corruption', () => {
+    expect(() => selectAutoSkillCanary(false, vi.fn(), {
+      rollbackBarrier: 'unsafe', onRollbackBarrier: vi.fn(),
+    })).toThrow('AUTO_SKILL_ROLLBACK_BARRIER_INVALID')
+    expect(() => selectAutoSkillCanary(true, () => {
+      throw new Error('AUTO_SKILL_STORE_CORRUPT')
+    }, { rollbackBarrier: 'absent', onRollbackBarrier: vi.fn() }))
+      .toThrow('AUTO_SKILL_STORE_CORRUPT')
+  })
+
+  it('blocks source lifecycle while the certified rollback pause is active', () => {
+    expect(() => assertAutoSkillSourceLifecycleAvailable(true))
+      .toThrow('AUTO_SKILL_ROLLBACK_BARRIER')
+    expect(() => assertAutoSkillSourceLifecycleAvailable(false)).not.toThrow()
   })
 
   it('activates only after two sessions, then exposes a learned-procedure overlay after reply', async () => {
