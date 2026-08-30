@@ -54,7 +54,7 @@ The original 15-component engine has grown into 28 component specifications and
   snapshot, prove one-line install/update/offline rollback, cut the target host
   over without losing the old checkout, then complete operator Telegram,
   provider/voice and restart acceptance. Exact status and evidence live in the
-  [production matrix](docs/reviews/2026-08-23-production-readiness-matrix.md).
+  [production matrix](docs/reviews/2026-08-30-production-readiness-final.md).
 
 ---
 

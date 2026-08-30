@@ -1,5 +1,8 @@
 # Матрица production-готовности Aisy
 
+> Исторический накопительный срез. Актуальная проверенная матрица:
+> [2026-08-30-production-readiness-final.md](./2026-08-30-production-readiness-final.md).
+
 **Дата среза:** 2026-08-30
 **Code baseline:** public `master`
 `17a8b2104213fcd5a011feaa65fc22eee3a02418`, tree

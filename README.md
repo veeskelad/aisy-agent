@@ -18,7 +18,7 @@
 > nightly consolidation and persistent `/goal` loops. Voice and native API
 > providers use separate root-owned brokers and still require explicit operator
 > enrollment and target acceptance. See the current
-> [production matrix](docs/reviews/2026-08-23-production-readiness-matrix.md).
+> [production matrix](docs/reviews/2026-08-30-production-readiness-final.md).
 
 ## What is this?
 

@@ -9,7 +9,7 @@ This file preserves the implementation tiers that built the runtime. As of
 2026-08-23 the production binary wires Telegram, scoped memory, tools, Skills,
 stdio MCP, monitoring, provider/voice brokers and durable sub-agents. Remaining
 work is tracked in the current
-[production matrix](./reviews/2026-08-23-production-readiness-matrix.md): public
+[production matrix](./reviews/2026-08-30-production-readiness-final.md): public
 distribution, controlled cutover and operator E2E, plus explicitly dormant or
 ADR-deferred surfaces. Historical tier notes below are not current LIVE claims.
 

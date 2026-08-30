@@ -8,7 +8,7 @@ Navigation for the project's docs. Start at the top and go as deep as you need.
 - [ARCHITECTURE](../ARCHITECTURE.md) — the high-level map and how a message flows.
 - [GLOSSARY](GLOSSARY.md) — domain terms.
 - [ROADMAP](../ROADMAP.md) — how it gets built.
-- [Production readiness](reviews/2026-08-23-production-readiness-matrix.md) —
+- [Production readiness](reviews/2026-08-30-production-readiness-final.md) —
   current LIVE/dormant/acceptance verdict.
 
 ## Decisions (the *why*)

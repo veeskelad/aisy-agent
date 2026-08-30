@@ -2,7 +2,7 @@
 
 > Pre-alpha. The production CLI and Telegram composition are connected; exact
 > target acceptance and intentionally dormant surfaces are tracked in the
-> [production matrix](../reviews/2026-08-23-production-readiness-matrix.md).
+> [production matrix](../reviews/2026-08-30-production-readiness-final.md).
 
 Aisy is a **single-user** personal agent harness you self-host. Zero-to-running:
 

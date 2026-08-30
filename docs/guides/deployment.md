@@ -9,7 +9,7 @@ Multi-tenant/SaaS режим не поддерживается (см. non-goals 
 > service-manager/real-Docker репетиции; Docker sidecar create/use выключены.
 > При наличии legacy writer directory по-прежнему нужен отдельный ручной
 > cutover после доказанной quiescence. Текущий release verdict находится в
-> [production-матрице](../reviews/2026-08-23-production-readiness-matrix.md).
+> [production-матрице](../reviews/2026-08-30-production-readiness-final.md).
 
 ## Варианты запуска
 
