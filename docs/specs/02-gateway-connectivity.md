@@ -814,8 +814,12 @@ composition tests, но без подключения к `aisy run`:
     archives, но никогда не выполняет recovery через `--fix`. Отдельный recovery
     adapter требует approval, связанный с exact owner fingerprint, и code-owned
     exclusive quiescence lease. Он атомарно переносит abandoned lock в
-    `.writer-lock-recovery/recovery-<id>`, не удаляет owner evidence, fences
-    прежний runtime и поддерживает exact restore без перезаписи нового writer.
+    `.writer-lock-recovery/recovery-<id>`, fences прежний runtime и поддерживает
+    exact restore без перезаписи нового writer. После успешного захвата новым
+    singleton writer startup-retention сохраняет восемь самых новых валидных
+    archives и удаляет только более старые. До первой мутации он проверяет весь
+    bounded набор (не более 256), а удаляемый archive сначала атомарно переносит
+    в `.writer-lock-gc`; оборванный GC завершается следующим startup.
 
 Этот срез доказывает worker/isolation boundary, но не означает LIVE локальный
 Whisper: image build/publish и регистрация local provider в production registry
@@ -1184,6 +1188,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     archived fingerprint; новый writer никогда не перезаписывается.
 53. **AC-02-53** — corrupt archive, changed owner, collision и incomplete fsync
     дают только стабильный code, raw path/owner/exception не выходит наружу.
+53a. **AC-02-53a** — startup retention запускается только при exact held и idle
+    singleton writer, полностью проверяет не более 256 recovery archives и
+    оставляет восемь самых новых по verified `acquiredAt` + canonical id.
+    Каждый старый archive сначала атомарно переносится в private GC-root;
+    crash после rename или удаления `owner.json` сходится на следующем startup.
+    Corrupt/symlink/unknown entry, потеря writer lease либо превышение repair
+    ceiling выполняют zero archive mutation и fail closed. Active lock,
+    attachment records/objects/intents, transcript и memory не меняются.
 54. **AC-02-54** — durable execution checkpoint содержит только строгую
     redacted projection и SHA-256 binding; args/result/reply/reasoning/raw error,
     raw chat id и raw turn id не записываются.

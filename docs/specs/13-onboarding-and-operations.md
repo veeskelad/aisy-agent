@@ -333,7 +333,10 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
 33. **AC-13-33** — optional `sidecars.media-inbox-writer-lock` является строго
     read-only: absent lock даёт pass, corrupt — high-severity fail, held и
     abandoned — предупреждение; `doctor --fix` не архивирует и не изменяет lock,
-    а detail не содержит path, owner nonce, fingerprint или raw probe error.
+    не выполняет retention и не завершает pending GC, а detail не содержит path,
+    owner nonce, fingerprint или raw probe error. Bounded cleanup выполняется
+    только startup-кодом под exact held/idle singleton writer по AC-02-53a;
+    после него Doctor видит не более восьми structurally-valid archives.
 34. **AC-13-34** — реальный `aisy doctor` получает read-only
     `telegram.execution-checkpoint`: absent/clean дают pass, pending/corrupt —
     high-severity fail; `--fix` выполняет zero filesystem/Telegram writes, а
