@@ -85,8 +85,8 @@ export function classifyMediaInboxStartupRefusal(error: unknown): MediaInboxStar
 
 export function renderMediaInboxStartupRefusal(kind: MediaInboxStartupRefusal): string {
   return kind === 'busy'
-    ? 'aisy run: приём вложений и голос временно недоступны — media inbox уже используется другим процессом.\n'
-    : 'aisy run: приём вложений и голос выключены — состояние media inbox требует проверки через aisy doctor.\n'
+    ? 'Aisy: приём вложений и голос временно недоступны — хранилище вложений уже используется другим процессом.\n'
+    : 'Aisy: приём вложений и голос выключены. Проверь состояние командой `aisy doctor`.\n'
 }
 
 export interface MediaInboxWriterRecoveryAuthorizationPort {

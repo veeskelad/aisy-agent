@@ -105,10 +105,10 @@ describe('media inbox writer-lock recovery', () => {
   it('distinguishes a live writer from a corrupt or over-ceiling recovery state', () => {
     expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
       new TelegramAttachmentInboxError('WRITER_LOCK_HELD'),
-    ))).toContain('используется другим процессом')
+    ))).toBe('Aisy: приём вложений и голос временно недоступны — хранилище вложений уже используется другим процессом.\n')
     expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
       new MediaInboxWriterRecoveryError('STATE_CORRUPT'),
-    ))).toContain('требует проверки через aisy doctor')
+    ))).toBe('Aisy: приём вложений и голос выключены. Проверь состояние командой `aisy doctor`.\n')
     expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
       new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE'),
     ))).not.toContain('другим процессом')
