@@ -1,9 +1,9 @@
 # Финальная матрица production-готовности Aisy
 
 **Дата среза:** 2026-08-30  
+**Production current:** `ad004cb7af2473f482d3d1120df7a513c946ae17`
 **Code-bearing baseline:** `905583d42290d37c6c3445103c6c299a936e8b9a`  
-**Rollback-drill current:** `7557ecefccfa8f8179a8d722f5307953068164fa`  
-**Rollback-drill previous:** `905583d42290d37c6c3445103c6c299a936e8b9a`
+**Production previous:** `7557ecefccfa8f8179a8d722f5307953068164fa`
 
 Эта матрица заменяет прежний накопительный candidate-срез. Она различает
 наличие production composition и фактическую проверку на целевом хосте. Статус
@@ -22,12 +22,12 @@
 
 | Область | Статус | Доказательство | Оставшийся target gate |
 |---|---|---|---|
-| Telegram text и естественный диалог | **LIVE** | На `4e493c4` один composite turn без карточки выполнил память и делегирование, вернул `667`, `AISY-TEXT-OK` и естественное «Запомнил, что ты…». `905583d` запущен, service active, `NRestarts=0` | Один обычный ход на exact `905583d` |
-| Личность и мужской род | **LIVE** | Typed communication preference входит в provider и nightly projections; русские строки покрыты corpus | Короткий обычный target-диалог на exact release |
+| Telegram text и естественный диалог | **LIVE; target подтверждён** | На `4e493c4` один composite turn без карточки выполнил память и делегирование, вернул `667`, `AISY-TEXT-OK` и естественное «Запомнил, что ты…». На current `ad004cb` оператор вручную подтвердил обычные ответы без секунд, «думаю», названий действий и внутренних проверок; service active, `NRestarts=0` | Нет для text UX |
+| Личность и мужской род | **LIVE** | На target активны typed descriptors `masculine-russian`, `natural-russian`, `concise`, `hide-internals` и `second-person-memory-ack`; все пять входят в provider overlay, а `masculine-russian` отдельно задаёт грамматику deterministic nightly notice. Живой краткий русский ответ подтверждён оператором на current `ad004cb` | Короткая target-реплика с явной мужской формой |
 | Protected/scoped memory | **LIVE** | Doctor: global DNA и integrity pass; remember receipt exactly-once; тестовый marker пережил новую Session и restart | Recall из новой Session, затем удалить exact test fact и доказать отсутствие после restart |
 | Sessions, `/resume`, имена и удаление | **LIVE** | Daily rotation, auto-name, resume и deletion coordinator подключены. Delete физически удаляет registry row, transcript, attachments и provider-local history, сохраняя memory/Skills/grants | Показать `/resume`, удалить одну exact test Session через одну terminal-карточку и проверить filesystem/registry |
-| Daily reset и воскресная consolidation | **LIVE** | Scheduler и missed-slot catch-up pass; cadence-тесты фиксируют daily Session rotation и weekly Sunday consolidation | Следующий естественный nightly/weekly slot |
-| Tools и scoped approvals | **LIVE** | `remember` и `spawn_subagent` Tier-1 в natural mode; confirm mode повышает их до Tier-2. Durable grants принадлежат operator/profile + Workspace/Project, Project/path может только ужесточать | Target confirm-once/repeat и отдельная destructive warning-карточка без выполнения |
+| Daily reset и воскресная consolidation | **LIVE; target подтверждён** | 2026-08-30 scheduled run завершился `delivered`, создал новый Session и сообщил об одной ожидающей правке; weekly cursor и nightly high-water опубликованы для воскресенья `2026-08-30` | Нет |
+| Tools и scoped approvals | **LIVE** | `remember` и `spawn_subagent` Tier-1 в natural mode; confirm mode повышает их до Tier-2. Durable grants принадлежат operator/profile + Workspace/Project, Project/path может только ужесточать. Свежий targeted corpus approval/policy/safety: 270/270 | Target confirm-once/repeat и отдельная destructive warning-карточка без выполнения |
 | Typed auto-skills | **LIVE** | Closed registry, two-session evidence, separate generator/judge, shadow/CAS и scoped overlay подключены; Doctor ready, active/queued/pending/quarantine=0 | Два чистых повторения в разных Sessions и последующая очистка test evidence |
 | Свободные model-authored Skills | **отложено ADR** | Модель не может писать исполняемый `SKILL.md`, source Aisy, Constitution, Safety или capability catalog. Свободный Skill остаётся staged + human-reviewed | Новое ADR, если оператор решит ослабить эту границу |
 | Active Skills runtime | **LIVE** | Hash-pinned active catalog, body-on-trigger, AgentCard filtering и Telegram controls подключены | На target нет установленного active Skill |
@@ -40,15 +40,19 @@
 | Voice/media | **LIVE framework** | Root-owned artifact, backend sockets, proxy и outbox pass; media recovery bounded. Ingress/credential/consent gates подключены | Production остаётся text-only: provider key и consent не готовы, поэтому voice E2E не заявлен |
 | Monitoring RSS/Web | **LIVE** | Exact-domain GET-only collector, durable windows и at-most-once delivery подключены | Target source add/pause/remove и delivery E2E |
 | Telegram/YouTube/GitHub collectors | **dormant** | Отдельные production bindings не активированы | Отдельные provider/authority решения |
-| Restart | **LIVE** | Managed deploy `905583d` после exact systemd restart: service active/running, `ExecMainStatus=0`, `NRestarts=0`; Doctor `ok=true` | Нет |
+| Restart | **LIVE** | Managed deploy `ad004cb` активен: service active/running, `ExecMainStatus=0`, `NRestarts=0`; Doctor `ok=true` | Нет |
 | Managed rollback | **LIVE; target drill подтверждён** | `7557ece → 905583d`: после rollback service active/running, `ExecMainStatus=0`, `NRestarts=0`, Doctor `ok=true`, memory marker сохранён, auto-skills только paused. `905583d → 7557ece`: roll-forward и explicit resume удалили barrier, service снова active, Doctor ready | Обычный Telegram turn после rollback не отправлялся без отдельного согласия оператора |
 | Docker restricted clone | **dormant** | Doctor честно сообщает, что legacy sandbox/restricted clone не активированы | Отдельный rollout; это не дефект text runtime |
 | Vision/video generation | **отсутствует** | Production seam не заявлен | Отдельная продуктовая спецификация |
 | Изменение собственного source моделью | **отложено ADR** | Разговорная настройка ограничена typed configuration, memory, grants и закрытыми навыками; source/Safety/catalog code-owned | Не разрешать без нового архитектурного решения |
 
-## Проверки release `905583d`
+## Проверки production current `ad004cb`
 
 - targeted rollback corpus: **46/46**;
+- свежий acceptance-корпус Session/reset/resume/delete, personality, grants,
+  typed auto-skills, MCP, subscription provider, subagents и ошибки:
+  **169/169** вне ограничивающего IPC sandbox;
+- дополнительный approval/policy/safety corpus: **270/270**;
 - workspace build и App typecheck: green;
 - чистый повтор полного App gate вне sandbox: **2822 passed / 2 skipped /
   0 failed**, 266 test files passed, 1 skipped; waiver не нужен;
@@ -62,6 +66,20 @@
 - tracked-tree scan: материалов, имён и путей приватного эталона нет;
 - production Doctor: `ok=true`; warnings относятся к явно неактивированным
   optional Docker/voice возможностям, а не к text runtime.
+
+## Аудит веток и доставка
+
+- public remote содержит ровно одну ветку `master` на `ad004cb`;
+- production current и public `master` совпадают;
+- commits ветки `codex/production-personal-agent`, относящиеся к этому срезу,
+  распознаны через `--cherry-mark` как patch-equivalent текущему `master`;
+  merge этой ветки не требуется и вернул бы старое tree-state без более новых
+  rollback, confinement и media-recovery исправлений;
+- локально остаются `--no-merged` refs от параллельных и исторических работ.
+  Эта матрица не объявляет их содержимое принятым или отброшенным: каждый такой
+  ref требует отдельного предметного аудита перед возможным MR;
+- рабочее дерево current release до обновления этой матрицы было чистым;
+  отдельный MR для personal-agent среза не требуется.
 
 ## Приватный эталон
 
