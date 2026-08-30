@@ -4407,12 +4407,13 @@ let pendingFormUntilMs = 0
       return
     }
 
-    // Only the next ordinary text after the code-owned morning notice can use
-    // its deictic “Покажи”. Old pending proposals cannot hijack an unrelated
-    // conversation, and an in-flight turn keeps steering precedence.
+    // A delivered code-owned morning notice keeps the deictic “Покажи” usable
+    // across ordinary conversation until the operator actually uses it. A new
+    // notice/proactive message replaces or clears the referent, and an in-flight
+    // turn keeps steering precedence.
     const bareShow = /^(?:покажи|show)[.!?…]*$/iu.test(span.text.trim())
     const shortcut = nightlyShortcut
-    nightlyShortcut = 'none'
+    if (bareShow) nightlyShortcut = 'none'
     if (bareShow && shortcut === 'zero-staging') {
       await ctx.reply('Новых правок нет.')
       return

@@ -877,6 +877,29 @@ describe('Telegram structured reply streaming', () => {
     expect(JSON.stringify(stagingCard?.payload['reply_markup'])).toContain('Уточнить предпочтение')
   })
 
+  it('keeps the morning memory shortcut across unrelated ordinary conversation', async () => {
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue({
+      state: 'ok', reply: 'Привет! Чем могу помочь?', narrowed: false,
+    })
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: true, pending: 1 })
+    await h.bot.handleUpdate(textUpdate(1, 'эй'))
+    await waitFor(() => handle.mock.calls.length === 1)
+    await h.bot.handleUpdate(textUpdate(2, 'Покажи'))
+
+    expect(handle).toHaveBeenCalledOnce()
+    expect(getStaging).toHaveBeenCalledOnce()
+    expect(h.calls.some(call => call.method === 'sendMessage' &&
+      String(call.payload['text'] ?? '').includes('Правки памяти ждут решения'))).toBe(true)
+  })
+
   it('does not let stale staging hijack an unarmed bare «Покажи»', async () => {
     const result = {
       state: 'ok' as const,
@@ -969,6 +992,7 @@ describe('Telegram structured reply streaming', () => {
       { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
       { getStaging },
     )
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
     await h.sendProactive(
       '🌅 Разобрала память за 2026-08-27: 1 правок ждут решения. Открой карточку — покажу каждую.',
     )
@@ -977,6 +1001,43 @@ describe('Telegram structured reply streaming', () => {
     await waitFor(() => handle.mock.calls.length === 1)
 
     expect(getStaging).not.toHaveBeenCalled()
+  })
+
+  it('replaces an armed memory referent with the exact newer nightly notice', async () => {
+    const handle = vi.fn<AgentRunner['handle']>().mockResolvedValue({
+      state: 'ok', reply: 'Что показать?', narrowed: false,
+    })
+    const getStaging = vi.fn(async () => [
+      { id: 'edit-1', preview: 'Уточнить предпочтение', judged: true },
+    ])
+    const h = harness(
+      { handle }, false, undefined, undefined, undefined, undefined, undefined, false,
+      { getStaging },
+    )
+
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
+    await h.sendNightlyNotice({ kind: 'complete-zero', sessionReset: false })
+    await h.bot.handleUpdate(textUpdate(4, 'Покажи'))
+    expect(handle).not.toHaveBeenCalled()
+    expect(getStaging).not.toHaveBeenCalled()
+    expect(h.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === 'Новых правок нет.')).toBe(true)
+
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
+    await h.sendNightlyNotice({ kind: 'session-only', sessionReset: true })
+    await h.bot.handleUpdate(textUpdate(5, 'Покажи'))
+    await waitFor(() => handle.mock.calls.length === 1)
+    expect(getStaging).not.toHaveBeenCalled()
+
+    await h.sendNightlyNotice({ kind: 'complete-n', sessionReset: false, pending: 1 })
+    await h.sendNightlyNotice({
+      kind: 'partial-failure', sessionReset: false, pending: 0, failedProjects: 1,
+    })
+    await h.bot.handleUpdate(textUpdate(6, 'Покажи'))
+    expect(handle).toHaveBeenCalledOnce()
+    expect(getStaging).not.toHaveBeenCalled()
+    expect(h.calls.some(call => call.method === 'sendMessage' &&
+      call.payload['text'] === 'Доступных правок нет; часть проектов не проверена.')).toBe(true)
   })
 
   it('reports a partial empty result deterministically and consumes it once', async () => {

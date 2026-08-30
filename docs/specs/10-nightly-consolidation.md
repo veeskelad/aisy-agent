@@ -609,10 +609,12 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     forget-chain tamper, missing/wrong Project runtime и неизвестная structured
     activity schema блокируют Project snapshot до generator/judge.
 44. **AC-10-44** — успешно доставленное code-owned утреннее уведомление
-    одноразово разрешает следующей обычной реплике bare `Покажи` при непустом
-    staging открыть существующую карточку без запуска AgentRunner/provider.
-    Любой другой обычный текст снимает разрешение; старый staging сам его не
-    создаёт, а активный AgentRunner сохраняет steering-приоритет. Уведомление с
+    одноразово разрешает bare `Покажи` при непустом staging открыть существующую
+    карточку без запуска AgentRunner/provider. Обычный разговор между
+    уведомлением и `Покажи` не теряет этот точный референт; его снимает только
+    фактическое bare `Покажи`, новое code-owned уведомление/proactive-сообщение
+    или завершение процесса. Старый staging сам разрешение не создаёт, а
+    активный AgentRunner сохраняет steering-приоритет. Уведомление с
     нулём создаёт отдельный одноразовый `zero-staging` context: bare `Покажи`
     получает `Новых правок нет.` без карточки и provider; это не
     `open-staging` и допустимо только для `complete-zero`. `partial-failure`
