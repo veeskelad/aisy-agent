@@ -1,23 +1,28 @@
 # Матрица production-готовности Aisy
 
-**Дата среза:** 2026-08-28
-**Code baseline:** public root `2de457ff84c415e53522dd772e4622ca858cd0b8`,
-audited Git tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`
+**Дата среза:** 2026-08-30
+**Code baseline:** public `master`
+`17a8b2104213fcd5a011feaa65fc22eee3a02418`, tree
+`c62e94aa15bf4622d89ce304bcc16321df4544ab`
 
-**Current verified code head:** `763ed88bd0c46094e32d1ed75e57e5c5070ac677`
+**Current verified code-bearing head:**
+`1c6cf123f2d673476b9ab0415d119651dc665d1b`, tree
+`53a2130009f1e04d06ab55d2f62ab9d248e656e4`
 
 **Production runtime release из public `master`:**
-`c5db7ae998c8241197f99488e38f8f2d31c87892`
+`17a8b2104213fcd5a011feaa65fc22eee3a02418`
 
-**Managed production current:** `c5db7ae998c8241197f99488e38f8f2d31c87892`
-**Managed production previous:** `97b25ef931d21afb34b4232a3070bfb2718dcee6`
+**Managed production current:** `17a8b2104213fcd5a011feaa65fc22eee3a02418`
+**Managed production previous:** `27ba3ae1a6edd8460982cbc74e5789cbde3cd55e`
 
-**Опубликованный, но ещё не развёрнутый candidate:**
-`763ed88bd0c46094e32d1ed75e57e5c5070ac677`
+**Локальный проверенный, но ещё не опубликованный и не развёрнутый candidate:**
+`1c6cf123f2d673476b9ab0415d119651dc665d1b`
 
-**Развёрнутый adaptive-agent slice:** commits `0843142..c5db7ae`;
-managed update, rollback, roll-forward и recovery restart-budget выполнены на
-целевом host. Остаточные внешние E2E не выданы ниже за уже принятые.
+**Candidate поверх public `master`:** 13 линейных commits. Он восстанавливает
+разговорное управление Session, физическое удаление, естественное именование,
+строгие Project/folder overlays и закрывает накопление media recovery-архивов.
+До fast-forward push, managed deploy и живого target acceptance этот срез не
+выдаётся за production runtime.
 
 **Назначение:** отделить production composition от target acceptance и не
 выдавать dormant-код или исторические тесты за пользовательский LIVE.
@@ -34,6 +39,50 @@ managed update, rollback, roll-forward и recovery restart-budget выполне
 Target acceptance указывается отдельно: `LIVE в коде` не означает, что внешний
 provider, Telegram flow или новый distribution channel уже принят на целевом
 host.
+
+## Актуализация candidate 2026-08-30
+
+- Session удаляется физически вместе с transcript, attachments и
+  provider-local history. Protected/global/project memory, active typed Skills,
+  communication preferences и durable Workspace/Project grants не удаляются.
+  Перед необратимым удалением остаётся одна ясная terminal-карточка; обычные
+  настройки через typed LLM-controls повторного подтверждения не требуют.
+- Разрешение живёт не в Session, а в exact operator/profile + Workspace или
+  Project. Project/path overlay может только ужесточить его. Модель не получает
+  права менять source tree Aisy, constitution, safety policy или каталог
+  полномочий.
+- Daily Session reset, `/resume`, воскресная consolidation, естественный
+  memory acknowledgement, мужской grammatical gender и silent typed learning
+  входят в candidate composition. Learned procedure активируется только через
+  closed-registry typed descriptor и deterministic lifecycle, а не записью
+  произвольного Skill/source model-ответом.
+- Production `17a8b21` остаётся text-capable, но Doctor сейчас видит 65
+  structurally-valid media recovery archives и честно блокирует voice/media.
+  Candidate сохраняет восемь новых архивов, cleanup выполняет descriptor-relative
+  worker под exact writer identity и постоянным per-inbox `flock`. Real-process
+  corpus доказывает `SIGKILL parent → orphan worker → immediate restart` без
+  двух concurrent cleanup и без 257-го archive.
+- Полный candidate corpus на локальной среде: Core **2448 passed / 1 skipped**,
+  App **2806 passed / 2 skipped**, Telegram Gateway **260 passed**, Python
+  sidecars **228 passed / 39 platform-or-optional skipped**, Ruff green;
+  workspace typecheck/build и `git diff --check` green. Один старый supervisor
+  timing-сценарий первого App run повторён шесть раз и затем прошёл внутри
+  чистого полного run; timeout/skip не менялись.
+- Независимый review media recovery завершён `APPROVED`: закрыты path TOCTOU,
+  repair ceiling, durable crash authority orphan-worker и ложная busy-причина.
+  Отдельный copy review подтвердил две естественные русские startup-строки.
+- Public remote до push имеет ровно один head `master=17a8b21` и ноль tags.
+  Candidate является прямым потомком (`13` commits). Сравнение с расходящейся
+  `codex/production-personal-agent` не выявило утраченного функционального
+  source: старая ветка не содержит текущего media repair, а прочие различия —
+  прежние test-fixture deadlines. Механический merge/cherry-pick legacy heads
+  не выполняется.
+- Gitleaks не нашёл утечек ни в 13 candidate commits, ни во всех 73 commits,
+  reachable из candidate. Tracked tree, diff и reachable-history marker scan не
+  содержат имён, путей, текстов, схем или артефактов локального приватного
+  эталона. Игнорируемые build-артефакты и локальные legacy refs не входят в этот
+  вывод; legacy refs и private archive remote не являются publish authority.
+  Разрешён только exact fast-forward `HEAD:master` в public remote.
 
 ## Метод независимого gap-аудита
 
@@ -96,12 +145,12 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 
 | Область | Verdict | Текущее доказательство | Оставшийся gate |
 |---|---|---|---|
-| Telegram text, streaming, attachments и forwarded batches | **LIVE в composition; production P0, candidate проверен offline** | Production `c5db7ae` теряет обычный ответ в stale-continuation recovery-loop. Candidate `763ed88` закрывает exact non-ambiguous orphan, продолжает повторно доставленный transport update и меняет карточку на «Gateway перезапущен. Продолжаю.». Полный App/process corpus и Gateway зелёные | Managed deploy `763ed88`, один restart, обычный ответ без повторной реплики пользователя; затем nightly shortcut |
-| Workspace, Projects, Sessions и files | **LIVE в composition; daily target state ещё не создан** | Registry v2, ProjectService, one-use SessionRotationAuthority, crash recovery и `/resume [prefix]` подключены. Corrupt rotation record fail-closed; старая Session и transcript не удаляются. На target `daily-session-rotation.json` ещё отсутствует: сегодняшний nightly слот завершился до активации slice | Следующая daily rotation и живой `/resume`; forget-safe transcript reprojection отложена ADR |
+| Telegram text, streaming, attachments и forwarded batches | **LIVE в candidate composition; target pending** | Ordinary chat не требует action receipt, внутренние ids/timers/provenance скрыты, restart выдаёт не более одной короткой отбивки, startup различает busy и recovery-state. App **2806/2806**, Gateway **260/260** | Fast-forward deploy `1c6cf12`; живые «эй», restart и вложение только в `@monday_aibot` |
+| Workspace, Projects, Sessions и files | **LIVE в candidate composition; target pending** | Registry v2, ProjectService, daily rotation и `/resume` подключены. Session list/name/new/delete доступны typed control и кнопками; delete физически удаляет transcript, attachments и provider history, но сохраняет memory/Skills/grants. Crash/WAL/tombstone corpus зелёный | Deploy; target create→name→resume→physical delete, затем удалить только exact test Session |
 | Transcript v2 и compaction | **LIVE; rollback-compatible learned overlay fix развёрнут** | Single-writer lease, WAL/restart, reply checkpoint, durable media inbox и compaction подключены; raw audit остаётся неизменным. Provider-facing projection удаляет code-owned recovery/action spans и промежуточные model attempts. `learned-procedure` является актуальной turn-local проекцией typed store и не записывается как диалоговая строка; user ingress и terminal reply остаются в прежнем hash-chained schema | Повторный живой Telegram turn; target-FS self-test и long-session acceptance; day-log/activity pipeline DORMANT |
 | Keyword/scoped memory и forgetting | **LIVE; новый slice развёрнут** | Protected global/Project stores и `makeScopedMemoryLiveView` остаются единственным live path. `remember` публикует факт сразу и code-owned acknowledgement нормализует bounded preference prefixes в естественное «Запомнил, что ты…»; operational facts не перефразируются. Три известные test facts удалены через deletion service, ledger/projection после restart содержат 0 test markers | Target natural remember→restart→recall без служебного текста |
 | Semantic memory | **LIVE при explicit descriptor + consent** | sqlite-vec/OpenRouter adapter и durable semantic-egress consent подключены; без них честный keyword-only fallback | Реальный embedding call, restart и revoke consent |
-| Tools и exact-domain HTTPS | **LIVE в composition; similar grant target ещё не принят** | Shared capability executor, files/memory/knowledge/tasks/journal, `web_search` и redirect-safe `fetch_url` подключены. В `auto` первое ordinary Tier-2 подтверждение создаёт scoped similar grant; destructive/Tier-3/HARD_DENY не обходятся. Target `grants.json` отсутствует: фактический grant ещё не создавался | Живой Tier-2 confirm-once → repeat без карточки; отдельно destructive warning/card |
+| Tools и exact-domain HTTPS | **LIVE в candidate composition; target grant pending** | Shared executor и files/memory/knowledge/tasks/journal/web подключены. Ordinary durable grant не содержит Session id; scope — Workspace/Project, а Project/folder overlay может только ужесточить. Destructive/Tier-3/HARD_DENY остаются отдельным gate | Deploy; Tier-2 confirm-once → repeat, затем destructive warning без выполнения |
 | Active Skills | **LIVE runtime; на target нет активного Skill** | Hash-pinned catalog, prompt menu/body-on-trigger, AgentCard filtering, CLI и Telegram controls подключены. `skills-manifest.json` на target отсутствует | Установка, trigger и disable/reload одного реального Skill |
 | Typed auto-skills | **LIVE framework; target lifecycle healthy, activation не случалась** | `AISY_AUTO_SKILLS=1` включает generator/judge/store/worker и code-owned planner; два delivery-confirmed success разных Sessions активируют только closed-registry descriptor. Doctor: lifecycle pass, active/queued/pending/quarantined/forgetting/ambiguous — 0 | Два чистых remember-turn в разных Sessions, planner smoke и удаление только их test evidence |
 | Skill promotion runtime | **DORMANT** | Promotion/store/doctor modules и tests существуют отдельно от production composition | Verification probes и human promotion composition |
@@ -110,28 +159,41 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 | Streamable HTTP MCP | **DORMANT** | Transport policy и wire foundation существуют, но live binding выключен | Отдельное security/authority решение и acceptance |
 | Native API providers | **LIVE под supervisor** | Семь fixed descriptors, root-owned broker, validator/worker sockets, host-encrypted A/B slots и rollback развёрнуты; arbitrary URL не принимается | TTY enrollment, bounded vendor call, switch, restart и revoke real slot |
 | Claude/Codex subscription brains | **LIVE на target; provenance/receipt fix развёрнут** | Per-turn loopback Aisy MCP bridge, isolated homes и exact turn binding реализованы. Releases `2a98797` и `1df4851` сохраняют frozen prefix, сериализуют spans как `AISY_CONTEXT_V1`, не приписывают оператору неподтверждённые ложные предупреждения и фильтруют их до streaming/history, сохраняя реальное untrusted/tool grounding и приватный raw audit | Повторить composite smoke на exact `1df4851` |
-| Voice provider registry / Deepgram proxy | **LIVE framework; target text-only** | Telegram voice ingress, `Transcriber`, one-use media capability, root-owned broker/worker, consent/spend boundary и A/B rollback реализованы. Doctor подтверждает artifact/backend/proxy/outbox, но старый provider selection изолирован после privacy-revision change, а credential не ready. Тихо переиспользовать старое consent нельзя | Явные TTY enrollment/reselection/consent, Telegram voice, bounded call и revoke; до этого voice не выдаётся за функциональный |
+| Voice provider registry / Deepgram proxy | **LIVE framework; production text-only, recovery repair pending deploy** | Voice ingress, one-use media capability, broker/worker и consent/spend boundary реализованы. Production Doctor fail вызван 65 валидными recovery archives; candidate code-owned cleanup оставляет 8 и сериализует orphan/restart через per-inbox `flock`. Provider selection/credential всё ещё не ready | Deploy repair и Doctor pass; затем explicit TTY enrollment/reselection/consent, Telegram voice, bounded call и revoke. До этого voice не выдаётся за рабочий |
 | Subagents | **LIVE; durable supervised path deployed** | AgentCard-scoped runner, receipts, Journal v2, retry/cancel actor, startup replay, durable `/stop` и terminal delivery подключены; ordinary delegation через Telegram после `a74419c` вернула проверенный terminal result | Отдельные target ambiguity и `/stop` fault drills |
 | Monitoring и digest | **LIVE для RSS/Web** | Source UI, DNS/IP-pinned GET-only collector, no-tools scorer, durable windows и at-most-once Telegram send ledger подключены | RSS→Telegram restart/rollback E2E и egress pentest |
 | Monitoring source authority | **LIVE** | Добавление source сохраняет read-only grant только на exact HTTPS domain; pause его сохраняет, confirmed remove отзывает | Target add/pause/remove audit без raw URL или content в approval state |
 | Telegram/YouTube/GitHub monitoring collectors и feedback learning | **DORMANT / ОТСУТСТВУЕТ по подтипу** | Core collector/ranking pieces существуют не для всех platform flows | Отдельные normalized collectors, UI и deterministic cursor/feedback corpus |
-| Onboarding, профиль и персонализация | **LIVE; мужской grammatical gender активирован** | Typed store немедленно применяет explicit `concise`, `hide-internals`, `natural-russian`, `second-person-memory-ack`, `masculine-russian`; inferred descriptor требует две Sessions. `c3268de` сохраняет overlay turn-local; `97b25ef` подключает тот же descriptor к code-owned nightly notices. На target active family точно masculine, internal detail hidden | Живой ordinary ответ мужского рода на `c5db7ae`; rollback/forget есть в code, Telegram UI отсутствует |
-| Daily Session reset / Sunday memory cadence | **LIVE в composition; target cadence ещё не отработал** | Daily runner не вызывает generator/judge; Sunday cursor даёт missed-Sunday catch-up, manual run не двигает cursor. Rotation/restart/at-most-once notice покрыты tests. Target files `daily-session-rotation.json` и `weekly-consolidation-cursor.json` ещё отсутствуют | Следующий daily slot и ближайшее Sunday/catch-up. Multi-Project cohort и late-result outbox ОТЛОЖЕНЫ ADR |
+| Onboarding, профиль и персонализация | **LIVE в candidate; target pending** | Typed store применяет `concise`, `hide-internals`, `natural-russian`, `second-person-memory-ack`, `masculine-russian`. Явная поправка действует сразу; повторённое успешное действие обучает только closed-registry typed skill. Source/self-policy mutation модели запрещена | Deploy; естественный мужской reply, «Запомнил, что ты…», silent recall и два безопасных повтора для typed learning |
+| Daily Session reset / Sunday memory cadence | **LIVE в composition; target cadence pending** | Daily runner очищает conversational context, но сохраняет память/Skills/grants; `/resume` восстанавливает выбранную Session. Consolidation запускается по воскресеньям, missed-Sunday catch-up детерминирован; manual run не двигает cursor | Следующая ночь и воскресенье/catch-up. Multi-Project cohort и late-result outbox **ОТЛОЖЕНЫ ADR** |
 | Напоминания, расписания и цели | **LIVE** | Trigger store/engine, scheduler, goal store/orchestrator, approval и restart resume подключены в `bin/aisy.ts` | Target reminder + scheduled goal + restart trace |
 | Ограниченный доступ к серверу | **LIVE при explicit config + approval** | `makeServerAccess` импортирован production binary; argv выполняется без shell, restart требует held supervisor authority, временный доступ истекает scheduler-ом | Target open/expire/restart audit для operator-owned config |
 | Image/video understanding и преобразования | **ОТСУТСТВУЕТ** | Durable attachment/media inbox принимает и изолирует bytes, voice имеет отдельный transcriber; production vision/video processor или transformation tool отсутствует | Новый продуктовый срез, egress/privacy ADR и детерминированный media corpus; не является скрытым release gate v0.1 |
 | Learned autonomy | **LIVE** | Evidence/grant stores и post-success observation подключены; enforcement действует только в `auto`, revoke/forget code-owned | Нормативный 7-day promotion/restart/forget E2E без ускорения порогов |
 | Docker external sidecar create/use | **DORMANT** | Startup recovery barrier, enroll/doctor и pinned daemon checks LIVE; current-child create/use/cleanup не активированы | Authenticated child authority, real-Docker rehearsal и multi-resource cleanup |
-| Supervisor restart/rollback | **LIVE parent; turn recovery candidate не развёрнут** | `6d50eb9` удерживает parent в backoff; real-process target drill доказал один replacement child и `NRestarts=0`. Production `c5db7ae` при stale parent continuation повторяет child restart. `763ed88` добавляет exact orphan/failed-turn retirement и зелёный real-process corpus без изменения persisted schema | Managed deploy, один restart и подтверждение, что unexpected-exit counter больше не растёт на обычном ходе |
-| Managed Git install/update/rollback | **LIVE: target cutover, rollback и roll-forward приняты** | current=`c5db7ae`, previous=`97b25ef`; оба последних update выполнены каноническим managed binary с pinned Node 22 PATH, затем explicit service restart. Предыдущие offline rollback/roll-forward drills сохраняются; текущий Doctor exit 0 | Новый rollback drill не нужен для text-only UI diff; previous slot сохранён и готов |
+| Supervisor restart/rollback | **LIVE framework; candidate target drill pending** | Parent/process-group/restart-budget и exact turn replay проходят real-process corpus. Media cleanup дополнительно держит собственный worker lease после parent SIGKILL. Ordinary restart copy короткий и не просит повторять уже доставленный update | Deploy; explicit restart, SIGKILL child, service/NRestarts check, rollback и roll-forward |
+| Managed Git install/update/rollback | **LIVE; target на старом release** | Managed current=`17a8b21`, previous=`27ba3ae`, Node 22.23.1. Public candidate — прямой потомок. Staged build/Doctor и offline rollback mechanics уже code-owned | `aisy update`, staged Node 22 corpus/Doctor, restart, rollback на `17a8b21`, roll-forward на `1c6cf12` |
 | SSH provider/voice bundle delivery | **РЕАЛИЗОВАН; target transfer ещё не принят** | 64 targeted Python tests и disposable Linux install/rollback; quotas, replay tombstones и crash-convergent cleanup включены | Постоянный pinned receiver и controlled target delivery |
 | Несколько Telegram-ботов | **LIVE с ограничением** | Durable registry и add/list/archive существуют | Active token switch **ОТЛОЖЕН ADR-0076**: один process обслуживает один token |
 | Arbitrary OpenAI-compatible origin | **ОТЛОЖЕНО ADR-0099** | Caller не передаёт URL/host/header в native broker | Новый scoped egress/identity ADR; текущий path fail closed |
 | Общая IDE/browser control plane | **ОТСУТСТВУЕТ в v0.1** | Telegram остаётся единственной полной operator surface | Отдельная gateway/auth/recovery архитектура после Telegram acceptance |
-| Public history/privacy boundary | **LIVE по ADR-0107** | Public remote после fast-forward содержит один head `master=763ed88` и ноль tags. Staged Gitleaks candidate — 0 findings; diff и tracked-path scan не содержат имён, путей, текстов, схем или артефактов локального приватного эталона. Старые локальные ветки не publish authority и не мержились | После production evidence commit повторить public refs/history/tree scans; legacy refs не push'ить |
+| Public history/privacy boundary | **LIVE по ADR-0107; candidate ещё не опубликован** | Public remote имеет один head `master=17a8b21`, tags нет. Candidate прямой потомок на 13 commits; tracked tree и candidate scan не содержат материалов приватного эталона. Старые локальные ветки и private archive remote не являются publish authority | Финальный history/tree/secret scan, затем только exact fast-forward `HEAD:master`; legacy refs не отправлять |
 
 ## Проверки текущего среза
 
+- candidate `1c6cf12`: Core **2448 passed / 1 skipped**, App **2806 passed /
+  2 skipped**, Telegram Gateway **260 passed**, Python sidecars **228 passed /
+  39 platform-or-optional skipped**, Ruff green; workspace typecheck/build и
+  whitespace check green. Targeted media recovery: App **33/33**, Core Doctor
+  **109/109**, Python confinement/recovery **51 passed / 1 skipped**. Реальный
+  adversarial corpus подтверждает parent SIGKILL, orphan worker lease,
+  немедленный restart и финальные 8 archives. Первый полный App run дал один
+  старый supervisor timing miss и copy-contract справедливо отверг английские
+  слова; supervisor exact scenario прошёл 6 повторов, copy исправлен и
+  независимо одобрен, после чего второй полный App run прошёл целиком без
+  изменения timeout или skip. Production пока остаётся `17a8b21`: push,
+  Node 22 staged gate, managed deploy, Doctor, rollback/roll-forward и живой
+  `@monday_aibot` acceptance ещё не выданы за выполненные;
 - candidate `763ed88`: root cause подтверждён как stale non-ambiguous active
   parent continuation после ordinary provider failure. Exact retirement
   привязан к continuation hash, owner и revision; ambiguity, actor, любой exact
@@ -304,14 +366,15 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
 
 ## Несмерженные ветки и commits
 
-- публичный remote на момент аудита имеет ровно один head `master`, tags и
-  дополнительных heads нет; последний code-bearing commit `b125e73`
-  опубликован fast-forward от `0178acd`;
+- публичный remote на момент аудита имеет ровно один head
+  `master=17a8b2104213fcd5a011feaa65fc22eee3a02418`; tags и дополнительных
+  heads нет. Candidate `1c6cf123f2d673476b9ab0415d119651dc665d1b`
+  является прямым потомком на 13 commits;
 - `git branch --no-merged public/master` по-прежнему показывает локальные feature- и
   legacy-ветки, потому что clean public snapshot переписал корень истории:
   отсутствие merge-base здесь не означает отсутствующий feature и запрещает
   механический merge/cherry-pick;
-- независимый read-only аудит проверил все **35** локальных refs. Старый
+- предыдущий независимый read-only аудит проверил все **35** локальных refs. Старый
   snapshot-tip `e78ca0f` и clean public root `2de457f` имеют exact одинаковый
   tree `c65ef5bd85f0ae7cf3627fb34a9c62f4e41af95a`: поэтому каждый предок
   `e78ca0f` уже вошёл byte-for-byte, несмотря на разорванную ancestry. Для
@@ -324,16 +387,18 @@ transcript честно остаются **ОТЛОЖЕНО ADR**: они не �
   security-функции высокого риска, — **0**;
 - локальные status/gap-audit heads содержат устаревшие review-срезы, а старые
   durable/distribution heads — промежуточные состояния, закрытые более новыми
-  public commits. Повторная проверка 2026-08-28 после adaptive-agent push не
-  нашла коммитов поверх текущей `codex/auto-skill-learning`: `public/master`
-  указывает на тот же `b125e73`. Перенос legacy heads вернул бы уже
-  исправленные safety/recovery gaps;
+  public commits. Повторная проверка 2026-08-30 сравнила текущий candidate с
+  расходящейся `codex/production-personal-agent`: Session deletion/naming,
+  conversational controls и strict Project/folder overlays восстановлены в
+  candidate; старая ветка не содержит текущего media repair, а оставшиеся
+  различия — прежние monotonic fixture deadlines. Отсутствующий functional
+  source feature не найден;
 - локальные legacy refs и unreachable objects не являются publish authority и
   не отправляются ни в какой remote. Отменённый APT publication head отдельно
   исключён ADR-0106: это orphan с устаревшими бинарными артефактами, а не
   отсутствующий source feature. Push выполнялся только как `HEAD:master` в
-  публичный remote; независимый аудит не выполнял checkout, merge или
-  cherry-pick и не обращался к приватному remote.
+  публичный remote; текущий аудит не выполнял checkout, merge или cherry-pick
+  legacy heads и не использовал private archive remote как источник publish.
 
 ## Release gate
 
