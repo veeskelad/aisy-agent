@@ -2,8 +2,8 @@
 
 **Дата среза:** 2026-08-30  
 **Code-bearing baseline:** `905583d42290d37c6c3445103c6c299a936e8b9a`  
-**Production current при сборе evidence:** `905583d42290d37c6c3445103c6c299a936e8b9a`  
-**Production previous при сборе evidence:** `4e493c41b75ba61635427d0fa849e925288b6db4`
+**Rollback-drill current:** `7557ecefccfa8f8179a8d722f5307953068164fa`  
+**Rollback-drill previous:** `905583d42290d37c6c3445103c6c299a936e8b9a`
 
 Эта матрица заменяет прежний накопительный candidate-срез. Она различает
 наличие production composition и фактическую проверку на целевом хосте. Статус
@@ -41,7 +41,7 @@
 | Monitoring RSS/Web | **LIVE** | Exact-domain GET-only collector, durable windows и at-most-once delivery подключены | Target source add/pause/remove и delivery E2E |
 | Telegram/YouTube/GitHub collectors | **dormant** | Отдельные production bindings не активированы | Отдельные provider/authority решения |
 | Restart | **LIVE** | Managed deploy `905583d` после exact systemd restart: service active/running, `ExecMainStatus=0`, `NRestarts=0`; Doctor `ok=true` | Нет |
-| Managed rollback | **LIVE в коде; target drill выполняется** | Exact certified auto-skill barrier read-only проверяется независимо от canary flag; optional learning pause не открывает writable store, corrupt/`preparing` fail closed. 46/46 targeted tests и независимый review APPROVED | Нужен двухрелизный rollback → text health → roll-forward → explicit resume |
+| Managed rollback | **LIVE; target drill подтверждён** | `7557ece → 905583d`: после rollback service active/running, `ExecMainStatus=0`, `NRestarts=0`, Doctor `ok=true`, memory marker сохранён, auto-skills только paused. `905583d → 7557ece`: roll-forward и explicit resume удалили barrier, service снова active, Doctor ready | Обычный Telegram turn после rollback не отправлялся без отдельного согласия оператора |
 | Docker restricted clone | **dormant** | Doctor честно сообщает, что legacy sandbox/restricted clone не активированы | Отдельный rollout; это не дефект text runtime |
 | Vision/video generation | **отсутствует** | Production seam не заявлен | Отдельная продуктовая спецификация |
 | Изменение собственного source моделью | **отложено ADR** | Разговорная настройка ограничена typed configuration, memory, grants и закрытыми навыками; source/Safety/catalog code-owned | Не разрешать без нового архитектурного решения |
@@ -54,6 +54,10 @@
   0 failed**, 266 test files passed, 1 skipped; waiver не нужен;
 - `git diff --check`: green;
 - independent review rollback-среза: **APPROVED**, P0–P2 нет;
+- двухрелизный production drill: rollback сохранил основной runtime и память,
+  roll-forward вернул exact release, explicit resume снял barrier; финальные
+  `ActiveState=active`, `SubState=running`, `ExecMainStatus=0`, `NRestarts=0`,
+  Doctor `ok=true`;
 - Gitleaks: один новый commit, утечек нет;
 - tracked-tree scan: материалов, имён и путей приватного эталона нет;
 - production Doctor: `ok=true`; warnings относятся к явно неактивированным
