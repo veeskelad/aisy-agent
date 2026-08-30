@@ -13,6 +13,7 @@ in this index so cross-references stay stable.
 
 | ID | Status | Date | Title | Tags |
 |----|--------|------|-------|------|
+| ADR-0113 | Принято | 2026-08-30 | [Ограниченное хранение recovery-архивов media inbox](./2026-08-30-bounded-media-inbox-recovery-retention.md) | telegram, voice, durability, recovery, retention |
 | ADR-0112 | Принято | 2026-08-29 | [Разговорное управление без самопереписывания и удаление Session](./2026-08-29-conversational-control-and-session-deletion.md) | sessions, personality, approvals, tools, telegram |
 | ADR-0111 | Принято | 2026-08-28 | [Выученный контекст применяется молча, знакомство не захватывает обычный диалог](./2026-08-28-silent-learned-context-and-bounded-onboarding.md) | personality, providers, onboarding |
 | ADR-0110 | Принято | 2026-08-28 | [Одно подтверждение обучает разрешению, стиль — отдельный typed overlay](./2026-08-28-one-confirmation-adaptive-style.md) | approvals, personality, learning |
