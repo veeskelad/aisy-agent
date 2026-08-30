@@ -899,10 +899,15 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
       try {
         const finding = deps.mediaInbox.writerLock()
         const validArchiveCount = Number.isSafeInteger(finding.archivedRecoveries) &&
-          finding.archivedRecoveries >= 0
+          finding.archivedRecoveries >= 0 && finding.archivedRecoveries <= 256
         const validState = finding.state === 'absent' || finding.state === 'held' ||
           finding.state === 'abandoned' || finding.state === 'corrupt'
-        const healthy = validArchiveCount && validState && finding.state === 'absent'
+        const overRetained = validArchiveCount && validState &&
+          finding.archivedRecoveries > 64 &&
+          finding.state !== 'corrupt'
+        const healthy = validArchiveCount && validState &&
+          finding.state === 'absent' &&
+          !overRetained
         // A held lock is the normal state while `aisy run` is up, so it is a
         // warning, not a failure. It only needs action when no agent is
         // running — the lock is never reclaimed by age or PID by design.
@@ -913,13 +918,15 @@ export function makeOnboardingOps(deps: OnboardingDeps): OnboardingOps {
         add({
           id: 'sidecars.media-inbox-writer-lock',
           domain: 'sidecars',
-          status: healthy ? 'pass' : held || abandoned ? 'warn' : 'fail',
+          status: healthy ? 'pass' : held || abandoned || overRetained ? 'warn' : 'fail',
           severity: 'high',
-          detail: healthy
-            ? `Media inbox writer свободен; архивов recovery=${finding.archivedRecoveries}`
-            : held
-              ? `Media inbox writer занят (норма при работающем aisy run); архивов recovery=${finding.archivedRecoveries}. Если агент не запущен — удали каталог .writer.lock в media-inbox.`
-              : abandoned
+          detail: overRetained
+            ? `Recovery-архив media inbox будет сокращён следующим запуском; архивов=${finding.archivedRecoveries}`
+            : healthy
+              ? `Media inbox writer свободен; архивов recovery=${finding.archivedRecoveries}`
+              : held
+                ? `Media inbox writer занят — это нормально, пока Aisy работает; архивов recovery=${finding.archivedRecoveries}`
+                : abandoned
                 ? 'Media inbox writer lock остался от оборванного запуска — следующий запуск агента уберёт его сам'
                 : 'Media inbox writer lock повреждён или не прошёл проверку',
           fixable: false,

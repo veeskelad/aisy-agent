@@ -12,14 +12,23 @@ import {
   realpathSync,
   renameSync,
   rmdirSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { join, resolve } from 'node:path'
+import {
+  TelegramAttachmentInboxError,
+  type MediaInboxWriterRetentionSealV1,
+} from './telegram-attachment-inbox.js'
 
 const MAX_OWNER_BYTES = 4096
-const MAX_ARCHIVED_RECOVERIES = 64
+const MAX_HEALTHY_ARCHIVED_RECOVERIES = 64
+const MAX_REPAIR_ARCHIVED_RECOVERIES = 256
+const RETAINED_ARCHIVED_RECOVERIES = 8
 const FINGERPRINT = /^sha256:[a-f0-9]{64}$/
 const RECOVERY_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+const RECOVERY_PREFIX = 'recovery-'
+const RECOVERY_GC_ROOT = '.writer-lock-gc'
 
 export type MediaInboxWriterLockInspection =
   | { readonly state: 'absent'; readonly archivedRecoveries: number }
@@ -61,6 +70,25 @@ export class MediaInboxWriterRecoveryError extends Error {
   }
 }
 
+export type MediaInboxStartupRefusal = 'busy' | 'recovery-state'
+
+export function classifyMediaInboxStartupRefusal(error: unknown): MediaInboxStartupRefusal {
+  if (error instanceof TelegramAttachmentInboxError && error.code === 'WRITER_LOCK_HELD') {
+    return 'busy'
+  }
+  if (error instanceof MediaInboxWriterRecoveryError &&
+    error.code === 'RUNTIME_NOT_QUIESCENT') {
+    return 'busy'
+  }
+  return 'recovery-state'
+}
+
+export function renderMediaInboxStartupRefusal(kind: MediaInboxStartupRefusal): string {
+  return kind === 'busy'
+    ? 'aisy run: приём вложений и голос временно недоступны — media inbox уже используется другим процессом.\n'
+    : 'aisy run: приём вложений и голос выключены — состояние media inbox требует проверки через aisy doctor.\n'
+}
+
 export interface MediaInboxWriterRecoveryAuthorizationPort {
   /** Atomically validates and consumes one exact approval grant. */
   consume(input: {
@@ -82,6 +110,10 @@ export interface MediaInboxWriterQuiescencePort {
 
 export interface MediaInboxWriterRecovery {
   inspect(): MediaInboxWriterLockInspection
+  compactArchives(input: {
+    readonly expectedOwnerFingerprint: string
+    readonly retention: MediaInboxRecoveryRetentionPort
+  }): { readonly removed: number; readonly retained: number }
   archive(input: {
     readonly expectedOwnerFingerprint: string
     readonly approval: unknown
@@ -105,10 +137,43 @@ export interface MediaInboxWriterRecovery {
   }): { readonly ownerFingerprint: string }
 }
 
+export interface MediaInboxWriterMaintenancePort {
+  /** Proves exact singleton ownership and that no attachment ingest is active. */
+  assertIdle(): void
+  /** Binds descriptor-relative repair to this exact singleton writer. */
+  retentionSeal(): MediaInboxWriterRetentionSealV1
+}
+
+export interface MediaInboxRecoveryRetentionPort {
+  compact(input: {
+    readonly inboxRoot: string
+    readonly seal: MediaInboxWriterRetentionSealV1
+  }): { readonly removed: number; readonly retained: number }
+}
+
 interface ParsedOwner {
   readonly raw: string
   readonly fingerprint: string
   readonly acquiredAt: string
+  readonly directoryIdentity: FsIdentity
+  readonly ownerIdentity: FsIdentity
+}
+
+interface FsIdentity {
+  readonly device: number
+  readonly inode: number
+}
+
+function fsIdentity(info: { dev: number; ino: number }): FsIdentity {
+  if (!Number.isSafeInteger(info.dev) || info.dev < 0 ||
+    !Number.isSafeInteger(info.ino) || info.ino < 1) {
+    throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+  }
+  return Object.freeze({ device: info.dev, inode: info.ino })
+}
+
+function sameIdentity(left: FsIdentity, right: FsIdentity): boolean {
+  return left.device === right.device && left.inode === right.inode
 }
 
 function noFollow(): number {
@@ -118,7 +183,7 @@ function noFollow(): number {
   return constants.O_NOFOLLOW
 }
 
-function privateDirectory(path: string): void {
+function privateDirectory(path: string): FsIdentity {
   const canonical = resolve(path)
   const info = lstatSync(canonical)
   const expectedUid = typeof process.getuid === 'function' ? process.getuid() : info.uid
@@ -126,6 +191,7 @@ function privateDirectory(path: string): void {
     (info.mode & 0o077) !== 0 || realpathSync(canonical) !== canonical) {
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
   }
+  return fsIdentity(info)
 }
 
 function pathExists(path: string): boolean {
@@ -160,7 +226,7 @@ function safeText(value: unknown, maximum: number): value is string {
 }
 
 function parseOwner(directory: string): ParsedOwner {
-  privateDirectory(directory)
+  const directoryIdentity = privateDirectory(directory)
   const entries = readdirSync(directory)
   if (entries.length !== 1 || entries[0] !== 'owner.json') {
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
@@ -171,14 +237,24 @@ function parseOwner(directory: string): ParsedOwner {
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
   }
   let raw: string
+  let ownerIdentity: FsIdentity
   try {
     const info = fstatSync(descriptor)
+    ownerIdentity = fsIdentity(info)
     const expectedUid = typeof process.getuid === 'function' ? process.getuid() : info.uid
     if (!info.isFile() || info.nlink !== 1 || info.uid !== expectedUid ||
       (info.mode & 0o077) !== 0 || info.size < 1 || info.size > MAX_OWNER_BYTES) {
       throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
     }
     raw = readFileSync(descriptor, 'utf8')
+    const currentDirectoryIdentity = privateDirectory(directory)
+    if (!sameIdentity(directoryIdentity, currentDirectoryIdentity)) {
+      throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+    }
+    const currentOwner = lstatSync(ownerPath)
+    if (!sameIdentity(ownerIdentity, fsIdentity(currentOwner))) {
+      throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+    }
   } catch (error) {
     if (error instanceof MediaInboxWriterRecoveryError) throw error
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
@@ -203,28 +279,163 @@ function parseOwner(directory: string): ParsedOwner {
     !Number.isFinite(Date.parse(owner['acquiredAt'] as string))) {
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
   }
+  const finalDirectoryIdentity = privateDirectory(directory)
+  const finalOwnerIdentity = fsIdentity(lstatSync(ownerPath))
+  if (!sameIdentity(directoryIdentity, finalDirectoryIdentity) ||
+    !sameIdentity(ownerIdentity, finalOwnerIdentity)) {
+    throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+  }
   return Object.freeze({
     raw,
     fingerprint: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
     acquiredAt: owner['acquiredAt'] as string,
+    directoryIdentity,
+    ownerIdentity,
   })
 }
 
-function archivedRecoveryCount(root: string): number {
+interface RecoveryArchiveEntry {
+  readonly name: string
+  readonly path: string
+  readonly acquiredAt: string
+  readonly fingerprint: string
+  readonly directoryIdentity: FsIdentity
+  readonly ownerIdentity: FsIdentity
+}
+
+interface PendingGcEntry {
+  readonly name: string
+  readonly path: string
+  readonly ownerPresent: boolean
+  readonly directoryIdentity: FsIdentity
+  readonly ownerIdentity?: FsIdentity
+  readonly fingerprint?: string
+}
+
+function recoveryArchiveEntries(root: string, ceiling: number): RecoveryArchiveEntry[] {
   const archiveRoot = join(root, '.writer-lock-recovery')
-  if (!pathExists(archiveRoot)) return 0
+  if (!pathExists(archiveRoot)) return []
   privateDirectory(archiveRoot)
   const entries = readdirSync(archiveRoot)
-  if (entries.length > MAX_ARCHIVED_RECOVERIES) {
+  if (entries.length > ceiling) {
     throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
   }
-  for (const entry of entries) {
-    if (!entry.startsWith('recovery-') || !RECOVERY_ID.test(entry.slice('recovery-'.length))) {
+  return entries.map((name) => {
+    if (!name.startsWith(RECOVERY_PREFIX) ||
+      !RECOVERY_ID.test(name.slice(RECOVERY_PREFIX.length))) {
       throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
     }
-    parseOwner(join(archiveRoot, entry))
+    const path = join(archiveRoot, name)
+    const owner = parseOwner(path)
+    return Object.freeze({
+      name,
+      path,
+      acquiredAt: owner.acquiredAt,
+      fingerprint: owner.fingerprint,
+      directoryIdentity: owner.directoryIdentity,
+      ownerIdentity: owner.ownerIdentity,
+    })
+  })
+}
+
+function pendingGcEntries(root: string): PendingGcEntry[] {
+  const gcRoot = join(root, RECOVERY_GC_ROOT)
+  if (!pathExists(gcRoot)) return []
+  privateDirectory(gcRoot)
+  const entries = readdirSync(gcRoot)
+  if (entries.length > MAX_REPAIR_ARCHIVED_RECOVERIES) {
+    throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
   }
-  return entries.length
+  return entries.map((name) => {
+    if (!name.startsWith(RECOVERY_PREFIX) ||
+      !RECOVERY_ID.test(name.slice(RECOVERY_PREFIX.length))) {
+      throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+    }
+    const path = join(gcRoot, name)
+    const directoryIdentity = privateDirectory(path)
+    const children = readdirSync(path)
+    if (children.length === 0) {
+      return Object.freeze({ name, path, ownerPresent: false, directoryIdentity })
+    }
+    if (children.length !== 1 || children[0] !== 'owner.json') {
+      throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+    }
+    const owner = parseOwner(path)
+    if (!sameIdentity(directoryIdentity, owner.directoryIdentity)) {
+      throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+    }
+    return Object.freeze({
+      name,
+      path,
+      ownerPresent: true,
+      directoryIdentity,
+      ownerIdentity: owner.ownerIdentity,
+      fingerprint: owner.fingerprint,
+    })
+  })
+}
+
+function recoveryInventory(root: string): {
+  archives: RecoveryArchiveEntry[]
+  pending: PendingGcEntry[]
+} {
+  const archives = recoveryArchiveEntries(root, MAX_REPAIR_ARCHIVED_RECOVERIES)
+  // A structurally valid interrupted retention is not a corrupt writer lock.
+  // Startup under the next singleton writer completes it; Doctor stays read-only.
+  const pending = pendingGcEntries(root)
+  if (archives.length + pending.length > MAX_REPAIR_ARCHIVED_RECOVERIES) {
+    throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+  }
+  const archiveNames = new Set(archives.map(entry => entry.name))
+  if (pending.some(entry => archiveNames.has(entry.name))) {
+    throw new MediaInboxWriterRecoveryError('STATE_CORRUPT')
+  }
+  return { archives, pending }
+}
+
+function archivedRecoveryCount(root: string): number {
+  return recoveryInventory(root).archives.length
+}
+
+function assertWriterIdle(writer: MediaInboxWriterMaintenancePort): void {
+  try { writer.assertIdle() } catch {
+    throw new MediaInboxWriterRecoveryError('RUNTIME_NOT_QUIESCENT')
+  }
+}
+
+/**
+ * Bounds completed recovery evidence under the live singleton writer.
+ *
+ * Every candidate and any interrupted GC residue is validated before the first
+ * mutation. Atomic archive→GC rename makes either side independently
+ * recoverable after a hard crash; current writer ownership is rechecked before
+ * each destructive step.
+ */
+export function compactMediaInboxWriterRecoveryArchives(input: {
+  readonly inboxRoot: string
+  readonly writer: MediaInboxWriterMaintenancePort
+  readonly retention: MediaInboxRecoveryRetentionPort
+}): { readonly removed: number; readonly retained: number } {
+  const root = resolve(input.inboxRoot)
+  try {
+    assertWriterIdle(input.writer)
+    privateDirectory(root)
+    const seal = input.writer.retentionSeal()
+    assertWriterIdle(input.writer)
+    const result = input.retention.compact({ inboxRoot: root, seal })
+    if (!Number.isSafeInteger(result.removed) || result.removed < 0 ||
+      !Number.isSafeInteger(result.retained) || result.retained < 0 ||
+      result.removed > MAX_REPAIR_ARCHIVED_RECOVERIES ||
+      result.retained > RETAINED_ARCHIVED_RECOVERIES ||
+      result.removed + result.retained > MAX_REPAIR_ARCHIVED_RECOVERIES) {
+      throw new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE')
+    }
+    assertWriterIdle(input.writer)
+    return Object.freeze({ removed: result.removed, retained: result.retained })
+  } catch (error) {
+    if (error instanceof MediaInboxWriterRecoveryError) throw error
+    throw new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE')
+  }
 }
 
 export function inspectMediaInboxWriterLock(input: {
@@ -377,6 +588,71 @@ export function makeMediaInboxWriterRecovery(input: {
 
   return Object.freeze({
     inspect: () => inspectMediaInboxWriterLock({ inboxRoot: root }),
+
+    compactArchives(request: {
+      readonly expectedOwnerFingerprint: string
+      readonly retention: MediaInboxRecoveryRetentionPort
+    }) {
+      if (!FINGERPRINT.test(request.expectedOwnerFingerprint)) {
+        throw new MediaInboxWriterRecoveryError('INVALID_REQUEST')
+      }
+      const before = inspectMediaInboxWriterLock({ inboxRoot: root })
+      if (before.state !== 'held' ||
+        before.ownerFingerprint !== request.expectedOwnerFingerprint) {
+        throw new MediaInboxWriterRecoveryError('WRITER_LOCK_CHANGED')
+      }
+      const lease = acquireQuiescence(input.quiescence)
+      let operationFailed = false
+      try {
+        const current = inspectMediaInboxWriterLock({ inboxRoot: root })
+        if (current.state !== 'held' ||
+          current.ownerFingerprint !== request.expectedOwnerFingerprint ||
+          lease.assertHeld() !== true) {
+          throw new MediaInboxWriterRecoveryError('WRITER_LOCK_CHANGED')
+        }
+        const rootIdentity = privateDirectory(root)
+        const owner = parseOwner(lockPath)
+        if (owner.fingerprint !== request.expectedOwnerFingerprint ||
+          lease.assertHeld() !== true) {
+          throw new MediaInboxWriterRecoveryError('WRITER_LOCK_CHANGED')
+        }
+        const result = request.retention.compact({
+          inboxRoot: root,
+          seal: Object.freeze({
+            version: 1,
+            rootDevice: String(rootIdentity.device),
+            rootInode: String(rootIdentity.inode),
+            lockDevice: String(owner.directoryIdentity.device),
+            lockInode: String(owner.directoryIdentity.inode),
+            ownerDevice: String(owner.ownerIdentity.device),
+            ownerInode: String(owner.ownerIdentity.inode),
+            ownerFingerprint: owner.fingerprint,
+          }),
+        })
+        if (!Number.isSafeInteger(result.removed) || result.removed < 0 ||
+          !Number.isSafeInteger(result.retained) || result.retained < 0 ||
+          result.removed > MAX_REPAIR_ARCHIVED_RECOVERIES ||
+          result.retained > RETAINED_ARCHIVED_RECOVERIES ||
+          result.removed + result.retained > MAX_REPAIR_ARCHIVED_RECOVERIES ||
+          lease.assertHeld() !== true) {
+          throw new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE')
+        }
+        const after = inspectMediaInboxWriterLock({ inboxRoot: root })
+        if (after.state !== 'held' ||
+          after.ownerFingerprint !== request.expectedOwnerFingerprint) {
+          throw new MediaInboxWriterRecoveryError('WRITER_LOCK_CHANGED')
+        }
+        return Object.freeze({ removed: result.removed, retained: result.retained })
+      } catch (error) {
+        operationFailed = true
+        if (error instanceof MediaInboxWriterRecoveryError) throw error
+        throw new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE')
+      } finally {
+        try { lease.release() } catch {
+          if (!operationFailed) throw new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE')
+        }
+      }
+    },
 
     discardAbandoned(): boolean {
       if (inspectMediaInboxWriterLock({ inboxRoot: root }).state !== 'abandoned') return false

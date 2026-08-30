@@ -752,6 +752,72 @@ describe('Onboarding & Operations (component 13)', () => {
       }))
   })
 
+  it('keeps Doctor read-only and warns about a repairable over-retained archive', async () => {
+    const deps = healthyDeps({
+      mediaInbox: {
+        writerLock: () => ({ state: 'held', archivedRecoveries: 65 }),
+      },
+    })
+    const fs = deps.fs as ReturnType<typeof makeFakeFs>
+
+    const report = await makeOnboardingOps(deps).doctor({ fix: true, only: ['sidecars'] })
+
+    expect(report.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({
+        status: 'warn',
+        severity: 'high',
+        fixable: false,
+        detail: 'Recovery-архив media inbox будет сокращён следующим запуском; архивов=65',
+      }))
+    expect(fs.writes).toEqual([])
+    expect(fs.mkdirs).toEqual([])
+  })
+
+  it('fails an archive count above the bounded startup repair ceiling', async () => {
+    const report = await makeOnboardingOps(healthyDeps({
+      mediaInbox: {
+        writerLock: () => ({ state: 'absent', archivedRecoveries: 257 }),
+      },
+    })).doctor({ only: ['sidecars'] })
+
+    expect(report.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({
+        status: 'fail',
+        severity: 'high',
+        fixable: false,
+      }))
+  })
+
+  it('reports every structurally valid state at the repair ceiling as repairable', async () => {
+    const held = await makeOnboardingOps(healthyDeps({
+      mediaInbox: { writerLock: () => ({ state: 'held', archivedRecoveries: 256 }) },
+    })).doctor({ only: ['sidecars'] })
+    const absent = await makeOnboardingOps(healthyDeps({
+      mediaInbox: { writerLock: () => ({ state: 'absent', archivedRecoveries: 256 }) },
+    })).doctor({ only: ['sidecars'] })
+    const abandoned = await makeOnboardingOps(healthyDeps({
+      mediaInbox: { writerLock: () => ({ state: 'abandoned', archivedRecoveries: 256 }) },
+    })).doctor({ only: ['sidecars'] })
+
+    expect(held.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({ status: 'warn', severity: 'high' }))
+    expect(absent.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({ status: 'warn', severity: 'high' }))
+    expect(abandoned.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({ status: 'warn', severity: 'high' }))
+  })
+
+  it('never masks an unknown future writer state as repairable retention', async () => {
+    const report = await makeOnboardingOps(healthyDeps({
+      mediaInbox: {
+        writerLock: () => ({ state: 'future', archivedRecoveries: 65 } as never),
+      },
+    })).doctor({ only: ['sidecars'] })
+
+    expect(report.checks.find(check => check.id === 'sidecars.media-inbox-writer-lock'))
+      .toEqual(expect.objectContaining({ status: 'fail', severity: 'high' }))
+  })
+
   it('fails media inbox finding closed without exposing probe errors', async () => {
     const report = await makeOnboardingOps(healthyDeps({
       mediaInbox: {

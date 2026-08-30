@@ -18,6 +18,7 @@ import {
   unlinkSync,
   writeFileSync,
   writeSync,
+  type Stats,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -76,7 +77,19 @@ export interface TelegramAttachmentInbox {
 
 export interface TelegramAttachmentInboxMaintenance {
   assertIdle(): void
+  retentionSeal(): MediaInboxWriterRetentionSealV1
   purgeSession(sessionId: string): { recordsRemoved: number; objectsRemoved: number }
+}
+
+export interface MediaInboxWriterRetentionSealV1 {
+  readonly version: 1
+  readonly rootDevice: string
+  readonly rootInode: string
+  readonly lockDevice: string
+  readonly lockInode: string
+  readonly ownerDevice: string
+  readonly ownerInode: string
+  readonly ownerFingerprint: string
 }
 
 interface TelegramAttachmentIntentV1 {
@@ -151,11 +164,82 @@ function readWriterOwner(path: string): string {
   }
 }
 
+function writerIdentity(info: Stats): {
+  readonly device: string
+  readonly inode: string
+} {
+  if (!Number.isSafeInteger(info.dev) || info.dev < 0 ||
+    !Number.isSafeInteger(info.ino) || info.ino < 1) {
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  }
+  return Object.freeze({ device: String(info.dev), inode: String(info.ino) })
+}
+
+function captureWriterRetentionSeal(
+  root: string,
+  lockPath: string,
+  ownerPath: string,
+  expectedOwner: string,
+): MediaInboxWriterRetentionSealV1 {
+  const beforeRoot = lstatSync(root)
+  const beforeLock = lstatSync(lockPath)
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : beforeRoot.uid
+  if (!beforeRoot.isDirectory() || beforeRoot.isSymbolicLink() ||
+    !beforeLock.isDirectory() || beforeLock.isSymbolicLink() ||
+    beforeRoot.uid !== expectedUid || beforeLock.uid !== expectedUid ||
+    (beforeRoot.mode & 0o077) !== 0 || (beforeLock.mode & 0o077) !== 0) {
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  }
+  let ownerDescriptor: number
+  try { ownerDescriptor = openSync(ownerPath, constants.O_RDONLY | noFollow()) } catch {
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  }
+  try {
+    const ownerInfo = fstatSync(ownerDescriptor)
+    if (!ownerInfo.isFile() || ownerInfo.nlink !== 1 || ownerInfo.uid !== expectedUid ||
+      (ownerInfo.mode & 0o077) !== 0 || ownerInfo.size < 1 ||
+      ownerInfo.size > MAX_WRITER_OWNER_BYTES ||
+      readFileSync(ownerDescriptor, 'utf8') !== expectedOwner) {
+      throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+    }
+    const afterRoot = lstatSync(root)
+    const afterLock = lstatSync(lockPath)
+    const namedOwner = lstatSync(ownerPath)
+    if (beforeRoot.dev !== afterRoot.dev || beforeRoot.ino !== afterRoot.ino ||
+      beforeLock.dev !== afterLock.dev || beforeLock.ino !== afterLock.ino ||
+      ownerInfo.dev !== namedOwner.dev || ownerInfo.ino !== namedOwner.ino) {
+      throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+    }
+    const rootIdentity = writerIdentity(beforeRoot)
+    const lockIdentity = writerIdentity(beforeLock)
+    const ownerIdentity = writerIdentity(ownerInfo)
+    return Object.freeze({
+      version: 1,
+      rootDevice: rootIdentity.device,
+      rootInode: rootIdentity.inode,
+      lockDevice: lockIdentity.device,
+      lockInode: lockIdentity.inode,
+      ownerDevice: ownerIdentity.device,
+      ownerInode: ownerIdentity.inode,
+      ownerFingerprint: `sha256:${createHash('sha256').update(expectedOwner).digest('hex')}`,
+    })
+  } catch (error) {
+    if (error instanceof TelegramAttachmentInboxError) throw error
+    throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+  } finally {
+    closeSync(ownerDescriptor)
+  }
+}
+
 function acquireInboxWriter(root: string, input: {
   nowIso: () => string
   newNonce: () => string
   pid: number
-}): { assertHeld(): void; release(): void } {
+}): {
+  assertHeld(): void
+  retentionSeal(): MediaInboxWriterRetentionSealV1
+  release(): void
+} {
   const lockPath = join(root, '.writer.lock')
   const ownerPath = join(lockPath, 'owner.json')
   try {
@@ -207,12 +291,22 @@ function acquireInboxWriter(root: string, input: {
     if (error instanceof TelegramAttachmentInboxError) throw error
     throw new TelegramAttachmentInboxError('STATE_CORRUPT')
   }
+  const retentionSeal = captureWriterRetentionSeal(root, lockPath, ownerPath, encoded)
   let released = false
+  const assertHeld = (): void => {
+    if (released || readWriterOwner(ownerPath) !== encoded ||
+      !isDeepStrictEqual(
+        captureWriterRetentionSeal(root, lockPath, ownerPath, encoded),
+        retentionSeal,
+      )) {
+      throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+    }
+  }
   return Object.freeze({
-    assertHeld() {
-      if (released || readWriterOwner(ownerPath) !== encoded) {
-        throw new TelegramAttachmentInboxError('STATE_CORRUPT')
-      }
+    assertHeld,
+    retentionSeal() {
+      assertHeld()
+      return retentionSeal
     },
     release() {
       if (released) return
@@ -1012,6 +1106,11 @@ export function makeSingletonTelegramAttachmentInbox(input: {
         if (active !== 0) throw new TelegramAttachmentInboxError('WRITER_BUSY')
         inbox.recoverHardCrashTemps()
         inbox.assertPurgeReady()
+      },
+      retentionSeal() {
+        if (closed) throw new TelegramAttachmentInboxError('STATE_CORRUPT')
+        if (active !== 0) throw new TelegramAttachmentInboxError('WRITER_BUSY')
+        return writer.retentionSeal()
       },
       purgeSession(sessionId) {
         if (closed) throw new TelegramAttachmentInboxError('STATE_CORRUPT')

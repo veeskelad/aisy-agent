@@ -1188,14 +1188,36 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     archived fingerprint; новый writer никогда не перезаписывается.
 53. **AC-02-53** — corrupt archive, changed owner, collision и incomplete fsync
     дают только стабильный code, raw path/owner/exception не выходит наружу.
-53a. **AC-02-53a** — startup retention запускается только при exact held и idle
-    singleton writer, полностью проверяет не более 256 recovery archives и
-    оставляет восемь самых новых по verified `acquiredAt` + canonical id.
+53a. **AC-02-53a** — startup retention запускается при exact held и idle
+    singleton writer либо до recovery под exact lock writer, смерть которого
+    доказана quiescence lease. Boundary полностью проверяет не более 256
+    recovery archives/pending GC и оставляет восемь самых новых по verified
+    `acquiredAt` + canonical id; их canonical имена обязаны не пересекаться.
+    Dead writer всегда компактируется до archive: после cleanup его archive
+    становится девятым, а crash на любой границе оставляет тот же exact lock и
+    не более 256 entries для идемпотентного повтора без 257-го entry. Exact idle
+    или доказанно dead writer передаёт one-shot boundary identity-печать
+    root/lock/owner; модель её не создаёт и не получает. Root/archive/GC
+    открываются с `O_NOFOLLOW`, их descriptors удерживаются до конца, а
+    device/inode pins повторно сверяются непосредственно перед mutation.
+    Worker сам удерживает постоянный private per-inbox advisory lease: SIGKILL
+    родительского Node оставляет lease у orphan worker, а немедленный restart
+    ждёт его освобождения и после этого повторяет exact preflight. Lease-file
+    не unlink-ается и не даёт двум inode одновременно представлять authority.
+    Rename/unlink/rmdir выполняются descriptor-relative внутри process-isolated
+    worker без shell, credentials и сети; исходный absolute root path, exact
+    writer и parent attachment повторно сверяются перед каждым syscall.
     Каждый старый archive сначала атомарно переносится в private GC-root;
     crash после rename или удаления `owner.json` сходится на следующем startup.
     Corrupt/symlink/unknown entry, потеря writer lease либо превышение repair
-    ceiling выполняют zero archive mutation и fail closed. Active lock,
+    ceiling, найденные до первой мутации, выполняют zero archive mutation и fail
+    closed. POSIX не предоставляет child-name CAS по inode: произвольная
+    same-UID nanorace после последней сверки вне threat model приватного
+    singleton writer; обнаруженный следующий checkpoint останавливает cleanup и
+    оставляет закрытый GC-residue без recursive delete и без success receipt. Active lock,
     attachment records/objects/intents, transcript и memory не меняются.
+    Busy startup и corrupt/over-ceiling recovery-state получают разные redacted
+    runtime-сообщения; неизвестная ошибка не выдаётся за live writer.
 54. **AC-02-54** — durable execution checkpoint содержит только строгую
     redacted projection и SHA-256 binding; args/result/reply/reasoning/raw error,
     raw chat id и raw turn id не записываются.

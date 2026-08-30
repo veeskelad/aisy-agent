@@ -1,8 +1,11 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,9 +15,13 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResolvedWorkBinding } from '@aisy/core'
 import {
+  classifyMediaInboxStartupRefusal,
+  compactMediaInboxWriterRecoveryArchives,
   inspectMediaInboxWriterLock,
   makeDeadWriterQuiescence,
   makeMediaInboxWriterRecovery,
+  MediaInboxWriterRecoveryError,
+  renderMediaInboxStartupRefusal,
   unattendedRecoveryAuthorization,
   type MediaInboxWriterQuiescencePort,
   type MediaInboxWriterRecoveryAuthorizationPort,
@@ -95,6 +102,18 @@ function ports(input: {
 }
 
 describe('media inbox writer-lock recovery', () => {
+  it('distinguishes a live writer from a corrupt or over-ceiling recovery state', () => {
+    expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
+      new TelegramAttachmentInboxError('WRITER_LOCK_HELD'),
+    ))).toContain('используется другим процессом')
+    expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
+      new MediaInboxWriterRecoveryError('STATE_CORRUPT'),
+    ))).toContain('требует проверки через aisy doctor')
+    expect(renderMediaInboxStartupRefusal(classifyMediaInboxStartupRefusal(
+      new MediaInboxWriterRecoveryError('RECOVERY_INCOMPLETE'),
+    ))).not.toContain('другим процессом')
+  })
+
   it('reports only redaction-safe owner evidence and archived recovery count', () => {
     const root = tempRoot()
     expect(inspectMediaInboxWriterLock({ inboxRoot: join(root, 'missing') }))
@@ -191,6 +210,129 @@ describe('media inbox writer-lock recovery', () => {
           expectedOwnerFingerprint: `sha256:${'0'.repeat(64)}`,
           approval: 'yes',
         })).toThrow('WRITER_LOCK_ABSENT')
+    })
+  })
+
+  describe('bounded retention', () => {
+    it('compacts a proven-dead writer before archiving it and survives retry', () => {
+      const root = tempRoot()
+      writer(root, 'dead-writer')
+      const finding = inspectMediaInboxWriterLock({ inboxRoot: root })
+      if (finding.state !== 'held') throw new Error('fixture lock missing')
+      const safe = ports()
+      const recovery = makeMediaInboxWriterRecovery({
+        inboxRoot: root,
+        authorization: safe.authorization,
+        quiescence: safe.quiescence,
+        newId: () => 'after-compaction',
+      })
+      const compact = vi.fn()
+        .mockImplementationOnce(() => { throw new Error('simulated process death') })
+        .mockReturnValueOnce({ removed: 248, retained: 8 })
+
+      expect(() => recovery.compactArchives({
+        expectedOwnerFingerprint: finding.ownerFingerprint,
+        retention: { compact },
+      })).toThrow('RECOVERY_INCOMPLETE')
+      expect(recovery.inspect()).toMatchObject({
+        state: 'held',
+        ownerFingerprint: finding.ownerFingerprint,
+      })
+
+      expect(recovery.compactArchives({
+        expectedOwnerFingerprint: finding.ownerFingerprint,
+        retention: { compact },
+      })).toEqual({ removed: 248, retained: 8 })
+      expect(compact).toHaveBeenLastCalledWith({
+        inboxRoot: root,
+        seal: expect.objectContaining({
+          version: 1,
+          ownerFingerprint: finding.ownerFingerprint,
+        }),
+      })
+      expect(recovery.archive({
+        expectedOwnerFingerprint: finding.ownerFingerprint,
+        approval: null,
+      })).toMatchObject({ recoveryId: 'after-compaction' })
+    })
+
+    it('never compacts an old writer without a quiescence proof', () => {
+      const root = tempRoot()
+      writer(root, 'active-writer')
+      const finding = inspectMediaInboxWriterLock({ inboxRoot: root })
+      if (finding.state !== 'held') throw new Error('fixture lock missing')
+      const active = ports({ quiescent: false })
+      const compact = vi.fn(() => ({ removed: 0, retained: 0 }))
+
+      expect(() => makeMediaInboxWriterRecovery({
+        inboxRoot: root,
+        authorization: active.authorization,
+        quiescence: active.quiescence,
+      }).compactArchives({
+        expectedOwnerFingerprint: finding.ownerFingerprint,
+        retention: { compact },
+      })).toThrow('RUNTIME_NOT_QUIESCENT')
+      expect(compact).not.toHaveBeenCalled()
+    })
+
+    it('binds one descriptor-relative repair to the exact idle singleton writer', () => {
+      const root = tempRoot()
+      const current = writer(root, 'current')
+      const compact = vi.fn(() => ({ removed: 57, retained: 8 }))
+
+      const result = compactMediaInboxWriterRecoveryArchives({
+        inboxRoot: root,
+        writer: current.maintenance,
+        retention: { compact },
+      })
+
+      expect(result).toEqual({ removed: 57, retained: 8 })
+      expect(compact).toHaveBeenCalledWith({
+        inboxRoot: root,
+        seal: expect.objectContaining({
+          version: 1,
+          rootDevice: expect.stringMatching(/^[0-9]+$/),
+          rootInode: expect.stringMatching(/^[0-9]+$/),
+          lockDevice: expect.stringMatching(/^[0-9]+$/),
+          lockInode: expect.stringMatching(/^[0-9]+$/),
+          ownerDevice: expect.stringMatching(/^[0-9]+$/),
+          ownerInode: expect.stringMatching(/^[0-9]+$/),
+          ownerFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        }),
+      })
+      expect(JSON.stringify(compact.mock.calls)).not.toContain('current')
+      current.close()
+    })
+
+    it('refuses a substituted writer lock before invoking the repair process', () => {
+      const root = tempRoot()
+      const current = writer(root, 'current')
+      const lock = join(root, '.writer.lock')
+      const displaced = join(root, '.writer.lock.displaced')
+      const raw = readFileSync(join(lock, 'owner.json'), 'utf8')
+      renameSync(lock, displaced)
+      mkdirSync(lock, { mode: 0o700 })
+      writeFileSync(join(lock, 'owner.json'), raw, { mode: 0o600 })
+      const compact = vi.fn(() => ({ removed: 0, retained: 0 }))
+
+      expect(() => compactMediaInboxWriterRecoveryArchives({
+        inboxRoot: root,
+        writer: current.maintenance,
+        retention: { compact },
+      })).toThrow('RUNTIME_NOT_QUIESCENT')
+      expect(compact).not.toHaveBeenCalled()
+    })
+
+    it('rejects malformed or over-ceiling process receipts', () => {
+      const root = tempRoot()
+      const current = writer(root, 'current')
+
+      expect(() => compactMediaInboxWriterRecoveryArchives({
+        inboxRoot: root,
+        writer: current.maintenance,
+        retention: { compact: () => ({ removed: 257, retained: 8 }) },
+      })).toThrow('RECOVERY_INCOMPLETE')
+      current.close()
     })
   })
 

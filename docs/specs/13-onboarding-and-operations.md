@@ -335,8 +335,14 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     abandoned — предупреждение; `doctor --fix` не архивирует и не изменяет lock,
     не выполняет retention и не завершает pending GC, а detail не содержит path,
     owner nonce, fingerprint или raw probe error. Bounded cleanup выполняется
-    только startup-кодом под exact held/idle singleton writer по AC-02-53a;
-    после него Doctor видит не более восьми structurally-valid archives.
+    только startup-кодом под exact held/idle singleton writer либо до archive
+    доказанно dead writer через descriptor-relative one-shot boundary по
+    AC-02-53a; валидный набор 65..256 при absent/held/abandoned до startup даёт
+    warning, а не блокирует repair-код. После startup Doctor видит не более
+    восьми structurally-valid archives у live writer. Набор >256 остаётся
+    high-severity fail. Runtime отдельно сообщает code-only busy и необходимость
+    проверить recovery-state через `aisy doctor`, не называя любую ошибку живым
+    writer.
 34. **AC-13-34** — реальный `aisy doctor` получает read-only
     `telegram.execution-checkpoint`: absent/clean дают pass, pending/corrupt —
     high-severity fail; `--fix` выполняет zero filesystem/Telegram writes, а

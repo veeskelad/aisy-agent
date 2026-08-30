@@ -205,11 +205,16 @@ import {
   type SingletonTelegramAttachmentInbox,
 } from '../telegram-attachment-inbox.js'
 import {
+  classifyMediaInboxStartupRefusal,
+  compactMediaInboxWriterRecoveryArchives,
   inspectMediaInboxWriterLock,
   makeDeadWriterQuiescence,
   makeMediaInboxWriterRecovery,
+  renderMediaInboxStartupRefusal,
+  type MediaInboxStartupRefusal,
   unattendedRecoveryAuthorization,
 } from '../telegram-attachment-inbox-recovery.js'
+import { makeNodeMediaRecoveryRetentionPort } from '../media-recovery-retention-sidecar.js'
 import { makeClaudeSubscriptionProvider } from '../claude-subscription-provider.js'
 import {
   makeNodeCodexSubscriptionRuntime,
@@ -1748,6 +1753,10 @@ const fsPort: FsPort = {
 const sidecarsRoot = fileURLToPath(new URL('../../../sidecars-py/', import.meta.url))
 const pythonExecutable = join(sidecarsRoot, '.venv', 'bin', 'python')
 const confinementWorkerPath = join(sidecarsRoot, 'aisy_sidecars', 'confinement_worker.py')
+const mediaRecoveryRetention = makeNodeMediaRecoveryRetentionPort({
+  pythonExecutable,
+  workerPath: confinementWorkerPath,
+})
 const workspaceConfinement = makeConfinementPort({
   leases: contextLeases,
   process: makeNodeConfinementProcessPort({ pythonExecutable, workerPath: confinementWorkerPath }),
@@ -1787,16 +1796,34 @@ const journal = makeJsonlJournal({
 const MEDIA_INBOX_MAX_BYTES = 20 * 1024 * 1024
 const mediaInboxRoot = join(base, 'media-inbox')
 const mediaInbox = ((): SingletonTelegramAttachmentInbox | null => {
-  const open = (): SingletonTelegramAttachmentInbox =>
-    makeSingletonTelegramAttachmentInbox({
+  let refusal: MediaInboxStartupRefusal = 'recovery-state'
+  const open = (): SingletonTelegramAttachmentInbox => {
+    const singleton = makeSingletonTelegramAttachmentInbox({
       inboxRoot: mediaInboxRoot,
       allowedChatId,
       maxAttachmentBytes: MEDIA_INBOX_MAX_BYTES,
       download: makeTelegramBotApiAttachmentDownloadPort({ token }),
     })
+    try {
+      const retention = compactMediaInboxWriterRecoveryArchives({
+        inboxRoot: mediaInboxRoot,
+        writer: singleton.maintenance,
+        retention: mediaRecoveryRetention,
+      })
+      if (retention.removed > 0) {
+        journal.append('media', 'media.writer_recovery_retained', retention)
+      }
+      return singleton
+    } catch (error) {
+      try { singleton.close() } catch { /* preserve retention refusal */ }
+      throw error
+    }
+  }
   try {
     return open()
-  } catch { /* the lock is held by a live writer or was abandoned */ }
+  } catch (error) {
+    refusal = classifyMediaInboxStartupRefusal(error)
+  }
   try {
     const recovery = makeMediaInboxWriterRecovery({
       inboxRoot: mediaInboxRoot,
@@ -1811,6 +1838,13 @@ const mediaInbox = ((): SingletonTelegramAttachmentInbox | null => {
       return inbox
     }
     if (held.state === 'held') {
+      const retention = recovery.compactArchives({
+        expectedOwnerFingerprint: held.ownerFingerprint,
+        retention: mediaRecoveryRetention,
+      })
+      if (retention.removed > 0) {
+        journal.append('media', 'media.writer_recovery_retained', retention)
+      }
       const archived = recovery.archive({
         expectedOwnerFingerprint: held.ownerFingerprint,
         approval: null,
@@ -1822,10 +1856,11 @@ const mediaInbox = ((): SingletonTelegramAttachmentInbox | null => {
       process.stdout.write('aisy run: убрал зависший writer lock вложений от прошлого запуска.\n')
       return inbox
     }
-  } catch { /* fall through to the honest refusal below */ }
-  process.stdout.write(
-    'aisy run: приём вложений и голос выключены — writer lock держит живой процесс.\n',
-  )
+    refusal = 'recovery-state'
+  } catch (error) {
+    refusal = classifyMediaInboxStartupRefusal(error)
+  }
+  process.stdout.write(renderMediaInboxStartupRefusal(refusal))
   return null
 })()
 const forwardBatchStore = makeNodeTelegramForwardBatchStore({
