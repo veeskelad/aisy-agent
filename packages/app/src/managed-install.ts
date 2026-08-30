@@ -31,6 +31,7 @@ import {
   resumeNodeAutoSkillWritesAfterRollForward,
   verifyNodeAutoSkillRollback,
 } from './auto-skill-store.js'
+import { verifyManagedConfinementPrerequisite } from './confinement-python.js'
 
 export const MANAGED_ORIGIN = 'https://github.com/veeskelad/aisy-agent.git'
 export const MANAGED_BRANCH = 'master'
@@ -103,6 +104,14 @@ export interface ManagedUpdatePorts {
   withOperationLock<T>(root: string, body: () => T): T
   generationId(): string
   fault(point: string): void
+}
+
+export interface NodeManagedUpdatePortsInput {
+  readonly verifyConfinementPrerequisite?: typeof verifyManagedConfinementPrerequisite
+  readonly runDoctor?: (input: {
+    readonly releaseRoot: string
+    readonly mode: 'bootstrap' | 'update' | 'rollback'
+  }) => void
 }
 
 export type AutoSkillRollbackAuthorization = Readonly<
@@ -1023,7 +1032,18 @@ function recoverMissingInitializingWorktrees(root: string): void {
   }
 }
 
-export function nodeManagedUpdatePorts(): ManagedUpdatePorts {
+export function nodeManagedUpdatePorts(
+  input: NodeManagedUpdatePortsInput = {},
+): ManagedUpdatePorts {
+  const verifyConfinementPrerequisite = input.verifyConfinementPrerequisite ??
+    verifyManagedConfinementPrerequisite
+  const runDoctor = input.runDoctor ?? (value => {
+    command(process.execPath, [
+      join(value.releaseRoot, 'packages', 'app', 'dist', 'bin', 'aisy.js'),
+      'doctor', '--post-upgrade', '--json',
+      ...(value.mode === 'bootstrap' ? ['--only=mcp,migration,sandbox'] : []),
+    ], value.releaseRoot)
+  })
   return {
     effectiveUid: () => process.geteuid?.() ?? 0,
     fetchHead: (root) => {
@@ -1073,11 +1093,14 @@ export function nodeManagedUpdatePorts(): ManagedUpdatePorts {
         throw new ManagedUpdateFailure('UPDATE_SOURCE_REFUSED')
       }
       try {
-        command(process.execPath, [
-          join(path, 'packages', 'app', 'dist', 'bin', 'aisy.js'),
-          'doctor', '--post-upgrade', '--json',
-          ...(mode === 'bootstrap' ? ['--only=mcp,migration,sandbox'] : []),
-        ], path)
+        if (mode !== 'rollback') {
+          const sidecarsRoot = join(path, 'packages', 'sidecars-py')
+          verifyConfinementPrerequisite({
+            sidecarsRoot,
+            workerPath: join(sidecarsRoot, 'aisy_sidecars', 'confinement_worker.py'),
+          })
+        }
+        runDoctor({ releaseRoot: path, mode })
         verifyManagedReleaseIntegrity(root, commit)
       } catch (error) {
         if (error instanceof ManagedUpdateFailure) throw error

@@ -44,6 +44,7 @@ MEDIA_RECOVERY_REQUEST_KEYS = frozenset({
     "expectedWriterLockDevice", "expectedWriterLockInode", "expectedWriterOwnerDevice",
     "expectedWriterOwnerInode", "expectedWriterOwnerFingerprint",
 })
+RUNTIME_PROBE_REQUEST_KEYS = frozenset({"version", "requestId", "root", "op"})
 
 
 class ConfinementFailure(Exception):
@@ -1190,6 +1191,20 @@ def _scan(root_fd: int, root_device: int, request: dict[str, Any]) -> dict[str, 
     }
 
 
+def _runtime_probe(
+    _root_fd: int,
+    _root_device: int,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    if set(request) != RUNTIME_PROBE_REQUEST_KEYS:
+        _fail("INVALID_REQUEST")
+    return {
+        "pythonMajor": sys.version_info.major,
+        "pythonMinor": sys.version_info.minor,
+        "confinement": True,
+    }
+
+
 def handle_request(raw_request: Any) -> dict[str, Any]:
     request = _as_object(raw_request)
     request_id = _required_string(request, "requestId")
@@ -1203,6 +1218,7 @@ def handle_request(raw_request: Any) -> dict[str, Any]:
         "edit": _edit,
         "list": _list,
         "scan": _scan,
+        "runtime-probe": _runtime_probe,
         "media-recovery-retention": _media_recovery_retention,
     }
     handler = handlers.get(operation)

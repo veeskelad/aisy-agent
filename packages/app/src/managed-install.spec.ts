@@ -71,7 +71,7 @@ function directory(prefix: string): string {
   return path
 }
 
-function gitTree(content: string): { root: string; commit: string } {
+function gitTree(content: string, managedRuntime = false): { root: string; commit: string } {
   const root = directory('aisy-git-tree-')
   const source = join(root, 'source')
   mkdirSync(join(root, 'repository.git'), { mode: 0o700 })
@@ -81,7 +81,24 @@ function gitTree(content: string): { root: string; commit: string } {
   execFileSync('git', ['config', 'user.name', 'Aisy Test'], { cwd: source })
   execFileSync('git', ['config', 'user.email', 'aisy-test@example.invalid'], { cwd: source })
   writeFileSync(join(source, 'fixture.txt'), content)
-  execFileSync('git', ['add', 'fixture.txt'], { cwd: source })
+  const tracked = ['fixture.txt']
+  if (managedRuntime) {
+    for (const relative of [
+      'node_modules/dependency/index.js',
+      'packages/app/dist/bin/aisy.js',
+      'packages/app/node_modules/dependency/index.js',
+      'packages/core-ts/dist/index.js',
+      'packages/core-ts/node_modules/dependency/index.js',
+      'packages/telegram-gw/dist/index.js',
+      'packages/telegram-gw/node_modules/dependency/index.js',
+      'packages/sidecars-py/aisy_sidecars/confinement_worker.py',
+    ]) {
+      mkdirSync(join(source, relative, '..'), { recursive: true })
+      writeFileSync(join(source, relative), 'fixture\n')
+      tracked.push(relative)
+    }
+  }
+  execFileSync('git', ['add', ...tracked], { cwd: source })
   execFileSync('git', ['commit', '-m', 'fixture'], { cwd: source, stdio: 'ignore' })
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim()
   execFileSync('git', [
@@ -178,6 +195,40 @@ afterEach(() => {
 })
 
 describe('managed Git distribution', () => {
+  it.each([
+    { mode: 'bootstrap' as const, probes: 1 },
+    { mode: 'update' as const, probes: 1 },
+    { mode: 'rollback' as const, probes: 0 },
+  ])('wires the confinement prerequisite before Doctor for $mode', ({ mode, probes }) => {
+    const value = gitTree(`verify ${mode}\n`, true)
+    const release = join(value.root, 'releases', value.commit)
+    mkdirSync(join(value.root, 'releases'), { mode: 0o700 })
+    execFileSync('/usr/bin/git', [
+      `--git-dir=${join(value.root, 'repository.git')}`,
+      'worktree', 'add', '--detach', release, value.commit,
+    ], { stdio: 'ignore' })
+    recordManagedReleaseIntegrity(value.root, value.commit)
+    const events: string[] = []
+    const ports = nodeManagedUpdatePorts({
+      verifyConfinementPrerequisite: input => {
+        events.push(`probe:${input.sidecarsRoot}`)
+      },
+      runDoctor: input => {
+        events.push(`doctor:${input.mode}:${input.releaseRoot}`)
+      },
+    })
+
+    expect(() => ports.verifyRelease(value.root, value.commit, mode)).not.toThrow()
+    expect(events.filter(event => event.startsWith('probe:'))).toHaveLength(probes)
+    expect(events.at(-1)).toBe(`doctor:${mode}:${release}`)
+    if (probes === 1) {
+      expect(events).toEqual([
+        `probe:${join(release, 'packages', 'sidecars-py')}`,
+        `doctor:${mode}:${release}`,
+      ])
+    }
+  })
+
   it('publishes a durable auto-skill write barrier bound to the certified state hash', () => {
     const home = directory('aisy-managed-state-')
     const previousHome = process.env['AISY_HOME']

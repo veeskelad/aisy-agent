@@ -342,7 +342,13 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     восьми structurally-valid archives у live writer. Набор >256 остаётся
     high-severity fail. Runtime отдельно сообщает code-only busy и необходимость
     проверить recovery-state через `aisy doctor`, не называя любую ошибку живым
-    writer.
+    writer. Managed composition не зависит от отсутствующего внутри immutable
+    release локального Python runtime: stdlib confinement worker получает только
+    фиксированный `/usr/bin/python3.12`, выбранный по каноническому managed
+    layout без `PATH`, process settings или model-controlled override. Managed
+    bootstrap/update до switch проверяют root ownership, non-writable canonical
+    ancestor chain и exact isolated worker protocol; missing/wrong interpreter
+    отклоняет release как failed staged prerequisite.
 34. **AC-13-34** — реальный `aisy doctor` получает read-only
     `telegram.execution-checkpoint`: absent/clean дают pass, pending/corrupt —
     high-severity fail; `--fix` выполняет zero filesystem/Telegram writes, а

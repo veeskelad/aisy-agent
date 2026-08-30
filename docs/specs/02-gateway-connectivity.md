@@ -1217,7 +1217,15 @@ Each is a single objectively verifiable assertion a Phase-3 test can check.
     оставляет закрытый GC-residue без recursive delete и без success receipt. Active lock,
     attachment records/objects/intents, transcript и memory не меняются.
     Busy startup и corrupt/over-ceiling recovery-state получают разные redacted
-    runtime-сообщения; неизвестная ошибка не выдаётся за live writer.
+    runtime-сообщения; неизвестная ошибка не выдаётся за live writer. В managed
+    release stdlib-only worker запускается фиксированным root-owned
+    `/usr/bin/python3.12`: локальный Python runtime, `PATH`, process settings и
+    model output не участвуют в выборе. Локальная source-сборка может
+    использовать project interpreter; отсутствие production interpreter
+    оставляет inbox fail-closed. Bootstrap/update обязаны до active switch
+    проверить exact root-owned executable и выполнить `-I` runtime-probe этого
+    worker: только Python 3.12 и supported descriptor confinement принимаются.
+    Offline rollback прежнего release не блокируется новым probe protocol.
 54. **AC-02-54** — durable execution checkpoint содержит только строгую
     redacted projection и SHA-256 binding; args/result/reply/reasoning/raw error,
     raw chat id и raw turn id не записываются.

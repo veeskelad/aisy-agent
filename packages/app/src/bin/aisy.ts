@@ -215,6 +215,7 @@ import {
   unattendedRecoveryAuthorization,
 } from '../telegram-attachment-inbox-recovery.js'
 import { makeNodeMediaRecoveryRetentionPort } from '../media-recovery-retention-sidecar.js'
+import { selectConfinementPython } from '../confinement-python.js'
 import { makeClaudeSubscriptionProvider } from '../claude-subscription-provider.js'
 import {
   makeNodeCodexSubscriptionRuntime,
@@ -1751,7 +1752,10 @@ const fsPort: FsPort = {
   exists: (p) => existsSync(p),
 }
 const sidecarsRoot = fileURLToPath(new URL('../../../sidecars-py/', import.meta.url))
-const pythonExecutable = join(sidecarsRoot, '.venv', 'bin', 'python')
+const pythonExecutable = selectConfinementPython({
+  sidecarsRoot,
+  projectInterpreter: join(sidecarsRoot, '.venv', 'bin', 'python'),
+})
 const confinementWorkerPath = join(sidecarsRoot, 'aisy_sidecars', 'confinement_worker.py')
 const mediaRecoveryRetention = makeNodeMediaRecoveryRetentionPort({
   pythonExecutable,

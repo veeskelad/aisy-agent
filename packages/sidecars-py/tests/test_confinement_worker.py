@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,17 @@ def test_read_write_list_and_scan_utf8(tmp_path: Path) -> None:
         "directories": 1,
         "totalBytes": 31,
     }
+
+
+def test_runtime_probe_checks_platform_and_reports_exact_interpreter(tmp_path: Path) -> None:
+    response = worker.handle_request(request(tmp_path, "runtime-probe"))
+
+    assert response["data"] == {
+        "pythonMajor": sys.version_info.major,
+        "pythonMinor": sys.version_info.minor,
+        "confinement": True,
+    }
+    assert failure(tmp_path, "runtime-probe", extra="denied") == "INVALID_REQUEST"
 
 
 def test_edit_requires_an_exact_match_and_replace_all_is_explicit(tmp_path: Path) -> None:

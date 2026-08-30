@@ -82,6 +82,18 @@ delete или мутацией из Doctor. Cleanup должен пережив�
    Если path drift всё же наблюдается на следующем checkpoint, cleanup
    останавливается, ничего рекурсивно не удаляет и оставляет закрытый GC-residue
    для следующего запуска/Doctor, а не заявляет ложный успех.
+7. Managed release не включает локальный Python runtime и не может считать его
+   production dependency. Confinement worker использует только стандартную
+   библиотеку Python 3.12, поэтому production composition выбирает фиксированный
+   root-owned `/usr/bin/python3.12`; локальная source-сборка сохраняет project
+   interpreter. Выбор определяется каноническим release layout, а не `PATH`,
+   process settings или ответом модели. Отсутствующий системный interpreter даёт
+   прежний fail-closed startup refusal без shell/fallback на иной executable.
+   Bootstrap и descendant update до active switch проверяют owner/mode/realpath
+   самого interpreter и root-owned ancestor chain, затем выполняют isolated
+   protocol smoke exact worker. Требуются Python 3.12 и supported confinement;
+   missing, иная версия или неверный envelope отклоняют release. Offline rollback
+   остаётся доступным и не зависит от нового worker protocol прежнего release.
 
 ## Последствия
 
@@ -90,12 +102,17 @@ delete или мутацией из Doctor. Cleanup должен пережив�
 - **Положительное:** существующее переполненное, но валидное состояние
   ремонтируется code-owned способом без SSH-удаления и без потери вложений.
 - **Положительное:** crash в любой точке cleanup сходится на следующем startup.
+- **Положительное:** managed update действительно может запустить retention и
+  остальные stdlib confinement operations без untracked Python runtime внутри
+  release.
 - **Нейтральное:** оператор может восстановить только восемь последних
   recovery locks; более старые остаются представлены redacted runtime-журналом.
 - **Отрицательное:** неизвестное, подменённое или чрезмерно большое состояние
   по-прежнему требует отдельного операторского решения.
 - **Отрицательное:** защита от произвольного конкурентного same-UID процесса не
   решается retention-протоколом и требует изоляции Unix-пользователя.
+- **Отрицательное:** production host обязан предоставлять root-owned
+  `/usr/bin/python3.12`; при его отсутствии media/tools остаются fail-closed.
 
 ## Рассмотренные альтернативы
 

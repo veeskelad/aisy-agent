@@ -6,7 +6,9 @@
 
 ## Harness
 
-Требуются Linux с `flock`, Git, Node.js 22+ и Corepack. Bootstrap не запускают
+Требуются Linux с `flock`, Git, Node.js 22+, Corepack и root-owned
+`/usr/bin/python3.12` для stdlib confinement worker. Локальный Python runtime
+внутри managed release не создаётся и не используется. Bootstrap не запускают
 от root:
 
 ```bash
