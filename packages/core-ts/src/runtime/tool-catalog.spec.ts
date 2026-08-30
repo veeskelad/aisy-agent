@@ -78,6 +78,13 @@ describe('единый runtime tool catalog', () => {
     expect(tool?.description).toContain('never imitate the sub-agent')
   })
 
+  it('считает память и делегирование обычными обратимыми действиями', () => {
+    expect(runtimeToolMinimumTiers()).toMatchObject({
+      remember: 1,
+      spawn_subagent: 1,
+    })
+  })
+
   it('malformed call не вызывает ни один executor port', async () => {
     const readFile = vi.fn(() => 'not reached')
     const writeFile = vi.fn()

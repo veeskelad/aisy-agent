@@ -477,6 +477,11 @@ Each criterion is a single objectively verifiable assertion for a Phase-3 test.
     возвращает решение оператора, но durable-состояния плана не заводит и
     последующие вызовы не ограничивает: добровольное согласование не превращает
 «без спроса» в «сначала план» (ADR-0100).
+37. **AC-05-37** — Durable `remember` и bounded `spawn_subagent` — Tier 1:
+    Safety разрешает их в чистом operator turn без карточки, но не обходит
+    HARD_DENY, narrowed context, Project/path overlay, execution mode `confirm`,
+    budget или lease/receipt checks. Смена Session не меняет это правило и не
+    создаёт session-local grant (ADR-0112, AC-04-41).
 
 ## 10. Open questions
 

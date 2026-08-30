@@ -169,6 +169,57 @@ describe('Codex capability Safety/Approval executor integration', () => {
     expect(h.effects).toEqual(['project-a:read_file:{"path":"README.md"}'])
   })
 
+  it.each([
+    { name: 'remember', args: { fact: 'ты предпочитаешь краткие ответы' } },
+    { name: 'spawn_subagent', args: { plan: '{"intent":"вычислить 23 × 29"}' } },
+  ])('executes reversible $name without a redundant approval', async (tool) => {
+    const approve = vi.fn(async () => ({ decision: 'rejected' as const }))
+    const effects: string[] = []
+    const execute = makeCodexCapabilityExecutor({
+      grants: makeGrantStore(),
+      approve,
+      executeTool: async (_binding, call) => {
+        effects.push(call.name)
+        return { ok: true, output: `executed:${call.name}` }
+      },
+    })
+
+    await expect(execute(
+      binding,
+      { ...tool, sourceSpanProvenance: 'operator' },
+      { provenance: 'operator', narrowed: false },
+      new AbortController().signal,
+      { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
+    )).resolves.toEqual({ ok: true, output: `executed:${tool.name}` })
+    expect(approve).not.toHaveBeenCalled()
+    expect(effects).toEqual([tool.name])
+  })
+
+  it.each([
+    { name: 'remember', args: { fact: 'ты предпочитаешь краткие ответы' } },
+    { name: 'spawn_subagent', args: { plan: '{"intent":"вычислить 23 × 29"}' } },
+  ])('applies the live confirm-mode tier overlay to subscription $name', async (tool) => {
+    const approve = vi.fn(async (_binding, action) => {
+      expect(action).toMatchObject({ tier: 2, requiresStepUp: false })
+      return { decision: 'confirmed' as const }
+    })
+    const execute = makeCodexCapabilityExecutor({
+      grants: makeGrantStore(),
+      approve,
+      toolTierFloor: () => 2,
+      executeTool: async (_binding, call) => ({ ok: true, output: `executed:${call.name}` }),
+    })
+
+    await expect(execute(
+      binding,
+      { ...tool, sourceSpanProvenance: 'operator' },
+      { provenance: 'operator', narrowed: false },
+      new AbortController().signal,
+      { sessionId: 'session-a', turnId: 'turn-a', ordinal: 1 },
+    )).resolves.toEqual({ ok: true, output: `executed:${tool.name}` })
+    expect(approve).toHaveBeenCalledTimes(1)
+  })
+
   it('remembers only a similar Tier-2 call in the exact binding', async () => {
     const h = harness()
     await expect(h.bridge.invoke(request('bash-1', 'bash', { cmd: 'pnpm test' })))

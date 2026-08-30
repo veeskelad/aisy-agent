@@ -630,6 +630,12 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     `researcher` не может его заимствовать, а второй `deep_research` отвергается.
     Остановка по лимиту, времени или step-up пишется в отчёт открытым текстом
     (ADR-0097).
+41. **AC-04-41** — `remember` и `spawn_subagent` имеют code-owned minimum
+    Tier 1 и в обычном `auto` проходят native и subscription capability path
+    без approval callback. `confirm` поднимает их до Tier 2. Narrowed/untrusted
+    turn, malformed args, stale lease, budget, child capability subset и
+    durable execution checks сохраняются; Tier 1 не выдаёт грант и не расширяет
+    возможности дочернего агента (ADR-0112).
 
 ## 10. Open questions
 

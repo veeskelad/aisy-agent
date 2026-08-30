@@ -16,7 +16,11 @@ import {
   type RuntimePolicyNarrowing,
 } from './hook-gate.js'
 import { resolvedWorkBinding, type ResolvedWorkBinding } from './work-binding.js'
-import { runtimeToolDefinition, validateRuntimeToolCall } from './tool-catalog.js'
+import {
+  runtimeToolDefinition,
+  validateRuntimeToolCall,
+  type ToolTier,
+} from './tool-catalog.js'
 
 export type CodexCapabilityExecutor = (
   binding: ResolvedWorkBinding,
@@ -50,6 +54,8 @@ export function makeCodexCapabilityExecutor(input: {
   ): Promise<ToolResult>
   /** ADR-0091: bypass Safety/approval for the exact host `bash` tool only. */
   unsafeHostBashBypass?: () => boolean
+  /** Live execution-mode floor. It may only tighten the catalog tier. */
+  toolTierFloor?(binding: ResolvedWorkBinding, call: ToolCall): ToolTier | undefined
   /** Same strict-only Project/path overlay as native and delegated runners. */
   narrowPolicy?(
     binding: ResolvedWorkBinding,
@@ -99,6 +105,13 @@ export function makeCodexCapabilityExecutor(input: {
       resolveSafetyCall: (candidate) => {
         const definition = runtimeToolDefinition(candidate.name)
         if (definition === undefined) throw new Error('unknown runtime tool')
+        const requestedFloor = input.toolTierFloor?.(binding, candidate)
+        if (requestedFloor !== undefined && ![0, 1, 2, 3].includes(requestedFloor)) {
+          throw new Error('invalid runtime tool tier floor')
+        }
+        const effectiveTier = requestedFloor === undefined
+          ? definition.tier
+          : Math.max(definition.tier, requestedFloor) as ToolTier
         const policyRelaxation = candidate.name === 'configure_agent' &&
           typeof candidate.args['operation'] === 'string' &&
           candidate.args['operation'].startsWith('policy.relax-')
@@ -114,7 +127,7 @@ export function makeCodexCapabilityExecutor(input: {
             : policyTarget.scope === 'project'
               ? { ...candidate.args, policyScope: 'project' }
               : { ...candidate.args, policyScope: 'path', policyPath: policyTarget.relativePath },
-          policyTier: policyRelaxation ? 3 : definition.tier,
+          policyTier: policyRelaxation ? 3 : effectiveTier,
           outboundSink: definition.outboundSink,
         }
       },

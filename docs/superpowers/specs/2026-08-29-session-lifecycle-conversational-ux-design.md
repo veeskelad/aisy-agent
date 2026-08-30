@@ -29,6 +29,14 @@ recovery phases, таймеры, workspace labels, tool history или расс�
 6. полный inventory code-owned Telegram copy и автоматический copy contract;
 7. production migration, rollback и live acceptance через `@monday_aibot`.
 
+В обычном `auto` инструменты `remember` и `spawn_subagent` имеют Tier 1. Они не
+делают сетевой запрос, не меняют source/Safety и не дают дочернему агенту новых
+полномочий, поэтому отдельное подтверждение превращало явную просьбу оператора
+в повторный вопрос без снижения риска. Режим `confirm` по-прежнему поднимает
+любое acting-действие до Tier 2. Файловая запись, shell, egress, изменение
+Project policy и физическое удаление Session сохраняют свои независимые
+code-owned gates.
+
 Не входят удаление долговременной памяти вместе с Session, ослабление deny,
 автоматическая установка произвольного кода, свободная правка `SOUL.md` или
 `SKILL.md`, а также раскрытие server-side диагностики в обычном ответе.

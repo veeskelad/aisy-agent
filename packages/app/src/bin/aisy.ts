@@ -3925,6 +3925,7 @@ const subscriptionPlanProtocol = makePlanToolProtocol({
 const subscriptionCapabilityExecutor = makeCodexCapabilityExecutor({
   grants: modeAwareGrants,
   unsafeHostBashBypass: () => executionMode.bypassesHostBash(),
+  toolTierFloor: (_binding, call) => executionMode.toolTiers()[call.name],
   narrowPolicy: (binding, { call, safetyCall, ctx }) =>
     evaluateProjectPolicy(binding.projectId, call, ctx, safetyCall),
   describePolicyRelaxation: (_binding, call, context) =>
