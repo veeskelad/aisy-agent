@@ -144,9 +144,9 @@ function forwardedVoice(updateId: number): Update {
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_500): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('condition not observed')
+    if (performance.now() >= deadline) throw new Error('condition not observed')
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }

@@ -133,9 +133,9 @@ function harness(input: {
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('Telegram media acknowledgement not observed')
+    if (performance.now() >= deadline) throw new Error('Telegram media acknowledgement not observed')
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }

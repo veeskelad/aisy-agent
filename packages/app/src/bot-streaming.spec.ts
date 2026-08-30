@@ -75,9 +75,9 @@ async function waitFor(
   predicate: () => boolean,
   timeoutMs = 1000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('Telegram call not observed')
+    if (performance.now() >= deadline) throw new Error('Telegram call not observed')
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }

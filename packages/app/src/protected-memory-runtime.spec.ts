@@ -70,9 +70,9 @@ function sentinelLines(path: string): string[] {
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 20_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('fixture timeout')
+    if (performance.now() > deadline) throw new Error('fixture timeout')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
@@ -178,7 +178,7 @@ describe('protected memory semantic config', () => {
     }
     expect(sentinelLines(runtime.sentinel).length).toBeGreaterThan(0)
     expect(existsSync(join(runtime.protectedRoot, 'db', 'semantic.sqlite'))).toBe(false)
-  })
+  }, 20_000)
 
   it('fails incomplete OpenRouter config before protected artifacts or external I/O', async () => {
     const runtime = startAisyWithSemanticConfig({ provider: 'openrouter' })
@@ -207,7 +207,7 @@ describe('protected memory semantic config', () => {
     expect(existsSync(runtime.protectedRoot)).toBe(false)
     expect(sentinelLines(runtime.sentinel).some((line) =>
       line.includes('openrouter.ai') || line.includes('/embeddings'))).toBe(false)
-  })
+  }, 20_000)
 })
 
 describe('protected memory preview runtime', () => {

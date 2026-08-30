@@ -323,9 +323,9 @@ function alive(pid: number): boolean {
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error('real process fixture timeout')
+    if (performance.now() >= deadline) throw new Error('real process fixture timeout')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }

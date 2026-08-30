@@ -29,9 +29,9 @@ function opaque(): string {
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('fixture timeout')
+    if (performance.now() > deadline) throw new Error('fixture timeout')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
