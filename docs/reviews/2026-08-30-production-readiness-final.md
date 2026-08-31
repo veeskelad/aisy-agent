@@ -1,9 +1,9 @@
 # Финальная матрица production-готовности Aisy
 
-**Дата среза:** 2026-08-30  
-**Production current:** `ad004cb7af2473f482d3d1120df7a513c946ae17`
-**Code-bearing baseline:** `905583d42290d37c6c3445103c6c299a936e8b9a`  
-**Production previous:** `7557ecefccfa8f8179a8d722f5307953068164fa`
+**Дата среза:** 2026-08-31  
+**Production current:** `3de8c37675856211aed248aa421db5dad802edff`  
+**Public code/test baseline:** `82a7872`  
+**Production previous:** `ad004cb7af2473f482d3d1120df7a513c946ae17`
 
 Эта матрица заменяет прежний накопительный candidate-срез. Она различает
 наличие production composition и фактическую проверку на целевом хосте. Статус
@@ -28,6 +28,7 @@
 | Sessions, `/resume`, имена и удаление | **LIVE** | Daily rotation, auto-name, resume и deletion coordinator подключены. Delete физически удаляет registry row, transcript, attachments и provider-local history, сохраняя memory/Skills/grants | Показать `/resume`, удалить одну exact test Session через одну terminal-карточку и проверить filesystem/registry |
 | Daily reset и воскресная consolidation | **LIVE; target подтверждён** | 2026-08-30 scheduled run завершился `delivered`, создал новый Session и сообщил об одной ожидающей правке; weekly cursor и nightly high-water опубликованы для воскресенья `2026-08-30` | Нет |
 | Tools и scoped approvals | **LIVE** | `remember` и `spawn_subagent` Tier-1 в natural mode; confirm mode повышает их до Tier-2. Durable grants принадлежат operator/profile + Workspace/Project, Project/path может только ужесточать. Свежий targeted corpus approval/policy/safety: 270/270 | Target confirm-once/repeat и отдельная destructive warning-карточка без выполнения |
+| Поиск и открытие страниц | **LIVE; target подтверждён** | На production обнаружен и устранён дефект Node 22 `lookup`, из-за которого HTTPS обрывался до сокета. Неустойчивый HTML fallback заменён закреплённой RSS-выдачей; без ключа поиск вернул 5 результатов по строке с `ya .ru`, а `https://ya.ru` открылся и вернул текст. Ошибки переводятся в конкретную русскую причину без выдуманного «режима без сети» | Telegram-сообщение намеренно не отправлялось: оператор сам проверяет диалог |
 | Typed auto-skills | **LIVE** | Closed registry, two-session evidence, separate generator/judge, shadow/CAS и scoped overlay подключены; Doctor ready, active/queued/pending/quarantine=0 | Два чистых повторения в разных Sessions и последующая очистка test evidence |
 | Свободные model-authored Skills | **отложено ADR** | Модель не может писать исполняемый `SKILL.md`, source Aisy, Constitution, Safety или capability catalog. Свободный Skill остаётся staged + human-reviewed | Новое ADR, если оператор решит ослабить эту границу |
 | Active Skills runtime | **LIVE** | Hash-pinned active catalog, body-on-trigger, AgentCard filtering и Telegram controls подключены | На target нет установленного active Skill |
@@ -40,13 +41,13 @@
 | Voice/media | **LIVE framework** | Root-owned artifact, backend sockets, proxy и outbox pass; media recovery bounded. Ingress/credential/consent gates подключены | Production остаётся text-only: provider key и consent не готовы, поэтому voice E2E не заявлен |
 | Monitoring RSS/Web | **LIVE** | Exact-domain GET-only collector, durable windows и at-most-once delivery подключены | Target source add/pause/remove и delivery E2E |
 | Telegram/YouTube/GitHub collectors | **dormant** | Отдельные production bindings не активированы | Отдельные provider/authority решения |
-| Restart | **LIVE** | Managed deploy `ad004cb` активен: service active/running, `ExecMainStatus=0`, `NRestarts=0`; Doctor `ok=true` | Нет |
+| Restart | **LIVE** | Managed deploy `3de8c37` активен после одного штатного restart: новый PID, service active/running, `ExecMainStatus=0`, `NRestarts=0`; Doctor `ok=true` | Нет |
 | Managed rollback | **LIVE; target drill подтверждён** | `7557ece → 905583d`: после rollback service active/running, `ExecMainStatus=0`, `NRestarts=0`, Doctor `ok=true`, memory marker сохранён, auto-skills только paused. `905583d → 7557ece`: roll-forward и explicit resume удалили barrier, service снова active, Doctor ready | Обычный Telegram turn после rollback не отправлялся без отдельного согласия оператора |
 | Docker restricted clone | **dormant** | Doctor честно сообщает, что legacy sandbox/restricted clone не активированы | Отдельный rollout; это не дефект text runtime |
 | Vision/video generation | **отсутствует** | Production seam не заявлен | Отдельная продуктовая спецификация |
 | Изменение собственного source моделью | **отложено ADR** | Разговорная настройка ограничена typed configuration, memory, grants и закрытыми навыками; source/Safety/catalog code-owned | Не разрешать без нового архитектурного решения |
 
-## Проверки production current `ad004cb`
+## Проверки production current `3de8c37`
 
 - targeted rollback corpus: **46/46**;
 - свежий acceptance-корпус Session/reset/resume/delete, personality, grants,
@@ -54,23 +55,34 @@
   **169/169** вне ограничивающего IPC sandbox;
 - дополнительный approval/policy/safety corpus: **270/270**;
 - workspace build и App typecheck: green;
-- чистый повтор полного App gate вне sandbox: **2822 passed / 2 skipped /
-  0 failed**, 266 test files passed, 1 skipped; waiver не нужен;
+- полный App gate на финальном коде сначала нашёл одно устаревшее ожидание
+  имени поискового построителя; доводочный commit `82a7872` исправил только
+  этот guard, targeted повтор **93/93** зелёный;
+- следующий полный App gate подтвердил новый guard и весь сетевой corpus;
+  единственный независимый real-process probe один раз получил
+  `PROCESS_GROUP_PROBE_DENIED`, а точный повтор прошёл **16 passed / 1 skipped**;
+  изменённые сетевые тесты не падали;
+- полный Core gate: **2454 passed / 1 skipped / 0 failed**;
+- production network smoke из активного release: поиск **5 результатов**,
+  `ya.ru` открыт, текст непустой, remote IP совпал с заранее проверенным;
 - `git diff --check`: green;
 - independent review rollback-среза: **APPROVED**, P0–P2 нет;
 - двухрелизный production drill: rollback сохранил основной runtime и память,
   roll-forward вернул exact release, explicit resume снял barrier; финальные
   `ActiveState=active`, `SubState=running`, `ExecMainStatus=0`, `NRestarts=0`,
   Doctor `ok=true`;
-- Gitleaks: один новый commit, утечек нет;
+- Gitleaks: четыре commits от `ad004cb`, включая этот evidence-update,
+  утечек нет;
 - tracked-tree scan: материалов, имён и путей приватного эталона нет;
 - production Doctor: `ok=true`; warnings относятся к явно неактивированным
   optional Docker/voice возможностям, а не к text runtime.
 
 ## Аудит веток и доставка
 
-- public remote содержит ровно одну ветку `master` на `ad004cb`;
-- production current и public `master` совпадают;
+- public remote содержит ровно одну ветку `master`; code/test baseline —
+  `82a7872`, поверх него публикуется только этот evidence-update;
+- production исполняет code-bearing commit `3de8c37`; следующий `82a7872`
+  меняет только защитное тестовое ожидание и runtime-дерево не затрагивает;
 - commits ветки `codex/production-personal-agent`, относящиеся к этому срезу,
   распознаны через `--cherry-mark` как patch-equivalent текущему `master`;
   merge этой ветки не требуется и вернул бы старое tree-state без более новых
