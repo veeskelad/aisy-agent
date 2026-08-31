@@ -107,6 +107,30 @@ export function parseDuckDuckGo(
   return results
 }
 
+/** Parse the stable RSS form of Bing web search without an XML dependency. */
+export function parseBingRss(
+  xml: string,
+  limit = 5,
+): { title: string; url: string; snippet: string }[] {
+  const results: { title: string; url: string; snippet: string }[] = []
+  const itemRe = /<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi
+  const readTag = (item: string, tag: string): string => {
+    const match = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i').exec(item)
+    const value = match?.[1]?.replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/i, '$1') ?? ''
+    return stripFragmentTags(value)
+  }
+
+  let match: RegExpExecArray | null
+  while (results.length < limit && (match = itemRe.exec(xml)) !== null) {
+    const item = match[1] ?? ''
+    const title = readTag(item, 'title')
+    const url = readTag(item, 'link')
+    if (title.length === 0 || url.length === 0) continue
+    results.push({ title, url, snippet: readTag(item, 'description') })
+  }
+  return results
+}
+
 /**
  * Returns `true` only for http/https URLs whose host is publicly routable.
  *

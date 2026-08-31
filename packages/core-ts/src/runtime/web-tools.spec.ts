@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { htmlToText, parseDuckDuckGo, isPublicHttpUrl } from './web-tools.js'
+import { htmlToText, parseBingRss, parseDuckDuckGo, isPublicHttpUrl } from './web-tools.js'
 
 // ---------------------------------------------------------------------------
 // htmlToText
@@ -139,6 +139,25 @@ describe('parseDuckDuckGo', () => {
 
   it('returns empty array for html with no results', () => {
     expect(parseDuckDuckGo('<html><body>No results found.</body></html>')).toEqual([])
+  })
+})
+
+describe('parseBingRss', () => {
+  it('extracts bounded RSS items and decodes text without executing markup', () => {
+    const xml = `<?xml version="1.0"?>
+      <rss><channel>
+        <item><title>Погода &amp; прогноз</title><link>https://example.com/weather</link>
+          <description><![CDATA[<b>Точный</b> прогноз]]></description></item>
+        <item><title>Второй результат</title><link>https://example.org/second</link>
+          <description>Описание</description></item>
+      </channel></rss>`
+
+    expect(parseBingRss(xml, 1)).toEqual([{
+      title: 'Погода & прогноз',
+      url: 'https://example.com/weather',
+      snippet: 'Точный прогноз',
+    }])
+    expect(parseBingRss('<rss><channel /></rss>')).toEqual([])
   })
 })
 

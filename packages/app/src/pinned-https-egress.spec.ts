@@ -7,7 +7,7 @@ import {
   isPublicEgressAddress,
   makeNodePinnedHttpsTransport,
   makePinnedHttpsTextGet,
-  pinnedWebSearchUrl,
+  pinnedBingSearchUrl,
   PinnedHttpsEgressError,
   type PinnedAddress,
   type PinnedHttpsRequest,
@@ -89,8 +89,8 @@ describe('pinned HTTPS egress', () => {
   })
 
   it('builds only a bounded encoded search URL', () => {
-    expect(pinnedWebSearchUrl('Aisy agent & memory'))
-      .toBe('https://html.duckduckgo.com/html/?q=Aisy%20agent%20%26%20memory')
+    expect(pinnedBingSearchUrl('Aisy agent & memory'))
+      .toBe('https://www.bing.com/search?format=rss&q=Aisy%20agent%20%26%20memory')
   })
 
   it.each([
@@ -102,9 +102,16 @@ describe('pinned HTTPS egress', () => {
     'a'.repeat(64),
     'я'.repeat(300),
   ])('rejects unsafe search text before URL or DNS: %s', (query) => {
-    expect(() => pinnedWebSearchUrl(query)).toThrow(
+    expect(() => pinnedBingSearchUrl(query)).toThrow(
       new PinnedHttpsEgressError('EGRESS_QUERY_DENIED'),
     )
+  })
+
+  it.each(['text/xml; charset=utf-8', 'application/rss+xml'])
+  ('accepts bounded XML search feeds: %s', async (contentType) => {
+    const h = harness({ get: async () => response({ contentType }) })
+    await expect(h.get('https://html.duckduckgo.com/html?q=aisy'))
+      .resolves.toBe('<html>ok</html>')
   })
 
   it.each([
@@ -298,6 +305,60 @@ describe('pinned HTTPS egress', () => {
       maxHeaderSize: 32 * 1024,
     })
     expect(requestHandle.destroy).toHaveBeenCalled()
+  })
+
+  it('returns the pinned address in the Node 22 all-address lookup shape', async () => {
+    const requestHandle = Object.assign(new EventEmitter(), {
+      setTimeout: vi.fn(),
+      end: vi.fn(function (this: EventEmitter) { queueMicrotask(() => this.emit('close')) }),
+      destroy: vi.fn(),
+    })
+    let captured: Record<string, unknown> | null = null
+    const request = vi.fn((options: Record<string, unknown>) => {
+      captured = options
+      return requestHandle
+    })
+    const transport = makeNodePinnedHttpsTransport({
+      request: request as unknown as RequestFactory,
+    })
+    const pending = transport.get({
+      hostname: 'html.duckduckgo.com',
+      servername: 'html.duckduckgo.com',
+      path: '/html?q=aisy',
+      address: publicAddress.address,
+      family: publicAddress.family,
+      timeoutMs: 15_000,
+      maxResponseBytes: 1024,
+      userAgent: 'aisy-agent',
+      signal: new AbortController().signal,
+    })
+    const rejected = expect(pending).rejects.toEqual(
+      new PinnedHttpsEgressError('EGRESS_TRANSPORT_FAILED'),
+    )
+    const lookup = captured?.['lookup']
+    expect(lookup).toBeTypeOf('function')
+    const callback = vi.fn()
+
+    ;(lookup as unknown as (
+      hostname: string,
+      options: { all: true },
+      callback: (...args: unknown[]) => void,
+    ) => void)('html.duckduckgo.com', { all: true }, callback)
+
+    expect(callback).toHaveBeenCalledWith(null, [publicAddress])
+    const singleCallback = vi.fn()
+    ;(lookup as unknown as (
+      hostname: string,
+      options: { all: false },
+      callback: (...args: unknown[]) => void,
+    ) => void)('html.duckduckgo.com', { all: false }, singleCallback)
+    expect(singleCallback).toHaveBeenCalledWith(
+      null,
+      publicAddress.address,
+      publicAddress.family,
+    )
+    requestHandle.emit('close')
+    await rejected
   })
 
   it('the Node transport bounds streamed bytes before returning a body', async () => {

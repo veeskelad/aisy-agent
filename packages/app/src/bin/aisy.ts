@@ -81,7 +81,7 @@ import {
   harnessVersion,
   isNewerVersion,
   VoiceUnavailable,
-  parseDuckDuckGo,
+  parseBingRss,
   parseMemoryRememberReceipt,
   sameAutoSkillModelIdentity,
   type AnthropicTool,
@@ -268,9 +268,14 @@ import { makeOpenPageFetch } from '../page-fetch.js'
 import {
   makePinnedHttpsJson,
   makePinnedHttpsTextGet,
-  pinnedWebSearchUrl,
+  pinnedBingSearchUrl,
 } from '../pinned-https-egress.js'
-import { makeLinkReader, makeServiceSearch, SERVICE_HOSTS } from '../link-services.js'
+import {
+  makeLinkReader,
+  makeServiceSearch,
+  renderSearchFailure,
+  SERVICE_HOSTS,
+} from '../link-services.js'
 import {
   DEFAULT_RESEARCH_LIMITS,
   makeResearchApproval,
@@ -1674,8 +1679,8 @@ const resolveNightlyBinding = (): ResolvedWorkBinding | null =>
 
 const TOOLS: AnthropicTool[] = liveProviderTools()
 const TOOL_MINIMUM_TIERS = runtimeToolMinimumTiers()
-const searchHtml = makePinnedHttpsTextGet({
-  allowedHosts: ['html.duckduckgo.com'],
+const searchFeed = makePinnedHttpsTextGet({
+  allowedHosts: ['www.bing.com'],
   timeoutMs: 15_000,
   maxResponseBytes: 2 * 1024 * 1024,
   userAgent: 'aisy-agent',
@@ -1736,14 +1741,14 @@ const fetchUrlPort = async (url: string): Promise<string> => {
 
 const webSearchPort = async (query: string): Promise<string> => {
   try {
-    // Serper when the operator connected it, the free DuckDuckGo parser
+    // Serper when the operator connected it, the free Bing RSS feed
     // otherwise. Same tool, same output shape — only the quality differs.
     const viaService = await searchThroughService(query)
-    const results = viaService ?? parseDuckDuckGo(await searchHtml(pinnedWebSearchUrl(query)))
+    const results = viaService ?? parseBingRss(await searchFeed(pinnedBingSearchUrl(query)))
     if (results.length === 0) return 'web_search: ничего не найдено.'
     return results.map((r) => `${r.title}\n${r.url}\n${r.snippet}`).join('\n\n')
   } catch (err) {
-    return `web_search: ${err instanceof Error ? err.message : String(err)}`
+    return `web_search: ${renderSearchFailure(err)}`
   }
 }
 

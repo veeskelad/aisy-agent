@@ -105,7 +105,7 @@ export type {
   RuntimeToolName,
 } from './runtime/tool-catalog.js'
 
-export { htmlToText, parseDuckDuckGo, isPublicHttpUrl } from './runtime/web-tools.js'
+export { htmlToText, parseBingRss, parseDuckDuckGo, isPublicHttpUrl } from './runtime/web-tools.js'
 
 export {
   RESTRICTED_CLONE_MIN_DOCKER_VERSION,

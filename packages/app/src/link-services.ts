@@ -59,6 +59,24 @@ export const SERVICE_HOSTS: readonly string[] = Object.freeze([
   'google.serper.dev', 'api.supadata.ai', 'api.apify.com', 'r.jina.ai',
 ])
 
+const SEARCH_FAILURE: Readonly<Record<string, string>> = Object.freeze({
+  EGRESS_QUERY_DENIED: 'поисковый запрос содержит данные, которые нельзя отправлять наружу',
+  EGRESS_DNS_FAILED: 'не удалось найти поисковый сервер',
+  EGRESS_ADDRESS_DENIED: 'поисковый сервер вернул недопустимый адрес',
+  EGRESS_TIMEOUT: 'поиск не ответил вовремя',
+  EGRESS_TRANSPORT_FAILED: 'не удалось соединиться с поиском',
+  EGRESS_REMOTE_ADDRESS_MISMATCH: 'адрес поискового сервера изменился во время соединения',
+  EGRESS_RESPONSE_DENIED: 'поисковый сервис вернул неподходящий ответ',
+  EGRESS_RESPONSE_TOO_LARGE: 'ответ поиска оказался слишком большим',
+  EGRESS_RESPONSE_INVALID: 'ответ поиска не удалось прочитать',
+})
+
+/** Stable Russian result for a failed search; never guesses about runtime mode. */
+export function renderSearchFailure(error: unknown): string {
+  const code = error instanceof Error ? error.message : ''
+  return SEARCH_FAILURE[code] ?? 'поиск временно недоступен'
+}
+
 /** The free reader. Renders a page on its side and converts PDFs to text. */
 const READER_HOST = 'https://r.jina.ai/'
 

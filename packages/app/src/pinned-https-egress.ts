@@ -152,11 +152,15 @@ export function isPublicEgressAddress(address: string, family: 4 | 6): boolean {
     : !deniedIpv6.check(address, 'ipv6')
 }
 
-export function pinnedWebSearchUrl(query: string): string {
+function encodedSearchQuery(query: string): string {
   if (typeof query !== 'string' || query.trim().length < 1 ||
     Buffer.byteLength(query, 'utf8') > 512 || /[\u0000-\u001f\u007f]/.test(query) ||
     SECRET_LIKE_QUERY.test(query)) throw egressFailure('EGRESS_QUERY_DENIED')
-  return `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+  return encodeURIComponent(query)
+}
+
+export function pinnedBingSearchUrl(query: string): string {
+  return `https://www.bing.com/search?format=rss&q=${encodedSearchQuery(query)}`
 }
 
 export function exactPinnedAddress(value: unknown): PinnedAddress | null {
@@ -271,7 +275,19 @@ export function makeNodePinnedHttpsTransport(input: {
         let timedOut = false
         const pinned = new BlockList()
         pinned.addAddress(descriptor.address, descriptor.family === 4 ? 'ipv4' : 'ipv6')
-        const lookup: LookupFunction = (_hostname, _options, callback) => {
+        const lookup: LookupFunction = (_hostname, options, callback) => {
+          // Node 22's connection auto-selection calls custom lookup with
+          // `all: true`. In that form the callback contract requires an array;
+          // returning the legacy address/family tuple makes Node read an
+          // undefined address and abort every HTTPS request with
+          // ERR_INVALID_IP_ADDRESS before the socket is opened.
+          if (options.all === true) {
+            callback(null, [Object.freeze({
+              address: descriptor.address,
+              family: descriptor.family,
+            })])
+            return
+          }
           callback(null, descriptor.address, descriptor.family)
         }
         const method = descriptor.method ?? 'GET'
@@ -497,7 +513,8 @@ export function makePinnedHttpsTextGet(input: {
       }
       const response = snapshotResponse(rawResponse, maxResponseBytes)
       if (response.status !== 200) throw egressFailure('EGRESS_RESPONSE_DENIED')
-      if (!/^text\/html(?:\s*;|$)|^application\/xhtml\+xml(?:\s*;|$)/i.test(response.contentType)) {
+      if (!/^text\/(?:html|xml)(?:\s*;|$)|^application\/(?:xhtml\+xml|rss\+xml)(?:\s*;|$)/i
+        .test(response.contentType)) {
         throw egressFailure('EGRESS_RESPONSE_DENIED')
       }
       try {

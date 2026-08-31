@@ -215,12 +215,12 @@ registry entry; widening the waist requires a new ADR.
 хранилище грантов, ни на карточку; карточка называет домен.
 
 Фиксированная поверхность `web_search` использует отдельный code-owned HTTPS
-порт только для `html.duckduckgo.com:443`. Порт проверяет все A/AAAA-ответы и
+порт только для `www.bing.com:443` и читает ограниченную RSS-выдачу. Порт проверяет все A/AAAA-ответы и
 отказывает, если хотя бы один адрес локальный, private, link-local, multicast,
 документационный или иной зарезервированный. Выбранный публичный IP закрепляется
 в `lookup` одного HTTPS-запроса, а TLS продолжает проверять исходное имя хоста;
 после соединения remote IP повторно сравнивается с закреплённым. Redirect,
-credentials в URL, нестандартный порт, fragment, не-HTML, не-200, невалидный
+credentials в URL, нестандартный порт, fragment, не-HTML/XML, не-200, невалидный
 UTF-8, слишком большие заголовки/тело, DNS/transport timeout и повтор запроса
 запрещены. Один общий deadline включает DNS и загрузку. До DNS поисковая строка
 проверяется на размер, управляющие символы, credential-маркеры и длинные
@@ -636,6 +636,20 @@ Each is a single objectively verifiable assertion for a Phase-3 test.
     turn, malformed args, stale lease, budget, child capability subset и
     durable execution checks сохраняются; Tier 1 не выдаёт грант и не расширяет
     возможности дочернего агента (ADR-0112).
+42. **AC-04-42** — Закреплённый HTTPS transport совместим с контрактом `lookup`
+    Node 22: при запросе всех адресов callback получает массив ровно из одного
+    заранее проверенного адреса, а при одиночном запросе — тот же адрес и его
+    семейство. `web_search` и `fetch_url` не должны превращать этот штатный
+    запрос Node в `EGRESS_TRANSPORT_FAILED`; проверка фактического remote IP и
+    все ограничения AC-04-31/33 сохраняются.
+43. **AC-04-43** — При отсутствии ключа Serper `web_search` использует только
+    закреплённый RSS endpoint `www.bing.com:443`, принимает bounded XML/RSS и
+    чистым parser переводит его в ту же форму `title/url/snippet`. Unsafe query,
+    другой host, redirect, non-200, malformed feed и пустая выдача не запускают
+    второй скрытый сетевой путь. Детерминированный fixture доказывает parser, а
+    production smoke — успешный HTTPS-ответ и хотя бы один разобранный результат.
+    Отказ возвращается модели конкретной русской причиной и не приписывает его
+    выдуманному режиму без доступа в сеть.
 
 ## 10. Open questions
 

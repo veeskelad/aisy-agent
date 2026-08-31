@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   makeLinkReader,
   makeServiceSearch,
+  renderSearchFailure,
   routeLink,
   SERVICE_HOSTS,
 } from './link-services.js'
@@ -59,6 +60,16 @@ describe('which road a link takes', () => {
     // here would only surface as a runtime config failure on the server.
     expect(SERVICE_HOSTS.length).toBeGreaterThan(0)
     for (const host of SERVICE_HOSTS) expect(host).toBe(host.toLowerCase())
+  })
+})
+
+describe('search failure wording', () => {
+  it('uses a concrete Russian cause without inventing a disabled network mode', () => {
+    expect(renderSearchFailure(new Error('EGRESS_TRANSPORT_FAILED')))
+      .toBe('не удалось соединиться с поиском')
+    expect(renderSearchFailure(new Error('unexpected'))).toBe('поиск временно недоступен')
+    expect(renderSearchFailure(new Error('EGRESS_TRANSPORT_FAILED')))
+      .not.toMatch(/EGRESS|режим|доступ в сеть закрыт/i)
   })
 })
 
