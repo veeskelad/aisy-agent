@@ -171,11 +171,11 @@ describe('live binary import guard', () => {
     // same gauntlet with a method, a credential header and a body. Built once
     // and shared, exactly like the two above it.
     expect(egressImports).toEqual([
-      'makePinnedHttpsJson', 'makePinnedHttpsTextGet', 'pinnedWebSearchUrl',
+      'makePinnedHttpsJson', 'makePinnedHttpsTextGet', 'pinnedBingSearchUrl',
     ])
     expect(calledIdentifiers.filter((name) => name === 'makePinnedHttpsTextGet')).toHaveLength(1)
     expect(calledIdentifiers.filter((name) => name === 'makePinnedHttpsJson')).toHaveLength(1)
-    expect(calledIdentifiers.filter((name) => name === 'pinnedWebSearchUrl')).toHaveLength(1)
+    expect(calledIdentifiers.filter((name) => name === 'pinnedBingSearchUrl')).toHaveLength(1)
 
     // The only way an arbitrary link may be opened is the pinned open fetcher,
     // built once and shared by the main and sub-agent executors.
